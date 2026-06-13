@@ -1,0 +1,14 @@
+[
+  {
+    "n": 1,
+    "title": "24/7 Intake Bot for Small Law Firms",
+    "slug": "law-firm-intake",
+    "file": "issue-01-law-firm-intake.html",
+    "rows": "issue_01_law_firms.rows.json",
+    "idea_line": "Build and sell a done-for-you AI intake system that captures, qualifies, and follows up with every after-hours lead so small law firms never lose a prospect to slow response.",
+    "date": "2026-06-13",
+    "checked": 15,
+    "cleared": 1,
+    "flagged": 14
+  }
+]

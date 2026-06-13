@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.env
+.env.*
+
+# Node / future frontend
+node_modules/
+dist/
+.next/
+.vercel/
+
+# OS
+.DS_Store
+
+# runtime usage store
+app/usage.json

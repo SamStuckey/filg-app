@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FILG — turn your idea into a sellable offer, with receipts</title>
+<meta name="description" content="Plain-text idea in → a sellable offer, go-to-market, and delivery playbook out — backed by cited research, where every number is graded and vendor marketing is labeled, not laundered.">
+<meta property="og:title" content="FILG — turn your idea into a sellable offer, with receipts">
+<meta property="og:description" content="Cited research, not hallucinated TAM. Every number graded; vendor marketing labeled, not laundered.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://filg.ai">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="FILG — turn your idea into a sellable offer, with receipts">
+<meta name="twitter:description" content="Cited research, not hallucinated TAM. Vendor marketing labeled, not laundered.">
+<!-- Drop a 1200×630 og.png in this folder and uncomment for rich link previews on X/LinkedIn: -->
+<!-- <meta property="og:image" content="https://filg.ai/og.png"><meta name="twitter:image" content="https://filg.ai/og.png"> -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230F766E'/%3E%3Ctext x='16' y='22' font-family='Georgia,serif' font-size='16' font-weight='700' fill='white' text-anchor='middle'%3EF%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&display=swap" rel="stylesheet">
+<!-- ANALYTICS: replace the domain and uncomment to turn on Plausible (or swap for PostHog). See README. -->
+<!-- <script defer data-domain="YOURDOMAIN.com" src="https://plausible.io/js/script.tagged-events.js"></script> -->
+<style>
+  :root{
+    --paper:#FBFAF8; --ink:#14110E; --muted:#6B655C; --line:#E7E2D8;
+    --accent:#0F766E; --accent-deep:#0B5751; --warn:#B45309; --warn-bg:#FBF3E6; --ok-bg:#EAF4F2;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--paper);color:var(--ink);
+    font:17px/1.6 ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased}
+  .wrap{max-width:920px;margin:0 auto;padding:0 22px}
+  h1,h2,h3{font-family:"Fraunces",Georgia,serif;font-weight:600;line-height:1.12;letter-spacing:-.01em;margin:0}
+  a{color:var(--accent)}
+  .accent{color:var(--accent)}
+  .btn{display:inline-block;border:0;cursor:pointer;font:inherit;font-weight:600;
+    padding:14px 24px;border-radius:10px;text-decoration:none;transition:.15s}
+  .btn-primary{background:var(--accent);color:#fff}
+  .btn-primary:hover{background:var(--accent-deep)}
+  .btn-ghost{background:transparent;color:var(--ink);border:1.5px solid var(--line)}
+  .btn-ghost:hover{border-color:var(--ink)}
+  nav{display:flex;justify-content:space-between;align-items:center;padding:22px 0}
+  .logo{font-family:"Fraunces",serif;font-weight:600;font-size:21px;letter-spacing:-.02em}
+  .logo span{color:var(--accent)}
+  /* hero */
+  header{padding:34px 0 10px}
+  .eyebrow{display:inline-block;font-size:13px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;
+    color:var(--accent);background:var(--ok-bg);padding:6px 12px;border-radius:999px;margin-bottom:18px}
+  h1{font-size:clamp(34px,6vw,56px)}
+  .sub{font-size:clamp(18px,2.4vw,21px);color:var(--muted);max-width:660px;margin:20px 0 8px}
+  .cta-row{display:flex;flex-wrap:wrap;gap:12px;margin:26px 0 8px}
+  .reassure{font-size:14px;color:var(--muted);margin-top:6px}
+  /* receipt strip */
+  .receipt{margin:30px 0;padding:20px 22px;border:1px solid var(--line);border-left:4px solid var(--accent);
+    border-radius:12px;background:#fff;font-size:16px}
+  .receipt b{font-family:"Fraunces",serif}
+  /* sections */
+  section{padding:46px 0;border-top:1px solid var(--line)}
+  h2{font-size:clamp(26px,4vw,34px)}
+  .lede{color:var(--muted);max-width:680px;margin:14px 0 0;font-size:18px}
+  /* steps */
+  .steps{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;margin-top:30px}
+  .step{background:#fff;border:1px solid var(--line);border-radius:12px;padding:22px}
+  .step .n{font-family:"Fraunces",serif;font-size:15px;color:var(--accent);font-weight:600}
+  .step h3{font-size:19px;margin:8px 0 6px}
+  .step p{margin:0;color:var(--muted);font-size:15px}
+  /* sample teardown */
+  .sample{background:#fff;border:1px solid var(--line);border-radius:14px;padding:26px;margin-top:26px}
+  .sample h3{font-size:22px}
+  .sample .tag{font-size:13px;color:var(--muted);margin:4px 0 18px}
+  .ev{list-style:none;padding:0;margin:0}
+  .ev li{padding:10px 0;border-top:1px dashed var(--line);font-size:15px;display:flex;gap:10px}
+  .ev li:first-child{border-top:0}
+  .ev .ico{flex:0 0 auto;font-size:15px;margin-top:1px}
+  .ev .ok{color:var(--accent)} .ev .warn{color:var(--warn)}
+  .ev .note{color:var(--muted)}
+  .badge{display:inline-block;font-size:12px;font-weight:600;padding:2px 8px;border-radius:6px;margin-left:4px}
+  .badge.ok{background:var(--ok-bg);color:var(--accent)} .badge.warn{background:var(--warn-bg);color:var(--warn)}
+  .recpt{margin-top:18px;padding:14px 16px;background:var(--ok-bg);border-radius:10px;font-size:15px}
+  /* pricing */
+  .tiers{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:28px}
+  .tier{background:#fff;border:1px solid var(--line);border-radius:14px;padding:26px;display:flex;flex-direction:column}
+  .tier.feat{border:2px solid var(--accent);position:relative}
+  .tier.feat .pill{position:absolute;top:-12px;left:24px;background:var(--accent);color:#fff;font-size:12px;
+    font-weight:600;padding:4px 10px;border-radius:999px}
+  .tier h3{font-size:20px}
+  .price{font-family:"Fraunces",serif;font-size:38px;margin:10px 0 2px}
+  .price small{font-size:15px;color:var(--muted);font-weight:400;font-family:ui-sans-serif,sans-serif}
+  .tier ul{list-style:none;padding:0;margin:16px 0 22px;font-size:15px;color:var(--muted)}
+  .tier li{padding:6px 0 6px 24px;position:relative}
+  .tier li::before{content:"→";position:absolute;left:0;color:var(--accent)}
+  .tier .btn{margin-top:auto;text-align:center}
+  /* capture */
+  .capture{background:var(--ink);color:#fff;border-radius:16px;padding:40px 32px;margin-top:30px;text-align:center}
+  .capture h2{color:#fff}
+  .capture p{color:#cfc9bf;max-width:560px;margin:12px auto 22px}
+  form.signup{display:flex;gap:10px;max-width:480px;margin:0 auto;flex-wrap:wrap;justify-content:center}
+  form.signup input{flex:1;min-width:220px;padding:14px 16px;border-radius:10px;border:1px solid #3a352e;
+    background:#211d18;color:#fff;font:inherit}
+  form.signup input::placeholder{color:#8d877d}
+  .formnote{font-size:13px;color:#8d877d;margin-top:12px}
+  /* modal */
+  .modal{position:fixed;inset:0;background:rgba(20,17,14,.55);display:none;align-items:center;justify-content:center;padding:20px;z-index:50}
+  .modal.open{display:flex}
+  .modal .card{background:#fff;border-radius:16px;padding:30px;max-width:440px;width:100%}
+  .modal h3{font-size:22px}
+  .modal p{color:var(--muted);margin:10px 0 18px}
+  .modal form{display:flex;flex-direction:column;gap:10px}
+  .modal input{padding:14px 16px;border-radius:10px;border:1px solid var(--line);font:inherit}
+  .modal .x{float:right;cursor:pointer;color:var(--muted);font-size:22px;line-height:1;border:0;background:0}
+  .ok-msg{color:var(--accent);font-weight:600}
+  footer{padding:40px 0;color:var(--muted);font-size:14px;border-top:1px solid var(--line)}
+  @media(max-width:680px){.steps,.tiers{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <nav>
+    <div class="logo">FI<span>LG</span></div>
+    <a class="btn btn-ghost" href="#start" data-fakedoor>Start</a>
+  </nav>
+
+  <header>
+    <span class="eyebrow">Cited research, not hallucinated TAM</span>
+    <h1>Turn your idea into a <span class="accent">sellable offer</span> — with receipts.</h1>
+    <p class="sub">Drop in a plain-text idea. Get back the offer, the go-to-market, and the delivery
+      playbook — backed by research where <b>every number is graded and vendor marketing is labeled,
+      not laundered.</b></p>
+    <div class="cta-row">
+      <a class="btn btn-primary" href="#start" data-fakedoor>Start — $39/mo</a>
+      <a class="btn btn-ghost" href="#teardown">See it work on a real idea ↓</a>
+    </div>
+    <div class="reassure">Founding members lock the $39 rate. Free weekly teardown — no card.</div>
+  </header>
+
+  <div class="receipt">
+    <b>The receipt:</b> I used this exact engine to spin up my own business. It's not a demo —
+    it's the method, productized. The sample below was generated end-to-end, unattended, for under 50¢.
+  </div>
+
+  <section id="how">
+    <h2>How it works</h2>
+    <p class="lede">Three stages, no human in the loop — the same chain that produced the sample below.</p>
+    <div class="steps">
+      <div class="step"><div class="n">01 — Research</div><h3>Fan-out</h3>
+        <p>Parallel agents run live web research on your idea — market, competitors, pricing, the buyer's real pain.</p></div>
+      <div class="step"><div class="n">02 — The gate</div><h3>Grade every source</h3>
+        <p>A source-credibility gate flags self-interested vendor stats and re-sources the headline numbers to a primary cite. This is the part nobody else does.</p></div>
+      <div class="step"><div class="n">03 — Synthesis</div><h3>A sellable offer</h3>
+        <p>Out comes the offer, packaging, pricing, GTM, and a delivery playbook — cited, and honest about what's unverified.</p></div>
+    </div>
+  </section>
+
+  <section id="teardown">
+    <h2>See it work — a real, unedited sample</h2>
+    <p class="lede">Idea in: <em>"help small law firms stop losing after-hours leads with AI."</em>
+      Watch the gate label the vendor spin most tools would print as fact.</p>
+
+    <div class="sample">
+      <h3>Cited Offer Teardown — 24/7 Intake Bot for Small Law Firms</h3>
+      <div class="tag">Generated unattended for ~$0.47. Every number graded.</div>
+      <p><b>The offer:</b> A done-for-you AI intake agent (voice + web form) that answers after-hours
+        calls, qualifies leads with case-type-specific questions, and fires a warm summary to the
+        attorney within minutes — live in 5 days, flat monthly retainer, no revenue share.</p>
+      <p><b>The evidence — graded:</b></p>
+      <ul class="ev">
+        <li><span class="ico ok">✅</span><span>~437,839 law firms in the US (Apr 2026)
+          <span class="badge ok">primary</span><br><span class="note">ibisworld.com — re-sourced to a neutral cite by the gate</span></span></li>
+        <li><span class="ico warn">⚠️</span><span>"Firms responding in 5 min see 400% higher conversion"
+          <span class="badge warn">vendor — unverified</span><br><span class="note">lawyerpages.law — an intake vendor; treat as marketing</span></span></li>
+        <li><span class="ico warn">⚠️</span><span>"67% of clients hire the first attorney who answers"
+          <span class="badge warn">vendor — unverified</span><br><span class="note">getstafi.com — sells the thing the stat promotes</span></span></li>
+        <li><span class="ico warn">⚠️</span><span>"AI intake delivers 3–5× ROI in six months"
+          <span class="badge warn">vendor — unverified</span><br><span class="note">blog.fastbots.ai — vendor blog; flagged, not printed as fact</span></span></li>
+      </ul>
+      <div class="recpt"><b>The credibility receipt:</b> 15 quantitative claims checked ·
+        <b>14 flagged as vendor marketing and labeled</b> · 1 cleared to a primary source.
+        A naive tool would have printed all 15 as fact.</div>
+    </div>
+    <div class="cta-row" style="margin-top:24px">
+      <a class="btn btn-primary" href="#start" data-fakedoor>Do this for my idea →</a>
+      <a class="btn btn-ghost" href="/teardowns/issue-01-law-firm-intake.html">Read the full teardown</a>
+    </div>
+    <p class="reassure" style="margin-top:10px"><a href="/teardowns/">Browse past teardowns →</a></p>
+  </section>
+
+  <section id="pricing">
+    <h2>Pricing</h2>
+    <p class="lede">Founding rate locked for early members. We're onboarding the first cohort by hand.</p>
+    <div class="tiers">
+      <div class="tier">
+        <h3>Free</h3>
+        <div class="price">$0</div>
+        <ul>
+          <li>The weekly Cited Offer Teardown</li>
+          <li>One idea → brief + first-pass offer</li>
+          <li>A taste of the graded research</li>
+        </ul>
+        <a class="btn btn-ghost" href="#magnet">Get the weekly teardown</a>
+      </div>
+      <div class="tier feat">
+        <span class="pill">Founding</span>
+        <h3>Operator</h3>
+        <div class="price">$39<small>/mo — locked</small></div>
+        <ul>
+          <li>Unlimited ideas → full artifact set</li>
+          <li>Graded research + the source gate</li>
+          <li>Offer · pricing · GTM · delivery playbook</li>
+          <li>Ongoing iteration as your idea moves</li>
+        </ul>
+        <a class="btn btn-primary" href="#start" data-fakedoor>Start — $39/mo</a>
+      </div>
+    </div>
+  </section>
+
+  <section id="magnet">
+    <div class="capture">
+      <h2>Get the weekly Cited Offer Teardown</h2>
+      <p>Every week: one real business idea, run through the engine — the offer, the GTM, and the
+        graded evidence with the vendor spin called out. Free. The fastest way to see if this is for you.</p>
+      <form class="signup" data-capture="teardown">
+        <input type="email" name="email" placeholder="you@email.com" required aria-label="email">
+        <button class="btn btn-primary" type="submit">Send me the teardown</button>
+      </form>
+      <div class="formnote" data-msg></div>
+    </div>
+  </section>
+
+  <footer>
+    FILG — fuck it, let's go. The offer→GTM→delivery layer, with cited research. Built in public.
+    <span id="start"></span>
+  </footer>
+</div>
+
+<!-- Fake-door / founding-member capture modal -->
+<div class="modal" id="modal">
+  <div class="card">
+    <button class="x" data-close aria-label="close">×</button>
+    <h3>Founding members get in first</h3>
+    <p>We're onboarding the first cohort by hand — drop your email and I'll personally run your idea
+      through the engine and lock your $39 founding rate.</p>
+    <form class="signup" data-capture="founding" style="flex-direction:column">
+      <input type="email" name="email" placeholder="you@email.com" required aria-label="email">
+      <button class="btn btn-primary" type="submit">Lock my founding spot</button>
+    </form>
+    <div class="formnote" data-msg style="color:var(--muted)"></div>
+  </div>
+</div>
+
+<script>
+  // ─── CONFIG ─────────────────────────────────────────────────────────────
+  // Point this at your form endpoint (Formspree / Buttondown / Tally / a webhook).
+  // Until it's set, submissions are logged to the console and show a friendly message.
+  // See landing/README.md for the 2-minute setup.
+  const FORM_ENDPOINT = ""; // e.g. "https://formspree.io/f/xxxxxxx"
+
+  // analytics helper (no-op until Plausible/PostHog is wired in <head>)
+  function track(event, props){ try{ window.plausible && window.plausible(event,{props}); }catch(e){} }
+
+  // Fake-door: every "Start / $39" click is the revealed-intent signal we measure.
+  document.querySelectorAll('[data-fakedoor]').forEach(el=>{
+    el.addEventListener('click', e=>{ e.preventDefault();
+      track('fakedoor_start',{source: el.textContent.trim()});
+      openModal();
+    });
+  });
+
+  const modal = document.getElementById('modal');
+  function openModal(){ modal.classList.add('open'); }
+  function closeModal(){ modal.classList.remove('open'); }
+  modal.addEventListener('click', e=>{ if(e.target===modal) closeModal(); });
+  document.querySelectorAll('[data-close]').forEach(b=>b.addEventListener('click',closeModal));
+
+  // Capture forms (weekly-teardown + founding)
+  document.querySelectorAll('form[data-capture]').forEach(form=>{
+    form.addEventListener('submit', async e=>{
+      e.preventDefault();
+      const kind = form.dataset.capture;
+      const email = form.querySelector('input[name=email]').value;
+      const msg = form.parentElement.querySelector('[data-msg]') || form.nextElementSibling;
+      track('signup',{list: kind});
+      if(!FORM_ENDPOINT){
+        console.log('[FILG capture]', {list:kind, email});
+        if(msg) msg.innerHTML = '<span class="ok-msg">You\'re on the list.</span> (Wire FORM_ENDPOINT to store it — see README.)';
+        form.reset(); return;
+      }
+      try{
+        await fetch(FORM_ENDPOINT,{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({email, list:kind, ts:Date.now()})});
+        if(msg) msg.innerHTML = '<span class="ok-msg">You\'re in.</span> Check your inbox.';
+        form.reset();
+      }catch(err){
+        if(msg) msg.textContent = 'Something glitched — email me directly and I\'ll add you.';
+      }
+    });
+  });
+</script>
+</body>
+</html>

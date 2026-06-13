@@ -1,0 +1,20 @@
+# Render blueprint — one-click deploy once the repo is on GitHub.
+# Render dashboard → New → Blueprint → pick the filg repo. Set the two secrets when prompted.
+services:
+  - type: web
+    name: filg
+    runtime: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: ANTHROPIC_API_KEY     # secret — set in the dashboard
+        sync: false
+      - key: FILG_PAID_EMAILS      # secret — Stripe stub; comma-sep allowlist
+        sync: false
+      - key: FILG_FREE_RUNS        # free runs per user (cost guardrail)
+        value: "1"
+      - key: FILG_DAILY_BUDGET     # global $/day kill switch (cost guardrail)
+        value: "20"
+      # NOTE: usage.json is ephemeral on Render's filesystem — fine for launch,
+      # but move usage + jobs to Postgres before you rely on caps across restarts.
