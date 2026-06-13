@@ -6,21 +6,24 @@ Flow: plain-text idea in → async label-don't-chase run (the engine) → graded
 the free-tier cap + daily kill switch (prototype/usage.py). Reuses the engine wholesale; nothing
 about the pipeline is reimplemented here.
 
-This is the launch skeleton. STUBBED (clearly marked) for now: real auth and Stripe billing —
-right now a "user" is just the email entered, and `is_paid` is a static allowlist. Jobs + results
-persist in SQLite (app/store.py) so share links survive restarts; swap for Postgres + a real queue
-in production.
+Auth + billing are real (Supabase JWT + Stripe $39/mo), but degrade gracefully: with no Supabase /
+Stripe env set the app still runs free-tier-only on the email typed in the body (mock/dev). Paid is
+always gated on a verified user with a live subscription (app/auth.py + app/billing.py). Jobs +
+results + subscription state persist in SQLite (app/store.py); swap for Postgres + a real queue and
+this stays the same shape.
 
 Run:
   pip install fastapi uvicorn
-  FILG_MOCK=1 uvicorn app.main:app --reload        # free, no API calls (dev/frontend)
+  FILG_MOCK=1 uvicorn app.main:app --reload        # free, no API/auth/billing (dev/frontend)
   uvicorn app.main:app                              # real runs (~$0.40 each, metered)
-Env: FILG_MOCK, FILG_FREE_RUNS, FILG_DAILY_BUDGET, FILG_PAID_EMAILS (csv).
+Env: FILG_MOCK, FILG_FREE_RUNS, FILG_DAILY_BUDGET, FILG_PAID_EMAILS (csv comp override),
+     SUPABASE_URL/SUPABASE_ANON_KEY/SUPABASE_JWT_SECRET, STRIPE_*/FILG_PUBLIC_URL.
 """
 
 from __future__ import annotations
 
 import html
+import json
 import os
 import sys
 import threading
@@ -36,10 +39,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "prototype"))
 import teardown  # noqa: E402
 import usage     # noqa: E402
 
-from . import store  # noqa: E402 — SQLite-backed job/result persistence
+from . import auth, billing, store  # noqa: E402 — SQLite persistence, Supabase auth, Stripe billing
 
 MOCK = os.environ.get("FILG_MOCK") == "1"
+# FILG_PAID_EMAILS is now only a manual comp/override; real paid status comes from billing.is_paid.
 PAID = {e.strip().lower() for e in os.environ.get("FILG_PAID_EMAILS", "").split(",") if e.strip()}
+
+
+def _is_paid(email: str, verified: bool) -> bool:
+    """Paid = a verified user with a live subscription, OR an allowlisted comp. An unverified
+    (free-tier, email-only) caller can't be billed-paid, but the comp allowlist still applies."""
+    return (verified and billing.is_paid(email)) or (email in PAID)
 
 app = FastAPI(title="FILG")
 RUN_LOCK = threading.Lock()         # serialize runs so per-run cost metering stays accurate
@@ -59,13 +69,16 @@ def _run_job(job_id: str, idea: str, user: str, mode: str) -> None:
 async def api_run(request: Request):
     body = await request.json()
     idea = (body.get("idea") or "").strip()
-    user = (body.get("email") or "").strip().lower()
     if len(idea) < 12:
         return JSONResponse({"error": "Tell me a bit more about the idea."}, status_code=400)
+
+    # Identity: a verified Supabase user wins; otherwise fall back to the email typed in the body.
+    authed = auth.user_from_request(request)
+    user = authed["email"] if authed and authed["email"] else (body.get("email") or "").strip().lower()
     if "@" not in user:
         return JSONResponse({"error": "Enter an email so we can send your result."}, status_code=400)
 
-    is_paid = user in PAID
+    is_paid = _is_paid(user, verified=authed is not None)
     allowed, reason = usage.can_run(user, is_paid=is_paid)
     if not allowed:
         return JSONResponse({"error": reason, "upgrade": True}, status_code=402)
@@ -85,9 +98,50 @@ async def api_status(job_id: str):
     return {"status": job["status"], "result": job.get("result"), "error": job.get("error")}
 
 
+@app.get("/api/me")
+async def api_me(request: Request):
+    """Tell the frontend who it is and whether to show the Upgrade button."""
+    authed = auth.user_from_request(request)
+    if not authed:
+        return {"signed_in": False, "auth_enabled": auth.AUTH_ENABLED,
+                "billing_enabled": billing.BILLING_ENABLED}
+    return {"signed_in": True, "email": authed["email"],
+            "paid": _is_paid(authed["email"], verified=True),
+            "auth_enabled": auth.AUTH_ENABLED, "billing_enabled": billing.BILLING_ENABLED}
+
+
+@app.post("/api/checkout")
+async def api_checkout(request: Request):
+    """Start a Stripe Checkout for the $39/mo Operator plan. Requires a verified user."""
+    authed = auth.user_from_request(request)
+    if not authed or not authed["email"]:
+        return JSONResponse({"error": "Sign in first."}, status_code=401)
+    if not billing.BILLING_ENABLED:
+        return JSONResponse({"error": "Billing isn't configured yet."}, status_code=503)
+    if _is_paid(authed["email"], verified=True):
+        return JSONResponse({"error": "You're already on Operator."}, status_code=409)
+    try:
+        url = billing.create_checkout_url(authed["email"], user_id=authed["id"])
+    except billing.StripeError as e:
+        return JSONResponse({"error": str(e)}, status_code=502)
+    return {"url": url}
+
+
+@app.post("/api/stripe/webhook")
+async def api_stripe_webhook(request: Request):
+    """Stripe → us: flip subscription state. Verifies the signature before trusting the body."""
+    payload = await request.body()
+    event = billing.verify_webhook(payload, request.headers.get("stripe-signature", ""))
+    if event is None:
+        return JSONResponse({"error": "invalid signature"}, status_code=400)
+    billing.handle_event(event)
+    return {"received": True}
+
+
 @app.get("/healthz")
 async def healthz():
-    return {"ok": True, "mock": MOCK, **usage.snapshot()}
+    return {"ok": True, "mock": MOCK, "auth_enabled": auth.AUTH_ENABLED,
+            "billing_enabled": billing.BILLING_ENABLED, **usage.snapshot()}
 
 
 CTA = ('<div class="cta"><a class="btn btn-primary" href="https://filg.ai/#start">'
@@ -137,12 +191,19 @@ async def share(job_id: str):
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
-    return PAGE
+    cfg = json.dumps({"authEnabled": auth.AUTH_ENABLED, "billingEnabled": billing.BILLING_ENABLED,
+                      "supabaseUrl": os.environ.get("SUPABASE_URL", ""),
+                      "supabaseAnon": os.environ.get("SUPABASE_ANON_KEY", "")})
+    head = f"<script>window.FILG={cfg}</script>"
+    if auth.AUTH_ENABLED:
+        head += '<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>'
+    return PAGE.replace("__FILG_HEAD__", head)
 
 
 # ── Minimal single-page frontend (brand-aligned; no build step) ──────────────
 PAGE = """<!doctype html><html lang=en><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1"><title>FILG — your offer, with receipts</title>
+__FILG_HEAD__
 <style>
 :root{--paper:#FBFAF8;--ink:#14110E;--muted:#6B655C;--line:#E7E2D8;--accent:#0F766E;--warn:#B45309;--ok-bg:#EAF4F2;--warn-bg:#FBF3E6}
 *{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:17px/1.6 ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif}
@@ -161,7 +222,14 @@ button:disabled{opacity:.6}
 .badge{font-size:11px;font-weight:600;padding:2px 7px;border-radius:6px}.b-ok{background:var(--ok-bg);color:var(--accent)}.b-warn{background:var(--warn-bg);color:var(--warn)}
 .recpt{margin-top:18px;padding:14px 16px;background:var(--ok-bg);border-radius:10px;font-size:14px}
 .err{color:var(--warn);margin-top:14px}
+.authbar{display:flex;justify-content:flex-end;align-items:center;gap:14px;font-size:14px;margin-bottom:8px;min-height:24px}
+.authbar .who{color:var(--muted)}.authbar b{color:var(--accent)}
+.authbar .link{background:none;color:var(--accent);padding:0;font-weight:600;font-size:14px}
+.authbar .up{background:var(--accent);color:#fff;padding:7px 13px;border-radius:8px;font-size:13px}
+.note-banner{background:var(--ok-bg);border-radius:10px;padding:12px 15px;font-size:14px;margin-bottom:16px;display:none}
 </style></head><body><div class=wrap>
+<div class=authbar id=authbar></div>
+<div class=note-banner id=banner></div>
 <h1 class=logo>FI<span>LG</span></h1>
 <p class=sub>Drop in your idea. Get the offer + how to sell it, with the research graded — vendor spin labeled, not laundered.</p>
 <textarea id=idea placeholder="I'm good with automation and I think I could help [who] with [problem]... but I don't know what to sell or how."></textarea>
@@ -172,15 +240,19 @@ button:disabled{opacity:.6}
 <div id=perma style="margin-top:16px;display:none"><a id=permalink href="#">🔗 Shareable link to this result</a></div>
 <div class=card id=card></div>
 <script>
+const CFG=window.FILG||{authEnabled:false,billingEnabled:false};
+let sb=null, session=null, me=null;
+function authHeaders(){return session?{'Authorization':'Bearer '+session.access_token}:{};}
 async function run(){
   const idea=document.getElementById('idea').value, email=document.getElementById('email').value;
   const go=document.getElementById('go'), st=document.getElementById('status'), err=document.getElementById('err');
   err.textContent='';document.getElementById('card').style.display='none';
+  const body={idea}; if(!session) body.email=email;   // signed in → identity comes from the token
   go.disabled=true;st.textContent='Researching + grading sources… (~1–2 min)';
   try{
-    const r=await fetch('/api/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({idea,email})});
+    const r=await fetch('/api/run',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify(body)});
     const d=await r.json();
-    if(!r.ok){err.textContent=d.error||'Something went wrong.';go.disabled=false;st.textContent='';return;}
+    if(!r.ok){err.textContent=d.error||'Something went wrong.';if(d.upgrade&&session&&CFG.billingEnabled)err.innerHTML+=' <a href=# onclick="upgrade();return false">Upgrade to Operator →</a>';go.disabled=false;st.textContent='';return;}
     poll(d.job_id);
   }catch(e){err.textContent='Network error.';go.disabled=false;st.textContent='';}
 }
@@ -214,5 +286,51 @@ function render(res){
 }
 function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML;}
 function host(u){try{return new URL(u).hostname.replace(/^www\\./,'');}catch(e){return u;}}
+
+// ── Auth (Supabase) + billing (Stripe) ──────────────────────────────────────
+function renderAuth(){
+  const bar=document.getElementById('authbar'), emailEl=document.getElementById('email');
+  if(!sb){bar.style.display='none';return;}
+  if(session){
+    const paid=me&&me.paid;
+    bar.innerHTML=`<span class=who>${esc(session.user.email)}${paid?' · <b>Operator</b>':''}</span>`+
+      (!paid&&CFG.billingEnabled?`<button class="link up" onclick=upgrade()>Upgrade — $39/mo</button>`:'')+
+      `<button class=link onclick=signout()>Sign out</button>`;
+    emailEl.style.display='none';
+  }else{
+    bar.innerHTML=`<button class=link onclick=signin()>Sign in</button>`;
+    emailEl.style.display='';
+  }
+}
+async function loadMe(){
+  if(!session){me=null;return;}
+  try{const r=await fetch('/api/me',{headers:authHeaders()});me=r.ok?await r.json():null;}catch(e){me=null;}
+}
+async function signin(){
+  const email=prompt('Your email — we\\'ll send a one-click sign-in link:');
+  if(!email)return;
+  const {error}=await sb.auth.signInWithOtp({email,options:{emailRedirectTo:location.origin}});
+  alert(error?error.message:'Check your inbox for the sign-in link.');
+}
+async function signout(){await sb.auth.signOut();session=null;me=null;renderAuth();}
+async function upgrade(){
+  if(!session){signin();return;}
+  try{
+    const r=await fetch('/api/checkout',{method:'POST',headers:authHeaders()});
+    const d=await r.json();
+    if(d.url)location.href=d.url; else alert(d.error||'Could not start checkout.');
+  }catch(e){alert('Network error starting checkout.');}
+}
+function banner(msg){const b=document.getElementById('banner');b.textContent=msg;b.style.display='block';}
+async function initAuth(){
+  const q=new URLSearchParams(location.search);
+  if(q.get('upgraded'))banner('🎉 You\\'re on Operator — full artifact sets are unlocked. Run an idea below.');
+  if(q.get('canceled'))banner('Checkout canceled — no charge. You\\'re still on the free tier.');
+  if(!CFG.authEnabled||!window.supabase){renderAuth();return;}
+  sb=window.supabase.createClient(CFG.supabaseUrl,CFG.supabaseAnon);
+  sb.auth.onAuthStateChange(async (_e,s)=>{session=s;await loadMe();renderAuth();});
+  const {data}=await sb.auth.getSession();session=data.session;await loadMe();renderAuth();
+}
+initAuth();
 </script>
 </div></body></html>"""

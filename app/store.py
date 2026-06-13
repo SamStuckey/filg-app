@@ -18,6 +18,7 @@ import json
 import os
 import sqlite3
 import threading
+import time
 from datetime import datetime, timezone
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -55,6 +56,18 @@ def init() -> None:
                     "  result TEXT,"               # JSON blob from the engine
                     "  error TEXT,"
                     "  created_at TEXT NOT NULL)")
+                # Stripe subscription state — `is_paid` is derived from this, not an allowlist.
+                con.execute(
+                    "CREATE TABLE IF NOT EXISTS subscriptions ("
+                    "  email TEXT PRIMARY KEY,"
+                    "  stripe_customer TEXT,"
+                    "  stripe_subscription TEXT,"
+                    "  status TEXT,"               # active | trialing | past_due | canceled | ...
+                    "  current_period_end INTEGER,"
+                    "  updated_at TEXT NOT NULL)")
+                con.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_subs_customer "
+                    "ON subscriptions (stripe_customer)")
         finally:
             con.close()
         _initialized = True
@@ -106,6 +119,64 @@ def get(job_id: str) -> dict | None:
     return job
 
 
+# ── Subscriptions (Stripe) ───────────────────────────────────────────────────
+_ACTIVE = ("active", "trialing")
+
+
+def upsert_subscription(email: str, *, customer: str | None = None,
+                        subscription: str | None = None, status: str | None = None,
+                        current_period_end: int | None = None) -> None:
+    """Insert/merge subscription state for an email. COALESCE keeps existing fields when an event
+    carries only some of them (e.g. a status update without the email)."""
+    init()
+    con = _connect()
+    try:
+        with con:
+            con.execute(
+                "INSERT INTO subscriptions "
+                "(email, stripe_customer, stripe_subscription, status, current_period_end, updated_at)"
+                " VALUES (?,?,?,?,?,?) ON CONFLICT(email) DO UPDATE SET "
+                "  stripe_customer=COALESCE(excluded.stripe_customer, stripe_customer),"
+                "  stripe_subscription=COALESCE(excluded.stripe_subscription, stripe_subscription),"
+                "  status=COALESCE(excluded.status, status),"
+                "  current_period_end=COALESCE(excluded.current_period_end, current_period_end),"
+                "  updated_at=excluded.updated_at",
+                (email.strip().lower(), customer, subscription, status, current_period_end,
+                 datetime.now(timezone.utc).isoformat()))
+    finally:
+        con.close()
+
+
+def email_for_customer(customer: str) -> str | None:
+    """Map a Stripe customer id back to the email we keyed on (subscription.* events carry the
+    customer, not the email)."""
+    init()
+    con = _connect()
+    try:
+        row = con.execute("SELECT email FROM subscriptions WHERE stripe_customer=?",
+                          (customer,)).fetchone()
+    finally:
+        con.close()
+    return row["email"] if row else None
+
+
+def is_paid(email: str) -> bool:
+    """True iff this email has an active/trialing subscription that hasn't hard-expired."""
+    if not email:
+        return False
+    init()
+    con = _connect()
+    try:
+        row = con.execute("SELECT status, current_period_end FROM subscriptions WHERE email=?",
+                          (email.strip().lower(),)).fetchone()
+    finally:
+        con.close()
+    if not row or row["status"] not in _ACTIVE:
+        return False
+    cpe = row["current_period_end"]
+    return not (cpe and time.time() > cpe)
+
+
 if __name__ == "__main__":  # quick self-test (no API)
     import tempfile
     DB = tempfile.mktemp(suffix=".db")
@@ -117,4 +188,14 @@ if __name__ == "__main__":  # quick self-test (no API)
     fail("abc123", "boom")
     assert get("abc123")["status"] == "error"
     assert get("nope") is None
+    # subscriptions
+    assert is_paid("p@x.com") is False
+    upsert_subscription("p@x.com", customer="cus_1", subscription="sub_1", status="active")
+    assert is_paid("p@x.com") is True
+    assert email_for_customer("cus_1") == "p@x.com"
+    upsert_subscription("p@x.com", status="canceled")          # status-only update keeps customer
+    assert is_paid("p@x.com") is False
+    assert email_for_customer("cus_1") == "p@x.com"
+    upsert_subscription("p@x.com", status="active", current_period_end=1)  # past → expired
+    assert is_paid("p@x.com") is False
     print("store.py self-test OK")
