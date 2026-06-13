@@ -7,8 +7,9 @@ the free-tier cap + daily kill switch (prototype/usage.py). Reuses the engine wh
 about the pipeline is reimplemented here.
 
 This is the launch skeleton. STUBBED (clearly marked) for now: real auth and Stripe billing —
-right now a "user" is just the email entered, and `is_paid` is a static allowlist. Jobs live in
-memory; swap for Postgres + a real queue in production.
+right now a "user" is just the email entered, and `is_paid` is a static allowlist. Jobs + results
+persist in SQLite (app/store.py) so share links survive restarts; swap for Postgres + a real queue
+in production.
 
 Run:
   pip install fastapi uvicorn
@@ -35,11 +36,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "prototype"))
 import teardown  # noqa: E402
 import usage     # noqa: E402
 
+from . import store  # noqa: E402 — SQLite-backed job/result persistence
+
 MOCK = os.environ.get("FILG_MOCK") == "1"
 PAID = {e.strip().lower() for e in os.environ.get("FILG_PAID_EMAILS", "").split(",") if e.strip()}
 
 app = FastAPI(title="FILG")
-JOBS: dict[str, dict] = {}          # in-memory job store (skeleton; use a DB in prod)
 RUN_LOCK = threading.Lock()         # serialize runs so per-run cost metering stays accurate
 
 
@@ -48,9 +50,9 @@ def _run_job(job_id: str, idea: str, user: str, mode: str) -> None:
         with RUN_LOCK:
             res = (teardown.generate_full if mode == "full" else teardown.generate)(idea, mock=MOCK)
         usage.record_run(user, res["cost"])
-        JOBS[job_id].update(status="done", result=res, mode=mode)
+        store.finish(job_id, res, mode)
     except Exception as e:  # noqa: BLE001 — surface failures to the client, don't crash the worker
-        JOBS[job_id].update(status="error", error=str(e))
+        store.fail(job_id, str(e))
 
 
 @app.post("/api/run")
@@ -70,14 +72,14 @@ async def api_run(request: Request):
 
     mode = "full" if is_paid else "teardown"   # free → teardown; paid ($39/mo) → full artifact set
     job_id = uuid.uuid4().hex[:12]
-    JOBS[job_id] = {"status": "running", "idea": idea, "user": user, "mode": mode}
+    store.create(job_id, idea, user, mode)
     threading.Thread(target=_run_job, args=(job_id, idea, user, mode), daemon=True).start()
     return {"job_id": job_id, "mode": mode}
 
 
 @app.get("/api/run/{job_id}")
 async def api_status(job_id: str):
-    job = JOBS.get(job_id)
+    job = store.get(job_id)
     if not job:
         return JSONResponse({"error": "unknown job"}, status_code=404)
     return {"status": job["status"], "result": job.get("result"), "error": job.get("error")}
@@ -100,7 +102,7 @@ def _receipt(stats: dict) -> str:
 
 def render_result_page(job: dict) -> str:
     """Server-render a finished run as a standalone, shareable branded page (reuses the engine's
-    brand shell). In-memory store → a share link lives as long as the process; persist in prod."""
+    brand shell). Backed by SQLite (app/store.py) so the share link survives restarts."""
     res = job["result"]
     stats = res["stats"]
     ev = f'<h2>The evidence — graded</h2><ul class="ev">{teardown.evidence_li(res["rows"])}</ul>'
@@ -125,12 +127,11 @@ def render_result_page(job: dict) -> str:
 
 @app.get("/r/{job_id}", response_class=HTMLResponse)
 async def share(job_id: str):
-    job = JOBS.get(job_id)
+    job = store.get(job_id)
     if not job or job.get("status") != "done":
         return HTMLResponse(
             "<p style='font-family:sans-serif;max-width:520px;margin:60px auto;padding:0 22px'>"
-            "This result isn't ready yet or has expired. (Skeleton stores results in memory — "
-            "persist them in production.)</p>", status_code=404)
+            "This result isn't ready yet, failed, or doesn't exist.</p>", status_code=404)
     return render_result_page(job)
 
 

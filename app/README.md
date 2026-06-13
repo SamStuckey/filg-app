@@ -6,8 +6,8 @@ graded artifact, gated by the free-tier cap + daily kill switch. Reuses `../prot
 
 Tiers: a **free** run returns the Cited Offer Teardown; a **paid** email (in `FILG_PAID_EMAILS`)
 returns the **full artifact set** (brief → offer → pricing → GTM → delivery → roadmap). Every finished
-run has a shareable server-rendered permalink at **`/r/{job_id}`** (in-memory in the skeleton —
-persist for durable links).
+run has a shareable server-rendered permalink at **`/r/{job_id}`**, backed by SQLite (`store.py`)
+so links survive restarts.
 
 ## Run
 ```bash
@@ -34,7 +34,7 @@ spend vs the budget.
 |---|---|
 | The engine (research → gate → re-search), label-don't-chase | **Auth** — "user" = the email entered; no login |
 | Per-run cost metering + free cap + daily kill switch | **Billing** — `is_paid` is a static allowlist, not Stripe |
-| Async job run + status polling, single-page UI | **Persistence** — jobs/usage are in-memory/JSON, not Postgres |
+| Async job run + status polling, single-page UI | **Persistence** — jobs/usage in SQLite (`store.py`); Postgres + a real queue still TODO |
 
 ## Deploy (when ready)
 Any container host runs it: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`. Render / Fly / Modal
@@ -45,5 +45,5 @@ separately and link to the app subdomain.
 ## Next build steps (in order)
 1. Real auth (Clerk/Supabase) → drop the email-as-identity stub.
 2. Stripe `$39/mo` checkout → set `is_paid` from the subscription, not the allowlist.
-3. Postgres for users/runs/artifacts; a real queue for jobs.
+3. Postgres for users/runs/artifacts; a real queue for jobs (SQLite via `store.py` is the launch step).
 4. Artifact workspace (durable, editable docs) + the full pipeline mode alongside teardown.

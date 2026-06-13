@@ -14,5 +14,8 @@ dist/
 # OS
 .DS_Store
 
-# runtime usage store
+# runtime usage store + sqlite db (and its WAL sidecars)
 app/usage.json
+app/filg.db
+*.db-wal
+*.db-shm

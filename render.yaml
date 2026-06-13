@@ -7,9 +7,17 @@ services:
     plan: starter
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    # Persistent disk so the SQLite DB (jobs, results, usage caps) survives redeploys — without it
+    # the container filesystem is ephemeral and caps/share-links reset on every deploy.
+    disk:
+      name: filg-data
+      mountPath: /var/data
+      sizeGB: 1
     envVars:
       - key: ANTHROPIC_API_KEY     # secret — set in the dashboard
         sync: false
+      - key: FILG_DB               # SQLite path on the persistent disk (jobs + usage share it)
+        value: /var/data/filg.db
       - key: FILG_PAID_EMAILS      # secret — Stripe stub; comma-sep allowlist
         sync: false
       - key: FILG_FREE_RUNS        # free runs per user (cost guardrail)
