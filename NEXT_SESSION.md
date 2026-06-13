@@ -46,6 +46,26 @@ paid must sell a different axis (execution + it-evolves-with-you), not "a longer
 ## Open question to answer next session
 Which to build first — `#1+#2` together (recommended), or jump to `#3`? (User was going to decide.)
 
+## Ideas backlog (recorded for tomorrow — Sam, end of session)
+Raw ideas to explore next session; not yet prioritized or designed.
+
+1. **Live decision tree.** When you get feedback on your idea, you get a **"yes, and"** vs.
+   **"okay, but"** choice, and you build a decision tree **live with Claude** — branch the idea
+   interactively instead of a one-shot artifact. (Note: this is also a candidate answer to the
+   "why pay month 2?" recurring-value problem — it makes the product a session you return to.)
+2. **"Ask an expert."** Personas modeled on business people, podcasts, etc. — get advice in a
+   specific operator's voice. (Constraint to honor: per CLAUDE.md invariant #4 we **can't
+   fine-tune Claude** — so this is persona prompting + RAG over expert/podcast content, not an
+   actually "trained" model. Sourcing/licensing of that content is an open question.)
+3. **Compliance pushback.** Surface a **warning about compliance** (or a separate dialogue) when an
+   idea has regulatory exposure, with an option to **pay for a compliance report**. (Strong fit with
+   the moat — the product already *pushes back* via the source-credibility gate; "pushback as a
+   feature" extends that, and the paid report is a natural monetization surface like the Spin-up Pack.)
+4. **Instant fixed-price "Build my business plan" lever.** Right after the initial prompt, a quick
+   one-click **fixed-price, no-subscription** purchase. (This is essentially the **$99 Spin-up Pack
+   (#2 above) surfaced at the moment of intent** — high-leverage; merge this into the Spin-up Pack
+   design: show the one-time buy CTA immediately, not buried.)
+
 ## Relevant files
 - `app/main.py` (endpoints + free/paid gate + frontend), `app/billing.py` (Stripe), `app/auth.py`
   (Supabase JWT), `app/store.py` (SQLite: jobs + subscriptions), `prototype/usage.py` (caps).
