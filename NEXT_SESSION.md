@@ -70,6 +70,21 @@ Raw ideas to explore next session; not yet prioritized or designed.
    is worth running. (Fit: feeds the §10 programmatic-content / "idea of the day" GTM engine, lowers
    the activation barrier — "if *that* worked, mine might too" — and each entry is a shareable demo
    of the engine. Could be a curated landing/teardown surface in `landing/`.)
+6. **"Uncertainty multiplier."** A **marketing-leverage index/score** based on how scared the world
+   is of something going wrong — high societal fear around a domain = high opportunity score for
+   building there. E.g. *"AI is taking people's jobs"* → high uncertainty → an AI app scores high.
+   Backed by **historical research** (start with the Industrial Revolution → present) to build
+   **cited context/proof points** that periods of fear/disruption are when entrepreneurship pays off.
+   (Fit: this is on-moat — a *researched, cited* score, "every number graded," not vibes; it's the
+   gate pointed at optimism instead of skepticism. Heavy research lift — flag scope. Purpose:
+   **encourage entrepreneurship**, which is the brand → see Branding note below.)
+
+## Branding note (Sam, end of session)
+**The brand is encouraging entrepreneurship — "Entrepreneurship is for everyone."** Work this into
+the positioning/voice. Today the tone is skeptical-but-fair (the gate labels vendor spin); the brand
+should pair that rigor with *encouragement* — we de-risk and embolden, not just debunk. The
+"uncertainty multiplier" (#6) and "worst idea that worked" (#5) are both expressions of this. Revisit
+`business_plan.md` §2 positioning and `landing/` copy through this lens next session.
 
 ## Relevant files
 - `app/main.py` (endpoints + free/paid gate + frontend), `app/billing.py` (Stripe), `app/auth.py`
