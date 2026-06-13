@@ -65,6 +65,11 @@ Raw ideas to explore next session; not yet prioritized or designed.
    one-click **fixed-price, no-subscription** purchase. (This is essentially the **$99 Spin-up Pack
    (#2 above) surfaced at the moment of intent** — high-leverage; merge this into the Spin-up Pack
    design: show the one-time buy CTA immediately, not buried.)
+5. **"The worst idea that worked."** A featured gallery of **silly/stupid ideas that made a lot of
+   money** (and/or things we've built) — social proof to **encourage users** that their "dumb" idea
+   is worth running. (Fit: feeds the §10 programmatic-content / "idea of the day" GTM engine, lowers
+   the activation barrier — "if *that* worked, mine might too" — and each entry is a shareable demo
+   of the engine. Could be a curated landing/teardown surface in `landing/`.)
 
 ## Relevant files
 - `app/main.py` (endpoints + free/paid gate + frontend), `app/billing.py` (Stripe), `app/auth.py`
