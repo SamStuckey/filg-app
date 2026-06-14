@@ -143,6 +143,26 @@ Raw ideas to explore next session; not yet prioritized or designed.
    (Fit: this is on-moat — a *researched, cited* score, "every number graded," not vibes; it's the
    gate pointed at optimism instead of skepticism. Heavy research lift — flag scope. Purpose:
    **encourage entrepreneurship**, which is the brand → see Branding note below.)
+7. **Learning loop — improve from user interactions.** Use real usage to evolve the product: "good
+   pushback" (`not_quite`/`okay_but` notes) and "positively-weighted" signal (accepted drafts,
+   downloads, expert asks) feed back in. (Constraint: per CLAUDE.md #4 we **can't fine-tune Claude** —
+   so this is a *feedback flywheel*, not model training: mine winning patterns into the prompt /
+   few-shot library, tune the source-credibility gate's priors, and grow the per-business-type
+   playbook library (business_plan §11 moat (c)). Needs user-consent/privacy handling for using their
+   data. The decision-tree already captures the exact signal — log it.)
+8. **BYO API key + token-usage meter (big unit-economics lever).** Show "remaining tokens" and let a
+   user paste their own API secret; their account then runs on *their* key under the hood — FILG
+   becomes "a useful skin / doc store" over their own LLM spend. Applies to BOTH tiers (each has a
+   token limit that BYO-key unblocks); paid may get a higher monthly allotment. (Strategic: this flips
+   COGS — the token-heavy research (§12 COGS risk) — off our books onto the user, changing the model
+   from reselling compute to selling the product layer. Security is load-bearing: never log keys,
+   encrypt at rest per-account, scope, easy revoke. Simple paste-in UI.)
+9. **Bizdev marketplace → agentic business-management platform.** Monetize by selling add-on tools
+   (often white-labeled) and straight integrations — e.g. "use HubSpot CRM right here with your data
+   + model." FILG is the simple hook; it sprawls (future) into an agentic platform to run the
+   business, not just plan it. (Fit: extends the add-ons sidebar (#3 compliance, ask-an-expert) and
+   the paid "CRM kickstarts" integrations stub already on the profile; the add-on/upsell UX research
+   applies. Marketplace = rev-share/white-label on third-party tools + native integrations.)
 
 ## Branding note (Sam, end of session)
 **The brand is encouraging entrepreneurship — "Entrepreneurship is for everyone."** Work this into
