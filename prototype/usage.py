@@ -104,6 +104,26 @@ def record_run(user_id: str, cost: float) -> None:
             con.close()
 
 
+def record_spend(cost: float) -> None:
+    """Bump only the global daily total (the kill switch) — for spend that isn't a new user run,
+    e.g. per-section drafts and add-on calls. Does NOT touch the per-user free-run counter."""
+    if not cost:
+        return
+    _init()
+    cost = round(cost, 4)
+    with _lock:
+        con = _connect()
+        try:
+            with con:
+                today = date.today().isoformat()
+                con.execute(
+                    "INSERT INTO usage_daily (day, spend) VALUES (?, ?) "
+                    "ON CONFLICT(day) DO UPDATE SET spend = round(spend + ?, 4)",
+                    (today, cost, cost))
+        finally:
+            con.close()
+
+
 def snapshot() -> dict:
     _init()
     con = _connect()

@@ -217,7 +217,8 @@ def _plan_research(session_id: str, idea: str, user: str) -> None:
         with RUN_LOCK:
             res = planner.research(idea, mock=MOCK)
             prop, c0 = planner.first_proposal(idea, res, mock=MOCK)
-        usage.record_run(user, res["cost"])
+        usage.record_run(user, res["cost"])   # the metered free run (also bumps the daily total)
+        usage.record_spend(c0)                 # first section draft → daily kill switch only
         store.plan_save(session_id, status="building", research=res, step=0, proposal=prop,
                         cost=round(res["cost"] + c0, 4))
     except Exception as e:  # noqa: BLE001
@@ -266,8 +267,29 @@ async def api_plan_respond(sid: str, request: Request):
             upd = planner.advance(s, choice, body.get("note"), mock=MOCK)
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"error": str(e)}, status_code=500)
+    usage.record_spend(round((upd.get("cost", 0) or 0) - (s.get("cost") or 0), 4))  # per-section draft
     store.plan_save(sid, **upd)
     return _plan_state(store.plan_get(sid))
+
+
+@app.post("/api/plan/{sid}/ask")
+async def api_plan_ask(sid: str, request: Request):
+    """Add-on: ask a composite archetype advisor about the plan-in-progress."""
+    s = store.plan_get(sid)
+    if not s:
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    body = await request.json()
+    archetype = body.get("archetype")
+    if archetype not in planner.ARCHETYPE_KEYS:
+        return JSONResponse({"error": "pick an advisor"}, status_code=400)
+    try:
+        with RUN_LOCK:
+            res, cost = planner.ask_expert(s["idea"], s.get("files") or {}, archetype,
+                                           body.get("question") or "", mock=MOCK)
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": str(e)}, status_code=500)
+    usage.record_spend(cost)
+    return res
 
 
 @app.get("/api/plan/{sid}/download")
@@ -293,7 +315,8 @@ async def api_plan_download(sid: str, request: Request):
 async def index():
     cfg = json.dumps({"authEnabled": auth.AUTH_ENABLED, "billingEnabled": billing.BILLING_ENABLED,
                       "supabaseUrl": os.environ.get("SUPABASE_URL", ""),
-                      "supabaseAnon": os.environ.get("SUPABASE_ANON_KEY", "")})
+                      "supabaseAnon": os.environ.get("SUPABASE_ANON_KEY", ""),
+                      "archetypes": planner.ARCHETYPES})
     head = f"<script>window.FILG={cfg}</script>"
     if auth.AUTH_ENABLED:
         head += '<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>'
@@ -305,64 +328,81 @@ PAGE = """<!doctype html><html lang=en><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1"><title>FILG — build your business plan, with receipts</title>
 __FILG_HEAD__
 <style>
-:root{--paper:#FBFAF8;--ink:#14110E;--muted:#6B655C;--line:#E7E2D8;--accent:#0F766E;--warn:#B45309;--ok-bg:#EAF4F2;--warn-bg:#FBF3E6}
-*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.6 ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif}
-.page{max-width:1120px;margin:0 auto;padding:24px 22px 64px}
-.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
-h1.logo{font-family:Georgia,serif;font-size:30px;margin:0}.logo span{color:var(--accent)}
-.sub{color:var(--muted);margin:0 0 18px}
-textarea,input{width:100%;padding:13px 15px;border:1px solid var(--line);border-radius:10px;font:inherit;background:#fff;margin-bottom:12px}
-textarea{min-height:120px;resize:vertical}
-button{background:var(--accent);color:#fff;border:0;font:inherit;font-weight:600;padding:12px 20px;border-radius:10px;cursor:pointer}
-button:disabled{opacity:.55;cursor:default}
-.intake{max-width:680px;margin:24px auto}
-.err{color:var(--warn);margin-top:12px}
+:root{--bg:#FFFDF7;--ink:#1B1726;--muted:#6E6878;--line:#EFE9DD;--card:#fff;--coral:#FF6B4A;--coral-d:#E85535;--sky:#2E7CF6;--sun:#FFC23F;--ok-bg:#E7F5EC;--ok:#1E9E5A;--warn-bg:#FFF3E0;--warn:#C9740B}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 "Nunito",ui-rounded,"SF Pro Rounded","Segoe UI",system-ui,sans-serif}
+.page{max-width:1140px;margin:0 auto;padding:22px 22px 72px}
+.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+h1.logo{font-size:30px;font-weight:800;letter-spacing:-.02em;margin:0}.logo span{color:var(--coral)}
+.sub{color:var(--muted);margin:0 0 18px;font-size:17px}
+textarea,input{width:100%;padding:14px 16px;border:1.5px solid var(--line);border-radius:14px;font:inherit;background:#fff;margin-bottom:12px}
+textarea:focus,input:focus{outline:none;border-color:var(--sky)}textarea{min-height:120px;resize:vertical}
+button{background:var(--coral);color:#fff;border:0;font:inherit;font-weight:800;padding:13px 22px;border-radius:14px;cursor:pointer;transition:transform .06s,filter .15s}
+button:hover{filter:brightness(1.04)}button:active{transform:translateY(1px)}button:disabled{opacity:.55;cursor:default}
+.intake{max-width:680px;margin:28px auto;text-align:center}.intake textarea,.intake input{text-align:left}
+.intake h2{font-size:30px;font-weight:800;letter-spacing:-.02em;margin:0 0 6px}.intake .go{font-size:17px;padding:15px 26px}
+.err{color:var(--coral-d);margin-top:12px;font-weight:700}
 .authbar{display:flex;align-items:center;gap:14px;font-size:14px}
-.authbar .who{color:var(--muted)}.authbar b{color:var(--accent)}
-.authbar .link{background:none;color:var(--accent);padding:0;font-weight:600;font-size:14px}
-.authbar .up{background:var(--accent);color:#fff;padding:7px 13px;border-radius:8px;font-size:13px}
-.note-banner{background:var(--ok-bg);border-radius:10px;padding:12px 15px;font-size:14px;margin-bottom:16px;display:none}
-.workspace{display:grid;grid-template-columns:330px 1fr;gap:24px;align-items:start}
-.side{position:sticky;top:18px;display:flex;flex-direction:column;gap:18px}
-.sec{background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px}
-.sec h3{font-size:12px;margin:0 0 10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+.authbar .who{color:var(--muted)}.authbar b{color:var(--coral)}
+.authbar .link{background:none;color:var(--sky);padding:0;font-weight:700;font-size:14px}
+.authbar .up{background:var(--sun);color:#3a2c00;padding:8px 14px;border-radius:10px;font-size:13px}
+.note-banner{background:var(--ok-bg);border:1px solid #cfe9d8;border-radius:14px;padding:12px 16px;font-size:14px;margin-bottom:16px;display:none}
+.workspace{display:grid;grid-template-columns:300px 1fr;gap:24px;align-items:start}
+.side{position:sticky;top:18px;display:flex;flex-direction:column;gap:16px}
+.sec{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:16px}
+.sec h3{font-size:12px;margin:0 0 12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:800}
 .ev{list-style:none;padding:0;margin:0}.ev li{padding:9px 0;border-top:1px dashed var(--line);font-size:13px}.ev li:first-child{border-top:0}
 .ev .note{color:var(--muted);font-size:12px}
-.badge{font-size:10px;font-weight:600;padding:1px 6px;border-radius:5px}.b-ok{background:var(--ok-bg);color:var(--accent)}.b-warn{background:var(--warn-bg);color:var(--warn)}
-.tree{list-style:none;padding:0;margin:0}
-.tree li{padding:8px 0;border-top:1px solid var(--line);font-size:14px}.tree li:first-child{border-top:0}
-.tree .f{display:flex;align-items:center;gap:8px}.tree .built{cursor:pointer}.tree .pending .name{color:var(--muted)}
-.tree .ic{width:16px;text-align:center}
-.tree .body{margin:6px 0 2px;padding:10px 12px;background:var(--paper);border:1px solid var(--line);border-radius:8px;white-space:pre-wrap;font-size:13px;display:none}
-.dl{width:100%}
+.badge{font-size:10px;font-weight:800;padding:1px 7px;border-radius:20px}.b-ok{background:var(--ok-bg);color:var(--ok)}.b-warn{background:var(--warn-bg);color:var(--warn)}
+.tree{list-style:none;padding:0;margin:0}.tree li{padding:10px 0;border-top:1px solid var(--line)}.tree li:first-child{border-top:0}
+.tree .f{display:flex;align-items:center;gap:10px;font-size:14px}
+.tree .built{cursor:pointer}.tree .built .nm{font-weight:700}.tree .pending{opacity:.55}.tree .active .nm{color:var(--sky);font-weight:800}
+.tree .ic{width:20px;height:20px;flex:none;display:grid;place-items:center;border-radius:50%;font-size:12px}
+.tree .done .ic{background:var(--ok-bg);color:var(--ok)}.tree .active .ic{background:#e6efff;color:var(--sky);animation:pulse 1.1s infinite}
+.tree .pending .ic{border:1.5px solid var(--line);color:var(--muted)}
+.tree .nm .s{display:block;font-size:11px;color:var(--muted);font-weight:500}
+.tree .body{margin:8px 0 2px 30px;padding:12px 14px;background:var(--bg);border:1px solid var(--line);border-radius:12px;white-space:pre-wrap;font-size:13px;display:none}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.dl{width:100%;background:var(--sun);color:#3a2c00}
 .main{min-width:0}
-.answer{background:#fff;border:1px solid var(--line);border-radius:14px;padding:22px;margin-bottom:20px}
-.answer h2{font-family:Georgia,serif;font-size:22px;margin:0 0 4px}.answer .tag{color:var(--muted);font-size:13px;margin:0 0 14px}
-.node{background:#fff;border:1px solid var(--line);border-radius:14px;padding:22px}
-.node .eyebrow{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--accent);font-weight:600}
-.node h3{font-family:Georgia,serif;font-size:20px;margin:4px 0 12px}
-.draft{white-space:pre-wrap;background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:14px 16px;font-size:14px;margin-bottom:14px}
-.branches{display:flex;gap:10px;flex-wrap:wrap;margin:0 0 10px}
-.branches button{flex:1;min-width:120px;font-size:14px;padding:11px 12px}
-.b-but{background:#8a6d3b}.b-no{background:#fff;color:var(--ink);border:1px solid var(--line)}
-.progress{font-size:13px;color:var(--muted);margin-top:8px}
-.done{background:var(--ok-bg);border-radius:10px;padding:14px 16px;font-size:14px}
+.answer{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:24px;margin-bottom:20px}
+.answer h2{font-size:24px;font-weight:800;letter-spacing:-.01em;margin:0 0 4px}.answer .tag{color:var(--muted);font-size:13px;margin:0 0 14px}
+.node{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:24px}
+.node .eyebrow{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--coral);font-weight:800}
+.node h3{font-size:21px;font-weight:800;margin:5px 0 2px}.node .h3sub{color:var(--muted);font-size:13px;margin:0 0 14px}
+.draft{white-space:pre-wrap;background:var(--bg);border:1px solid var(--line);border-radius:14px;padding:16px 18px;font-size:14.5px;margin-bottom:16px}
+.lead{font-size:14px;color:var(--muted);margin:0 0 12px}
+.branches{display:flex;gap:10px;flex-wrap:wrap}.branches button{flex:1;min-width:130px;font-size:15px;padding:13px 12px}
+.b-but{background:var(--sky)}.b-no{background:#fff;color:var(--ink);border:1.5px solid var(--line)}
+.compose{margin-top:14px;border:1.5px solid var(--sky);border-radius:14px;padding:14px;background:#fff}
+.compose .pl{font-weight:700;margin:0 0 8px}
+.chips{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0 0}
+.chip{background:var(--bg);border:1px solid var(--line);color:var(--ink);font-size:13px;font-weight:700;padding:6px 11px;border-radius:20px}
+.compose .row{display:flex;gap:8px;margin-top:10px}.compose .row button{flex:none}.compose .ghost{background:#fff;color:var(--muted);border:1.5px solid var(--line)}
+.done{background:var(--ok-bg);border:1px solid #cfe9d8;border-radius:14px;padding:16px 18px;font-size:15px}
+.addons .ax{display:flex;flex-wrap:wrap;gap:8px}
+.addons .ax button{flex:1;min-width:120px;background:#fff;border:1.5px solid var(--line);color:var(--ink);font-size:13px;font-weight:800;padding:9px 10px;text-align:left}
+.addons .ax .bl{display:block;font-size:11px;color:var(--muted);font-weight:500}
+.expert{margin-top:12px;background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:12px 14px;font-size:13px;white-space:pre-wrap;display:none}
+.disc{font-size:11px;color:var(--muted);margin-top:8px}
 @media(max-width:820px){.workspace{grid-template-columns:1fr}.side{position:static}}
 </style></head><body><div class=page>
 <div class=top><h1 class=logo>FI<span>LG</span></h1><div class=authbar id=authbar></div></div>
 <div class=note-banner id=banner></div>
 <div class=intake id=intake>
-<p class=sub>Drop in your idea. Get your offer + the research graded, then <b>build the business plan live</b> — you decide each step; we draft the files.</p>
-<textarea id=idea placeholder="I'm good with automation and I think I could help [who] with [problem]... but I don't know what to sell or how."></textarea>
+<h2>You've got a business in you. Let's find it. 🚀</h2>
+<p class=sub>Drop in your idea. You'll get the offer + the research graded — then we build the whole plan together, your call at every step.</p>
+<textarea id=idea placeholder="e.g. I'm handy with automations and I think I could help dentists stop missing new-patient calls — but I don't know what to sell or how."></textarea>
 <input id=email type=email placeholder="you@email.com">
-<button id=go onclick=start()>Build my plan →</button>
+<button id=go class=go onclick=start()>Build my plan →</button>
 <div class=err id=err></div>
 </div>
 <div class=workspace id=workspace style="display:none">
 <aside class=side>
+<div class=sec><h3>Your plan</h3><ul class=tree id=tree></ul>
+<button id=dl class=dl onclick=download() style="display:none;margin-top:12px">⬇ Download plan (.zip)</button></div>
+<div class="sec addons"><h3>Add-ons · ask an expert</h3><div class=ax id=addons></div>
+<div class=expert id=expert></div><div class=disc id=adisc></div></div>
 <div class=sec><h3>Research — graded</h3><div id=research></div></div>
-<div class=sec><h3>Your business plan</h3><ul class=tree id=tree></ul></div>
-<button id=dl class=dl onclick=download() style="display:none">⬇ Download plan (.zip)</button>
 </aside>
 <main class=main>
 <div id=answer></div>
@@ -394,53 +434,93 @@ async function start(){
 async function poll(){
   const r=await fetch('/api/plan/'+SID,{headers:authHeaders()});
   const s=await r.json();
-  if(s.status==='researching'){document.getElementById('node').innerHTML='<div class=node>Researching + grading sources… (~1–2 min)</div>';setTimeout(poll,2500);return;}
+  renderTree(s);renderAddons(s);     // show the plan outline immediately, even while researching
+  if(s.status==='researching'){
+    document.getElementById('node').innerHTML='<div class=node><span class=eyebrow>Working</span><h3>Researching + grading your market…</h3><p class=lead>Pulling sources and grading every number — vendor spin gets labeled, not laundered. ~1–2 min. Watch your plan fill in on the left.</p></div>';
+    setTimeout(poll,2500);return;
+  }
   render(s);
 }
 function render(s){
-  if(s.status==='error'){document.getElementById('node').innerHTML='<div class=node>Error: '+esc(s.error)+'</div>';return;}
-  renderResearch(s);renderAnswer(s);renderTree(s);renderNode(s);
+  if(s.status==='error'){document.getElementById('node').innerHTML='<div class=node><h3>Hit a snag</h3><p class=lead>'+esc(s.error)+'</p></div>';return;}
+  renderResearch(s);renderAnswer(s);renderTree(s);renderNode(s);renderAddons(s);
 }
 function renderResearch(s){
   const rows=(s.research&&s.research.rows)||[];
+  if(!rows.length){document.getElementById('research').innerHTML='<p style="color:var(--muted);font-size:13px;margin:0">Grading sources…</p>';return;}
   document.getElementById('research').innerHTML='<ul class=ev>'+rows.map(x=>`<li>${x.mark==='ok'?'✅':'⚠️'} ${esc(x.text)} <span class="badge ${x.mark==='ok'?'b-ok':'b-warn'}">${x.mark==='ok'?'cited':'vendor'}</span><br><span class=note>${esc(host(x.url))} — ${esc(x.note)}</span></li>`).join('')+'</ul>';
 }
 function renderAnswer(s){
   const p=s.research&&s.research.prose; if(!p)return;
-  document.getElementById('answer').innerHTML=`<h2>${esc(p.title)}</h2><p class=tag>Your offer, with the research graded — vendor spin labeled, not laundered.</p><p><b>The offer:</b> ${esc(p.offer)}</p><p><b>How you'd sell it:</b> ${esc(p.gtm)}</p>`;
+  document.getElementById('answer').innerHTML=`<h2>${esc(p.title)}</h2><p class=tag>Your offer, with the research graded — vendor spin labeled, not laundered.</p><p><b>What you'd sell:</b> ${esc(p.offer)}</p><p><b>How you'd sell it:</b> ${esc(p.gtm)}</p>`;
 }
 function renderTree(s){
   const built={}; (s.files||[]).forEach(f=>built[f.path]=f.content);
-  document.getElementById('tree').innerHTML=s.sections.map(sec=>{
+  const step=s.step==null?-1:s.step;
+  document.getElementById('tree').innerHTML=(s.sections||[]).map((sec,i)=>{
+    const nm=`<span class=nm>${esc(sec.title)}<span class=s>${esc(sec.sub||'')}</span></span>`;
     if(built[sec.file]!=null){
-      return `<li class=built onclick="var b=this.querySelector('.body');b.style.display=b.style.display==='block'?'none':'block'"><div class=f><span class=ic>📄</span><span class=name>${esc(sec.file)}</span></div><div class=body>${esc(built[sec.file])}</div></li>`;
+      return `<li class="done built" onclick="var b=this.querySelector('.body');b.style.display=b.style.display==='block'?'none':'block'"><div class=f><span class=ic>✓</span>${nm}</div><div class=body>${esc(built[sec.file])}</div></li>`;
     }
-    return `<li class=pending><div class=f><span class=ic>○</span><span class=name>${esc(sec.file)}</span></div></li>`;
+    if(!s.done&&i===step){return `<li class=active><div class=f><span class=ic>✍︎</span>${nm}</div></li>`;}
+    return `<li class=pending><div class=f><span class=ic>○</span>${nm}</div></li>`;
   }).join('');
-  document.getElementById('dl').style.display=s.done?'block':'none';
+  const dl=document.getElementById('dl'); if(dl)dl.style.display=s.done?'block':'none';
 }
 function renderNode(s){
   const n=document.getElementById('node');
-  if(s.done){n.innerHTML='<div class=node><div class=done>✅ Your business plan is complete — '+s.total+' files. Download it on the left.</div></div>';return;}
+  if(s.status==='researching')return;
+  if(s.done){n.innerHTML='<div class=node><div class=done>🎉 Your plan\\'s ready — all '+s.total+' parts. Grab the download on the left, or ask an expert to pressure-test it.</div></div>';return;}
   const p=s.proposal; if(!p){n.innerHTML='';return;}
-  n.innerHTML=`<div class=node><span class=eyebrow>Step ${s.step+1} of ${s.total}</span><h3>${esc(p.title)}</h3>`+
+  const sec=(s.sections||[]).find(x=>x.title===p.title)||{};
+  n.innerHTML=`<div class=node><span class=eyebrow>Part ${s.step+1} of ${s.total}</span><h3>${esc(p.title)}</h3><p class=h3sub>${esc(sec.sub||'')}</p>`+
     `<div class=draft>${esc(p.draft)}</div>`+
-    `<p class=progress>Shape it — accept, accept with a caveat, or redirect. A note is optional.</p>`+
-    `<textarea id=note placeholder="Optional: 'yes, and also…' / 'okay, but…' / 'not quite — more like…'"></textarea>`+
-    `<div class=branches><button class=b-yes onclick="respond('yes_and')">Yes, and →</button>`+
-    `<button class=b-but onclick="respond('okay_but')">Okay, but…</button>`+
-    `<button class=b-no onclick="respond('not_quite')">Not quite</button></div></div>`;
+    `<p class=lead>Here's a first swing. React and we'll shape it — your call drives what gets written next.</p>`+
+    `<div class=branches><button class=b-yes onclick="branch('yes_and')">Yes, and…</button>`+
+    `<button class=b-but onclick="branch('okay_but')">Okay, but…</button>`+
+    `<button class=b-no onclick="branch('not_quite')">Not quite</button></div><div id=compose></div></div>`;
 }
+const BRANCH={
+  yes_and:{pl:"Yes — and what should it add or push further?",chips:["go bolder","add a second audience","make it premium","add an upsell"],btn:"Add it →"},
+  okay_but:{pl:"Okay — but what should change?",chips:["cheaper entry","B2B only","faster timeline","narrower niche"],btn:"Change it →"},
+  not_quite:{pl:"Not quite — what would you rather see?",chips:["a different model","more specific","less risky","more ambitious"],btn:"Show me another →"}};
+function branch(choice){
+  const b=BRANCH[choice], c=document.getElementById('compose');
+  c.innerHTML=`<div class=compose><p class=pl>${esc(b.pl)}</p>`+
+    `<textarea id=note rows=2 placeholder="Optional — type a note, or just send."></textarea>`+
+    `<div class=chips>${b.chips.map(x=>`<button type=button class=chip onclick="addChip('${x.replace(/'/g,"")}')">${esc(x)}</button>`).join('')}</div>`+
+    `<div class=row><button onclick="respond('${choice}')">${esc(b.btn)}</button><button type=button class=ghost onclick="document.getElementById('compose').innerHTML=''">Cancel</button></div></div>`;
+  const t=document.getElementById('note'); if(t)t.focus();
+}
+function addChip(txt){const t=document.getElementById('note'); if(!t)return; t.value=(t.value?t.value.replace(/\\s*$/,'')+', ':'')+txt; t.focus();}
 async function respond(choice){
   const noteEl=document.getElementById('note'); const note=noteEl?noteEl.value:'';
-  document.querySelectorAll('.branches button').forEach(b=>b.disabled=true);
+  const node=document.getElementById('node'); node.querySelectorAll('button').forEach(b=>b.disabled=true);
   const err=document.getElementById('err2'); err.textContent='';
+  const comp=document.getElementById('compose'); if(comp)comp.innerHTML='<p class=lead>Writing…</p>';
   try{
     const r=await fetch('/api/plan/'+SID+'/respond',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({choice,note})});
     const s=await r.json();
-    if(!r.ok){err.textContent=s.error||'Something went wrong.';document.querySelectorAll('.branches button').forEach(b=>b.disabled=false);return;}
+    if(!r.ok){err.textContent=s.error||'Something went wrong.';node.querySelectorAll('button').forEach(b=>b.disabled=false);return;}
     render(s);
-  }catch(e){err.textContent='Network error.';document.querySelectorAll('.branches button').forEach(b=>b.disabled=false);}
+  }catch(e){err.textContent='Network error.';node.querySelectorAll('button').forEach(b=>b.disabled=false);}
+}
+function renderAddons(s){
+  const box=document.getElementById('addons'); if(!box||box.dataset.done)return;
+  const ax=CFG.archetypes||[]; if(!ax.length){box.closest('.sec').style.display='none';return;}
+  box.innerHTML=ax.map(a=>`<button type=button onclick="ask('${a.key}')">${esc(a.name)}<span class=bl>${esc(a.blurb)}</span></button>`).join('');
+  document.getElementById('adisc').textContent='AI composite advisors — not real people, not professional advice.';
+  box.dataset.done='1';
+}
+async function ask(key){
+  const out=document.getElementById('expert'); out.style.display='block';
+  const q=prompt('Ask the advisor about your plan (optional):'); if(q===null)return;
+  out.textContent='Thinking…';
+  try{
+    const r=await fetch('/api/plan/'+SID+'/ask',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({archetype:key,question:q})});
+    const d=await r.json();
+    out.textContent=r.ok?d.answer:(d.error||'Could not reach the advisor.');
+  }catch(e){out.textContent='Network error.';}
 }
 async function download(){
   try{

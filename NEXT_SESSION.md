@@ -36,6 +36,34 @@ The core loop is now a **3-pane decision-tree builder** (replaces the one-shot t
   (c) per-section cost adds up in real mode — meter it (currently only research cost is recorded).
 - Old teardown endpoints (`/api/run`, `/r/{id}`) kept for back-compat / existing share links.
 
+## UX OVERHAUL v1 (built, mock-verified — needs prod + real-LLM test)
+Research-backed redesign (6 web-research agents; brand picked by Sam = **"The Optimist"** — warm,
+rounded, encouraging, coral `#FF6B4A` + sky `#2E7CF6` on cream). Shipped:
+- **Optimist rebrand** of the whole builder; intake headline "You've got a business in you…".
+- **Skeleton-first file tree** (Gamma pattern): all 6 sections show immediately as `○ pending →
+  ✍︎ active → ✓ done`, fill in live. **Plain-language section names** (fixes the "structured brief"
+  confusion): The setup / What you sell / What you charge / How you get customers / How you deliver /
+  Your first 30 days (`planner.SECTIONS`).
+- **Branch buttons open an inline input on click** (Sam's ask) with branch-specific placeholder +
+  quick chips; backend already steers the LLM per branch (`planner._steer`).
+- **"Ask an expert" add-on** = FILG-owned COMPOSITE ARCHETYPES only (The Closer/Bootstrapper/Brand
+  Builder/Skeptical CFO), always-on "AI, not professional advice" disclaimer. **Legal: never ship
+  real named people** — right-of-publicity / ELVIS Act / NO FAKES Act (Senate vote ~June 18 2026,
+  ~$750k/work platform liability). Real personas only via signed license/opt-in (Delphi model).
+  `planner.ask_expert` + `POST /api/plan/{id}/ask`.
+- **Cost metering hardened:** `usage.record_spend()` now sends per-section drafts + add-on calls to
+  the daily kill switch (per-user free cap unchanged).
+- Verified in mock end-to-end (page, steered respond, expert, finish, download 402). **NOT tested:**
+  real LLM (no key here) + prod. Auto-deploys to Render on push.
+
+### Overhaul — deferred to next passes (research has the patterns)
+- Real token streaming per section; select-text-in-a-section → ask (scoped edits); "Re-source this
+  stat / show grade" one-click; sibling drafts on "Not quite"; per-claim grade streaming.
+- Add-ons: locked-preview teasers + the **$99 one-time Spin-up Pack as the download unlock** (Stripe
+  `mode=payment`); compliance-report add-on (the recorded idea); ask-expert UI is `prompt()`-based
+  (replace with inline composer). Reverse-trial-flavored gate (research: post-results paywall ~3–5x).
+- Download ownership check still TODO.
+
 ## The monetization decision (what to build next)
 Model is already locked in `business_plan.md` §9: Free (1 teardown) → **$39/mo Operator** (full
 artifacts + ongoing dev + unlimited) → **$99–149 one-time Spin-up Pack** → FRI done-with-you upsell.

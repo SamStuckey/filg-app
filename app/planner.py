@@ -25,18 +25,32 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "prototype"))
 import teardown  # noqa: E402
 
-# The plan = an ordered set of files. Mirrors generate_full()'s artifact set, one file per node.
+# The plan = an ordered set of files. Plain-language titles (operator voice), friendly filenames.
 SECTIONS = [
-    {"key": "brief",    "file": "01_brief.md",         "title": "Structured brief"},
-    {"key": "offer",    "file": "02_offer.md",          "title": "Offer definition"},
-    {"key": "pricing",  "file": "03_pricing.md",        "title": "Packaging & pricing"},
-    {"key": "gtm",      "file": "04_go_to_market.md",   "title": "Go-to-market"},
-    {"key": "delivery", "file": "05_delivery.md",       "title": "Delivery playbook"},
-    {"key": "roadmap",  "file": "06_roadmap.md",        "title": "30-day roadmap"},
+    {"key": "brief",    "file": "1-the-setup.md",            "title": "The setup",             "sub": "who it's for & why now"},
+    {"key": "offer",    "file": "2-what-you-sell.md",        "title": "What you sell",         "sub": "the offer"},
+    {"key": "pricing",  "file": "3-what-you-charge.md",      "title": "What you charge",       "sub": "packaging & price"},
+    {"key": "gtm",      "file": "4-how-you-get-customers.md","title": "How you get customers", "sub": "go-to-market"},
+    {"key": "delivery", "file": "5-how-you-deliver.md",      "title": "How you deliver",       "sub": "delivery playbook"},
+    {"key": "roadmap",  "file": "6-your-first-30-days.md",   "title": "Your first 30 days",    "sub": "the roadmap"},
 ]
 N = len(SECTIONS)
 
 CHOICES = {"yes_and", "not_quite", "okay_but"}
+
+# "Ask an expert" ships as FILG-owned COMPOSITE ARCHETYPES — never real named people. Naming a real
+# person would trigger right-of-publicity / the ELVIS Act / the NO FAKES Act (commercial use of
+# likeness/voice). Archetypes carry no such exposure. Advisors always self-ID as AI and never give
+# professional (legal/tax/financial) advice.
+ARCHETYPES = [
+    {"key": "closer",       "name": "The Closer",        "blurb": "direct-response sales & pricing nerve"},
+    {"key": "bootstrapper", "name": "The Bootstrapper",  "blurb": "ship lean, get to revenue fast"},
+    {"key": "brand",        "name": "The Brand Builder", "blurb": "positioning & audience"},
+    {"key": "cfo",          "name": "The Skeptical CFO", "blurb": "unit economics & risk"},
+]
+ARCHETYPE_KEYS = {a["key"] for a in ARCHETYPES}
+_DISCLAIMER = ("Heads up — I'm an AI composite advisor (not a real person), and this is general "
+               "business thinking, not legal, tax, or financial advice.")
 
 _MOCK_DRAFT = {
     "brief": ("## Structured brief\n\n**Problem:** the operator can do the work but is stuck on "
@@ -160,6 +174,29 @@ def first_proposal(idea: str, research_data: dict, mock: bool = False) -> tuple[
     return {"section": s0["key"], "title": s0["title"], "draft": draft}, cost
 
 
+def ask_expert(idea: str, files: dict, archetype_key: str, question: str,
+               mock: bool = False) -> tuple[dict, float]:
+    """An add-on: get a take on the plan in a composite ARCHETYPE's voice. Returns
+    ({archetype, answer}, cost). Always prepends the AI / not-professional-advice disclosure."""
+    arch = next(a for a in ARCHETYPES if a["key"] == archetype_key)
+    q = (question or "").strip() or "What would you change to make this actually work?"
+    if mock:
+        return {"archetype": arch["name"],
+                "answer": f"{_DISCLAIMER}\n\n**{arch['name']}** on “{q}”: tighten the offer to one "
+                          f"outcome, charge for it up front, and go get one yes this week. (mock)"}, 0.0
+
+    from pipeline import LEDGER, call, SONNET  # heavy; only in real mode
+    start = len(LEDGER.rows)
+    plan = "\n\n".join(f"## {p}\n{c}" for p, c in files.items()) or "(plan still in progress)"
+    ans = call(f"expert_{archetype_key}", SONNET, max_tokens=700, prompt=(
+        f"You are '{arch['name']}', a FICTIONAL composite business advisor ({arch['blurb']}). You are "
+        "NOT a real person and never claim to be; never give legal, tax, or financial advice. Give "
+        "punchy, specific, encouraging operator advice in your archetype's distinct voice — react to "
+        f"THIS plan, don't speak in generalities.\n\nIDEA: {idea}\n\nPLAN SO FAR:\n{plan}\n\n"
+        f"OPERATOR'S QUESTION: {q}"))
+    return {"archetype": arch["name"], "answer": f"{_DISCLAIMER}\n\n{ans}"}, round(LEDGER.cost_slice(start), 4)
+
+
 def bundle_markdown(idea: str, files: dict) -> str:
     """Combine the file tree into one README-style markdown (used for the .md inside the zip)."""
     L = [f"# Business plan — {idea.strip()[:80]}", "",
@@ -185,12 +222,14 @@ if __name__ == "__main__":  # self-test (mock, no API)
     sess.update(upd)
     # yes_and WITH a note re-synthesizes the section (the note steers it, not just a footnote)
     sess.update(advance(sess, "yes_and", "add a freemium hook", mock=True))
-    assert "revised" in sess["files"]["01_brief.md"] and sess["step"] == 1
+    assert "revised" in sess["files"]["1-the-setup.md"] and sess["step"] == 1
     # finish the rest with plain acceptance (no re-gen)
     while sess.get("status") != "done":
         sess.update(advance(sess, "yes_and", None, mock=True))
     assert sess["status"] == "done" and len(sess["files"]) == N
-    assert "revised" not in sess["files"]["06_roadmap.md"]  # plain-accepted draft kept as-is
+    assert "revised" not in sess["files"]["6-your-first-30-days.md"]  # plain-accepted kept as-is
     md = bundle_markdown(sess["idea"], sess["files"])
-    assert "Business plan" in md and "30-day roadmap" in md
-    print("planner.py self-test OK —", N, "sections,", len(sess["files"]), "files")
+    assert "Business plan" in md
+    exp, _ = ask_expert(sess["idea"], sess["files"], "closer", "is the price right?", mock=True)
+    assert exp["archetype"] == "The Closer" and "AI composite" in exp["answer"]
+    print("planner.py self-test OK —", N, "sections,", len(sess["files"]), "files, expert ok")
