@@ -243,6 +243,19 @@ async def api_plan_start(request: Request):
     return {"id": sid}
 
 
+@app.get("/api/plans")
+async def api_plans(request: Request):
+    """The signed-in user's plans — for the profile / 'My plans' view."""
+    authed = auth.user_from_request(request)
+    if not authed or not authed["email"]:
+        return JSONResponse({"error": "Sign in to see your plans."}, status_code=401)
+    paid = _is_paid(authed["email"], verified=True)
+    plans = [{"id": p["id"], "idea": p["idea"], "status": p["status"], "step": p["step"],
+              "created_at": p["created_at"], "done": p["status"] == "done"}
+             for p in store.plan_list(authed["email"])]
+    return {"email": authed["email"], "paid": paid, "total": planner.N, "plans": plans}
+
+
 @app.get("/api/plan/{sid}")
 async def api_plan_get(sid: str):
     s = store.plan_get(sid)
@@ -387,6 +400,16 @@ button:hover{filter:brightness(1.04)}button:active{transform:translateY(1px)}but
 .addons .ax .bl{display:block;font-size:11px;color:var(--muted);font-weight:500}
 .expert{margin-top:12px;background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:12px 14px;font-size:13px;display:none}
 .disc{font-size:11px;color:var(--muted);margin-top:8px}
+.authgate{margin:6px 0 2px}.authgate button{width:100%;margin-bottom:8px}
+.gbtn{background:#fff;color:var(--ink);border:1.5px solid var(--line);font-weight:800}
+.authgate .or{color:var(--muted);font-size:13px;margin:4px 0 0}
+.plans{max-width:760px;margin:8px auto}.plans h2{font-size:24px;font-weight:800;margin:8px 0 4px}
+.pcard{display:flex;justify-content:space-between;align-items:center;gap:12px;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px 18px;margin-bottom:12px}
+.pcard .idea{font-weight:700;font-size:15px}.pcard .meta{color:var(--muted);font-size:12px;margin-top:2px}
+.pcard .act{display:flex;align-items:center;gap:8px;flex:none}.pcard .act button{font-size:13px;padding:9px 14px}
+.pill{font-size:11px;font-weight:800;padding:2px 9px;border-radius:20px;background:var(--warn-bg);color:var(--warn)}.pill.done{background:var(--ok-bg);color:var(--ok)}
+.integrations{background:var(--card);border:1px dashed var(--line);border-radius:16px;padding:16px 18px;margin-top:18px;color:var(--muted);font-size:14px}
+.empty{color:var(--muted);text-align:center;margin:30px 0}
 @media(max-width:820px){.workspace{grid-template-columns:1fr}.side{position:static}}
 </style></head><body><div class=page>
 <div class=top><h1 class=logo>FI<span>LG</span></h1><div class=authbar id=authbar></div></div>
@@ -395,10 +418,12 @@ button:hover{filter:brightness(1.04)}button:active{transform:translateY(1px)}but
 <h2>You've got a business in you. Let's find it. 🚀</h2>
 <p class=sub>Drop in your idea. You'll get the offer + the research graded — then we build the whole plan together, your call at every step.</p>
 <textarea id=idea placeholder="e.g. I'm handy with automations and I think I could help dentists stop missing new-patient calls — but I don't know what to sell or how."></textarea>
+<div id=authgate></div>
 <input id=email type=email placeholder="you@email.com">
 <button id=go class=go onclick=start()>Build my plan →</button>
 <div class=err id=err></div>
 </div>
+<div id=profile style="display:none"></div>
 <div class=workspace id=workspace style="display:none">
 <aside class=side>
 <div class=sec><h3>Your plan</h3><ul class=tree id=tree></ul>
@@ -422,6 +447,7 @@ async function start(){
   const idea=document.getElementById('idea').value.trim(), email=document.getElementById('email').value.trim();
   const go=document.getElementById('go'), err=document.getElementById('err');
   err.textContent='';
+  if(CFG.authEnabled&&!session){gateIntake();return;}   // login required when auth is on
   const body={idea}; if(!session) body.email=email;   // signed in → identity from the token
   go.disabled=true; go.textContent='Researching…';
   try{
@@ -556,45 +582,81 @@ function mdToHtml(md){
   return out.join('');
 }
 
-// ── Auth (Supabase) + billing (Stripe) ──────────────────────────────────────
+// ── Auth (Supabase) + billing (Stripe) + profile ────────────────────────────
 function renderAuth(){
-  const bar=document.getElementById('authbar'), emailEl=document.getElementById('email');
-  if(!sb){bar.style.display='none';return;}
-  if(session){
-    const paid=me&&me.paid;
-    bar.innerHTML=`<span class=who>${esc(session.user.email)}${paid?' · <b>Operator</b>':''}</span>`+
+  const bar=document.getElementById('authbar');
+  if(sb&&session){
+    const paid=me&&me.paid; bar.style.display='';
+    bar.innerHTML=`<button class=link onclick=showPlans()>My plans</button>`+
+      `<span class=who>${esc(session.user.email)}${paid?' · <b>Operator</b>':''}</span>`+
       (!paid&&CFG.billingEnabled?`<button class="link up" onclick=upgrade()>Upgrade — $39/mo</button>`:'')+
       `<button class=link onclick=signout()>Sign out</button>`;
-    emailEl.style.display='none';
-  }else{
-    bar.innerHTML=`<button class=link onclick=signin()>Sign in</button>`;
-    emailEl.style.display='';
-  }
+  }else if(sb){bar.style.display='';bar.innerHTML=`<button class=link onclick=signinEmail()>Sign in</button>`;}
+  else{bar.style.display='none';}
+  gateIntake();
 }
+function gateIntake(){
+  const gate=document.getElementById('authgate'),email=document.getElementById('email'),go=document.getElementById('go');
+  if(!gate)return;
+  if(CFG.authEnabled&&!session){
+    email.style.display='none';go.style.display='none';
+    gate.innerHTML=`<div class=authgate>`+
+      (CFG.supabaseUrl?`<button class=gbtn onclick=signinGoogle()>Continue with Google</button>`:'')+
+      `<button class=gbtn onclick=signinEmail()>Email me a sign-in link</button>`+
+      `<p class=or>Free to start — sign in so your plans save to your profile.</p></div>`;
+  }else{gate.innerHTML='';go.style.display='';email.style.display=CFG.authEnabled?'none':'';}
+}
+function saveIdea(){try{const v=document.getElementById('idea').value;if(v)localStorage.setItem('filg_idea',v);}catch(e){}}
+function restoreIdea(){try{const v=localStorage.getItem('filg_idea');if(v){document.getElementById('idea').value=v;localStorage.removeItem('filg_idea');}}catch(e){}}
 async function loadMe(){
   if(!session){me=null;return;}
   try{const r=await fetch('/api/me',{headers:authHeaders()});me=r.ok?await r.json():null;}catch(e){me=null;}
 }
-async function signin(){
+async function signinGoogle(){saveIdea();const {error}=await sb.auth.signInWithOAuth({provider:'google',options:{redirectTo:location.origin}});if(error)alert(error.message);}
+async function signinEmail(){
   const email=prompt('Your email — we\\'ll send a one-click sign-in link:');
-  if(!email)return;
+  if(!email)return; saveIdea();
   const {error}=await sb.auth.signInWithOtp({email,options:{emailRedirectTo:location.origin}});
   alert(error?error.message:'Check your inbox for the sign-in link.');
 }
-async function signout(){await sb.auth.signOut();session=null;me=null;renderAuth();}
+async function signout(){await sb.auth.signOut();session=null;me=null;newPlan();renderAuth();}
 async function upgrade(){
-  if(!session){signin();return;}
+  if(!session){signinEmail();return;}
   try{
     const r=await fetch('/api/checkout',{method:'POST',headers:authHeaders()});
     const d=await r.json();
     if(d.url)location.href=d.url; else alert(d.error||'Could not start checkout.');
   }catch(e){alert('Network error starting checkout.');}
 }
+function show(id){['intake','workspace','profile'].forEach(x=>{const e=document.getElementById(x);if(e)e.style.display=(x===id?(x==='workspace'?'grid':'block'):'none');});}
+function newPlan(){show('intake');}
+async function showPlans(){
+  let d; try{const r=await fetch('/api/plans',{headers:authHeaders()});if(!r.ok){alert('Sign in to see your plans.');return;}d=await r.json();}catch(e){alert('Network error.');return;}
+  show('profile');renderPlans(d);
+}
+function renderPlans(d){
+  const rows=d.plans.length?d.plans.map(p=>{
+    const meta=p.done?`Finished · ${d.total} parts`:(p.status==='researching'?'Researching…':`In progress · part ${(p.step||0)+1} of ${d.total}`);
+    const acts=`<button onclick="resume('${p.id}')">${p.done?'Open / iterate':'Resume'}</button>`+(p.done?`<button class=gbtn onclick="resumeDownload('${p.id}')">Download</button>`:'');
+    return `<div class=pcard><div><div class=idea>${esc((p.idea||'Untitled').slice(0,90))}</div><div class=meta>${meta} · ${esc(new Date(p.created_at).toLocaleDateString())}</div></div><div class=act><span class="pill ${p.done?'done':''}">${p.done?'done':'WIP'}</span>${acts}</div></div>`;
+  }).join(''):`<p class=empty>No plans yet — build your first one.</p>`;
+  const integ=d.paid?`<div class=integrations><b>Operator integrations</b> — CRM kickstarts &amp; more, coming soon.</div>`:`<div class=integrations>Upgrade to Operator for integrations (CRM kickstarts &amp; more) — coming soon.</div>`;
+  document.getElementById('profile').innerHTML=`<div class=plans><h2>Your plans</h2><p class=sub>${esc(d.email)} · ${d.paid?'Operator':'Free'}</p>`+
+    `<div style="margin:10px 0 16px"><button onclick=newPlan()>+ New plan</button></div>`+rows+integ+`</div>`;
+}
+async function resume(id){
+  SID=id;show('workspace');
+  const ab=document.getElementById('addons');if(ab)delete ab.dataset.done;
+  const ex=document.getElementById('expert');if(ex){ex.style.display='none';ex.innerHTML='';}
+  try{const r=await fetch('/api/plan/'+SID,{headers:authHeaders()});const s=await r.json();render(s);if(s.status==='researching')poll();}catch(e){document.getElementById('err2').textContent='Could not load that plan.';}
+}
+function resumeDownload(id){SID=id;download();}
 function banner(msg){const b=document.getElementById('banner');b.textContent=msg;b.style.display='block';}
 async function initAuth(){
   const q=new URLSearchParams(location.search);
-  if(q.get('upgraded'))banner('🎉 You\\'re on Operator — full artifact sets are unlocked. Run an idea below.');
+  if(q.get('upgraded'))banner('🎉 You\\'re on Operator. Your plans + integrations are unlocked.');
   if(q.get('canceled'))banner('Checkout canceled — no charge. You\\'re still on the free tier.');
+  restoreIdea();
   if(!CFG.authEnabled||!window.supabase){renderAuth();return;}
   sb=window.supabase.createClient(CFG.supabaseUrl,CFG.supabaseAnon);
   sb.auth.onAuthStateChange(async (_e,s)=>{session=s;await loadMe();renderAuth();});

@@ -243,6 +243,22 @@ def plan_save(session_id: str, **fields) -> None:
         con.close()
 
 
+def plan_list(user: str, limit: int = 50) -> list[dict]:
+    """Recent plan sessions for a user (newest first) — for the profile / 'My plans' view."""
+    if not user:
+        return []
+    init()
+    con = _connect()
+    try:
+        rows = con.execute(
+            "SELECT id, idea, status, step, created_at FROM plan_sessions "
+            "WHERE user=? ORDER BY created_at DESC LIMIT ?",
+            (user.strip().lower(), limit)).fetchall()
+    finally:
+        con.close()
+    return [dict(r) for r in rows]
+
+
 if __name__ == "__main__":  # quick self-test (no API)
     import tempfile
     DB = tempfile.mktemp(suffix=".db")
@@ -273,4 +289,6 @@ if __name__ == "__main__":  # quick self-test (no API)
     assert s["status"] == "building" and s["step"] == 1
     assert s["files"]["01_brief.md"] == "# Brief" and s["proposal"]["section"] == "offer"
     assert plan_get("nope") is None
+    mine = plan_list("u@x.com")
+    assert len(mine) == 1 and mine[0]["id"] == "pl1" and plan_list("nobody@x.com") == []
     print("store.py self-test OK")

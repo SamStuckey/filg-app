@@ -64,6 +64,24 @@ rounded, encouraging, coral `#FF6B4A` + sky `#2E7CF6` on cream). Shipped:
   (replace with inline composer). Reverse-trial-flavored gate (research: post-results paywall ~3–5x).
 - Download ownership check still TODO.
 
+## PROFILES + OAUTH (built, mock-verified — needs Supabase config to go live)
+Replaced "enter your email" with real accounts when Supabase is configured (email fallback stays
+when it isn't, so prod keeps working until you flip it on):
+- **Login**: Google OAuth (`signInWithOAuth`) + email magic-link. When `auth_enabled`, the intake is
+  gated behind sign-in (typed idea persists across the OAuth redirect via localStorage).
+- **Profile / "My plans"** (auth bar → "My plans"): lists the user's plans — WIP (Resume) and finished
+  (Open/iterate + Download). `GET /api/plans` (auth-required) + `store.plan_list(user)`. Plans are
+  keyed by the verified email.
+- **Paid integrations**: stub "CRM kickstarts & more — coming soon" slot on the profile (real ones TBD).
+- Verified in mock with minted JWTs (ownership filtering, 401 unauth, page wiring).
+- **To activate:** set `SUPABASE_*` env in Render AND enable **Google** provider in the Supabase
+  dashboard (Auth → Providers; needs a Google OAuth client + redirect `https://fuckitletsgo.ai`).
+- **Note / tension:** free cap is 1 run lifetime (`FILG_FREE_RUNS=1`), so a free user's profile shows
+  ≤1 plan. Revisit the free allowance alongside the monetization work (maybe free = build WIP freely,
+  gate finish/download) — but watch cost (~$1–2/plan real).
+- Follow-up: `/api/plan/{id}` + download still lack an ownership check (any signed-in user could load
+  another's plan by id); add `WHERE user=?` enforcement.
+
 ## The monetization decision (what to build next)
 Model is already locked in `business_plan.md` §9: Free (1 teardown) → **$39/mo Operator** (full
 artifacts + ongoing dev + unlimited) → **$99–149 one-time Spin-up Pack** → FRI done-with-you upsell.
