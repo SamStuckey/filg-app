@@ -42,6 +42,30 @@ Just fill env in **Environment** and save — no redeploy logic changes. See `.e
   events `checkout.session.completed` + `customer.subscription.*`.
 - `/healthz` then reports `auth_enabled:true, billing_enabled:true`.
 
+## 5. NEXT STEP — turn on user profiles (Supabase + Google OAuth)
+Activates accounts + the "My plans" profile (replaces the email box with real login). Until done,
+the app keeps working on the email fallback. ~10 min.
+
+1. **Create a Supabase project** → **Settings → API**: copy `Project URL`, the `anon` public key,
+   and the `JWT Secret`.
+2. **In Render** (`filg` → Environment) set + save (redeploys):
+   - `SUPABASE_URL` = the Project URL
+   - `SUPABASE_ANON_KEY` = the anon key
+   - `SUPABASE_JWT_SECRET` = the JWT secret
+3. **Google OAuth** — Google Cloud Console → APIs & Services → Credentials → **OAuth client ID**
+   (type: Web). Authorized redirect URI = the one Supabase shows under Auth → Providers → Google
+   (looks like `https://<project>.supabase.co/auth/v1/callback`). Copy the Client ID + Secret.
+4. **Supabase → Authentication → Providers → Google**: enable, paste the Client ID + Secret.
+5. **Supabase → Authentication → URL Configuration**: set Site URL to `https://fuckitletsgo.ai`
+   and add `https://fuckitletsgo.ai` + `https://filg.ai` to Redirect URLs.
+6. Reload the site → `/healthz` shows `auth_enabled:true`; the homepage now shows **Continue with
+   Google** / email magic-link instead of the email box, and signed-in users get a **My plans** profile.
+
+Heads-ups: enabling auth makes **login required to build** (no more anonymous email runs). Free cap
+is currently 1 plan/lifetime (`FILG_FREE_RUNS`); revisit alongside monetization. TODO before heavy
+use: ownership check on `/api/plan/{id}` + download (a signed-in user shouldn't load another's plan
+by id) — tracked in `NEXT_SESSION.md`.
+
 ## Notes
 - The persistent disk pins the service to a **single instance** (fine — runs are serialized in-process).
   Scaling out is the trigger for the Postgres migration (next milestone, `launch_todo.md`).
