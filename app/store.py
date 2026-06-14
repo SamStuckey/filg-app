@@ -68,6 +68,21 @@ def init() -> None:
                 con.execute(
                     "CREATE INDEX IF NOT EXISTS idx_subs_customer "
                     "ON subscriptions (stripe_customer)")
+                # Interactive plan-builder sessions (idea → decision-tree → downloadable file tree).
+                con.execute(
+                    "CREATE TABLE IF NOT EXISTS plan_sessions ("
+                    "  id TEXT PRIMARY KEY,"
+                    "  user TEXT,"
+                    "  idea TEXT,"
+                    "  status TEXT NOT NULL,"       # researching | building | done | error
+                    "  research TEXT,"              # JSON {prose, rows, stats}
+                    "  files TEXT,"                 # JSON {path: content}
+                    "  step INTEGER NOT NULL DEFAULT 0,"
+                    "  proposal TEXT,"              # JSON {section, title, draft}
+                    "  history TEXT,"               # JSON [{section, choice, note}]
+                    "  cost REAL NOT NULL DEFAULT 0,"
+                    "  error TEXT,"
+                    "  created_at TEXT NOT NULL)")
         finally:
             con.close()
         _initialized = True
@@ -177,6 +192,57 @@ def is_paid(email: str) -> bool:
     return not (cpe and time.time() > cpe)
 
 
+# ── Plan-builder sessions ────────────────────────────────────────────────────
+_PLAN_JSON = ("research", "files", "proposal", "history")  # columns stored as JSON
+
+
+def plan_create(session_id: str, user: str, idea: str) -> None:
+    init()
+    con = _connect()
+    try:
+        with con:
+            con.execute(
+                "INSERT INTO plan_sessions (id, user, idea, status, files, history, created_at) "
+                "VALUES (?,?,?,?,?,?,?)",
+                (session_id, user, idea, "researching", "{}", "[]",
+                 datetime.now(timezone.utc).isoformat()))
+    finally:
+        con.close()
+
+
+def plan_get(session_id: str) -> dict | None:
+    """Return the session with its JSON columns decoded, or None."""
+    init()
+    con = _connect()
+    try:
+        row = con.execute("SELECT * FROM plan_sessions WHERE id=?", (session_id,)).fetchone()
+    finally:
+        con.close()
+    if not row:
+        return None
+    s = dict(row)
+    for col in _PLAN_JSON:
+        s[col] = json.loads(s[col]) if s[col] else None
+    return s
+
+
+def plan_save(session_id: str, **fields) -> None:
+    """Update the given columns; JSON-encode the dict/list ones."""
+    if not fields:
+        return
+    sets, vals = [], []
+    for k, v in fields.items():
+        sets.append(f"{k}=?")
+        vals.append(json.dumps(v) if k in _PLAN_JSON else v)
+    vals.append(session_id)
+    con = _connect()
+    try:
+        with con:
+            con.execute(f"UPDATE plan_sessions SET {', '.join(sets)} WHERE id=?", vals)
+    finally:
+        con.close()
+
+
 if __name__ == "__main__":  # quick self-test (no API)
     import tempfile
     DB = tempfile.mktemp(suffix=".db")
@@ -198,4 +264,13 @@ if __name__ == "__main__":  # quick self-test (no API)
     assert email_for_customer("cus_1") == "p@x.com"
     upsert_subscription("p@x.com", status="active", current_period_end=1)  # past → expired
     assert is_paid("p@x.com") is False
+    # plan sessions
+    plan_create("pl1", "u@x.com", "an idea about guitar coaching")
+    assert plan_get("pl1")["status"] == "researching"
+    plan_save("pl1", status="building", step=1, files={"01_brief.md": "# Brief"},
+              proposal={"section": "offer", "draft": "..."})
+    s = plan_get("pl1")
+    assert s["status"] == "building" and s["step"] == 1
+    assert s["files"]["01_brief.md"] == "# Brief" and s["proposal"]["section"] == "offer"
+    assert plan_get("nope") is None
     print("store.py self-test OK")

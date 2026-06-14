@@ -17,6 +17,25 @@
 - **Auth + billing are built but OFF** (env unset). Flip on later with `SUPABASE_*` / `STRIPE_*`
   (see `.env.example`, `DEPLOY.md` §4). `FILG_PAID_EMAILS` = manual comp only.
 
+## NEW: interactive plan-builder (built, mock-verified — needs prod test + real-LLM test)
+The core loop is now a **3-pane decision-tree builder** (replaces the one-shot teardown page as `/`):
+- Enter idea → left sidebar fills with **graded research** + a **live file tree** (`01_brief.md …
+  06_roadmap.md`). Center shows the offer answer, then walks the plan **section by section**.
+- Each node proposes a draft; operator picks **Yes, and / Okay, but / Not quite** (+ optional note).
+  `not_quite` re-drafts that node; the others finalize the file and advance — files appear live.
+- **Download the file tree (zip) = the paid artifact** (pay gate at the end, per Sam's spec).
+- Files: `app/planner.py` (sections + mock drafts + real-LLM-per-section + decision-tree `advance()`),
+  `app/store.py` `plan_sessions` table + `plan_create/get/save`, endpoints `POST /api/plan/start`,
+  `GET /api/plan/{id}`, `POST /api/plan/{id}/respond`, `GET /api/plan/{id}/download` (zip).
+- **Verified in mock:** full walk (research → 6 files → done), `not_quite` re-draft, download 402
+  (free) vs 200 zip (signed-in paid). **NOT yet tested:** real per-section LLM synthesis (no key
+  here) and the flow in prod — smoke-test on Render after deploy.
+- **Follow-ups:** (a) download gate is currently subscription/allowlist — wire the **$99 one-time
+  Spin-up Pack** as the real unlock (Stripe `mode=payment`); (b) `/api/plan/{id}/download` doesn't
+  check session ownership (any paid user could pull any finished plan by id) — add an owner check;
+  (c) per-section cost adds up in real mode — meter it (currently only research cost is recorded).
+- Old teardown endpoints (`/api/run`, `/r/{id}`) kept for back-compat / existing share links.
+
 ## The monetization decision (what to build next)
 Model is already locked in `business_plan.md` §9: Free (1 teardown) → **$39/mo Operator** (full
 artifacts + ongoing dev + unlimited) → **$99–149 one-time Spin-up Pack** → FRI done-with-you upsell.

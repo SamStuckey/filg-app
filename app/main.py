@@ -23,23 +23,25 @@ Env: FILG_MOCK, FILG_FREE_RUNS, FILG_DAILY_BUDGET, FILG_PAID_EMAILS (csv comp ov
 from __future__ import annotations
 
 import html
+import io
 import json
 import os
 import sys
 import threading
 import uuid
+import zipfile
 from pathlib import Path
 
 import markdown
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 
 # import the engine + guardrail (prototype/ is a sibling of app/)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "prototype"))
 import teardown  # noqa: E402
 import usage     # noqa: E402
 
-from . import auth, billing, store  # noqa: E402 — SQLite persistence, Supabase auth, Stripe billing
+from . import auth, billing, planner, store  # noqa: E402 — persistence, auth, billing, plan-builder
 
 MOCK = os.environ.get("FILG_MOCK") == "1"
 # FILG_PAID_EMAILS is now only a manual comp/override; real paid status comes from billing.is_paid.
@@ -189,6 +191,104 @@ async def share(job_id: str):
     return render_result_page(job)
 
 
+# ── Interactive plan builder (idea → decision tree → downloadable file tree) ──
+def _identity(request: Request, body_email: str | None = None) -> tuple[str, bool]:
+    """Resolve (user, verified) — a verified Supabase user wins; else the body email (free tier)."""
+    authed = auth.user_from_request(request)
+    if authed and authed["email"]:
+        return authed["email"], True
+    return (body_email or "").strip().lower(), False
+
+
+def _plan_state(s: dict) -> dict:
+    """Shape a session row for the frontend."""
+    return {
+        "id": s["id"], "status": s["status"], "idea": s["idea"], "error": s.get("error"),
+        "research": s.get("research"),
+        "files": [{"path": p, "content": c} for p, c in (s.get("files") or {}).items()],
+        "sections": [{"file": x["file"], "title": x["title"]} for x in planner.SECTIONS],
+        "step": s.get("step", 0), "total": planner.N, "proposal": s.get("proposal"),
+        "done": s["status"] == "done",
+    }
+
+
+def _plan_research(session_id: str, idea: str, user: str) -> None:
+    try:
+        with RUN_LOCK:
+            res = planner.research(idea, mock=MOCK)
+            prop, c0 = planner.first_proposal(idea, res, mock=MOCK)
+        usage.record_run(user, res["cost"])
+        store.plan_save(session_id, status="building", research=res, step=0, proposal=prop,
+                        cost=round(res["cost"] + c0, 4))
+    except Exception as e:  # noqa: BLE001
+        store.plan_save(session_id, status="error", error=str(e))
+
+
+@app.post("/api/plan/start")
+async def api_plan_start(request: Request):
+    body = await request.json()
+    idea = (body.get("idea") or "").strip()
+    if len(idea) < 12:
+        return JSONResponse({"error": "Tell me a bit more about the idea."}, status_code=400)
+    user, verified = _identity(request, body.get("email"))
+    if "@" not in user:
+        return JSONResponse({"error": "Enter an email so we can save your plan."}, status_code=400)
+    allowed, reason = usage.can_run(user, is_paid=_is_paid(user, verified))
+    if not allowed:
+        return JSONResponse({"error": reason, "upgrade": True}, status_code=402)
+    sid = uuid.uuid4().hex[:12]
+    store.plan_create(sid, user, idea)
+    threading.Thread(target=_plan_research, args=(sid, idea, user), daemon=True).start()
+    return {"id": sid}
+
+
+@app.get("/api/plan/{sid}")
+async def api_plan_get(sid: str):
+    s = store.plan_get(sid)
+    if not s:
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    return _plan_state(s)
+
+
+@app.post("/api/plan/{sid}/respond")
+async def api_plan_respond(sid: str, request: Request):
+    s = store.plan_get(sid)
+    if not s:
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    if s["status"] != "building":
+        return JSONResponse({"error": f"session is {s['status']}"}, status_code=409)
+    body = await request.json()
+    choice = body.get("choice")
+    if choice not in planner.CHOICES:
+        return JSONResponse({"error": "pick yes_and / not_quite / okay_but"}, status_code=400)
+    try:
+        with RUN_LOCK:
+            upd = planner.advance(s, choice, body.get("note"), mock=MOCK)
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": str(e)}, status_code=500)
+    store.plan_save(sid, **upd)
+    return _plan_state(store.plan_get(sid))
+
+
+@app.get("/api/plan/{sid}/download")
+async def api_plan_download(sid: str, request: Request):
+    s = store.plan_get(sid)
+    if not s or s["status"] != "done":
+        return JSONResponse({"error": "plan isn't finished yet"}, status_code=400)
+    user, verified = _identity(request)
+    if not _is_paid(user, verified):
+        return JSONResponse(
+            {"error": "Unlock the download to get your full plan.", "upgrade": True},
+            status_code=402)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("README.md", planner.bundle_markdown(s["idea"], s["files"]))
+        for path, content in s["files"].items():
+            z.writestr(path, content)
+    return Response(buf.getvalue(), media_type="application/zip",
+                    headers={"Content-Disposition": 'attachment; filename="filg-business-plan.zip"'})
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index():
     cfg = json.dumps({"authEnabled": auth.AUTH_ENABLED, "billingEnabled": billing.BILLING_ENABLED,
@@ -200,91 +300,158 @@ async def index():
     return PAGE.replace("__FILG_HEAD__", head)
 
 
-# ── Minimal single-page frontend (brand-aligned; no build step) ──────────────
+# ── Single-page plan-builder frontend (brand-aligned; no build step) ─────────
 PAGE = """<!doctype html><html lang=en><head><meta charset=utf-8>
-<meta name=viewport content="width=device-width,initial-scale=1"><title>FILG — your offer, with receipts</title>
+<meta name=viewport content="width=device-width,initial-scale=1"><title>FILG — build your business plan, with receipts</title>
 __FILG_HEAD__
 <style>
 :root{--paper:#FBFAF8;--ink:#14110E;--muted:#6B655C;--line:#E7E2D8;--accent:#0F766E;--warn:#B45309;--ok-bg:#EAF4F2;--warn-bg:#FBF3E6}
-*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:17px/1.6 ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif}
-.wrap{max-width:720px;margin:0 auto;padding:40px 22px}
-h1{font-family:Georgia,serif;font-size:34px;letter-spacing:-.01em;margin:0 0 8px}
-.logo span{color:var(--accent)}.sub{color:var(--muted);margin:0 0 26px}
+*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.6 ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif}
+.page{max-width:1120px;margin:0 auto;padding:24px 22px 64px}
+.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+h1.logo{font-family:Georgia,serif;font-size:30px;margin:0}.logo span{color:var(--accent)}
+.sub{color:var(--muted);margin:0 0 18px}
 textarea,input{width:100%;padding:13px 15px;border:1px solid var(--line);border-radius:10px;font:inherit;background:#fff;margin-bottom:12px}
-textarea{min-height:110px;resize:vertical}
-button{background:var(--accent);color:#fff;border:0;font:inherit;font-weight:600;padding:13px 22px;border-radius:10px;cursor:pointer}
-button:disabled{opacity:.6}
-.status{color:var(--muted);margin:16px 0}
-.card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:24px;margin-top:22px;display:none}
-.card h2{font-family:Georgia,serif;font-size:22px;margin:0 0 4px}.tag{color:var(--muted);font-size:14px;margin:0 0 16px}
-.ev{list-style:none;padding:0;margin:14px 0 0}.ev li{padding:11px 0;border-top:1px dashed var(--line);display:flex;gap:10px;font-size:15px}
-.ev .ok{color:var(--accent)}.ev .warn{color:var(--warn)}.ev .note{color:var(--muted);font-size:13px}
-.badge{font-size:11px;font-weight:600;padding:2px 7px;border-radius:6px}.b-ok{background:var(--ok-bg);color:var(--accent)}.b-warn{background:var(--warn-bg);color:var(--warn)}
-.recpt{margin-top:18px;padding:14px 16px;background:var(--ok-bg);border-radius:10px;font-size:14px}
-.err{color:var(--warn);margin-top:14px}
-.authbar{display:flex;justify-content:flex-end;align-items:center;gap:14px;font-size:14px;margin-bottom:8px;min-height:24px}
+textarea{min-height:120px;resize:vertical}
+button{background:var(--accent);color:#fff;border:0;font:inherit;font-weight:600;padding:12px 20px;border-radius:10px;cursor:pointer}
+button:disabled{opacity:.55;cursor:default}
+.intake{max-width:680px;margin:24px auto}
+.err{color:var(--warn);margin-top:12px}
+.authbar{display:flex;align-items:center;gap:14px;font-size:14px}
 .authbar .who{color:var(--muted)}.authbar b{color:var(--accent)}
 .authbar .link{background:none;color:var(--accent);padding:0;font-weight:600;font-size:14px}
 .authbar .up{background:var(--accent);color:#fff;padding:7px 13px;border-radius:8px;font-size:13px}
 .note-banner{background:var(--ok-bg);border-radius:10px;padding:12px 15px;font-size:14px;margin-bottom:16px;display:none}
-</style></head><body><div class=wrap>
-<div class=authbar id=authbar></div>
+.workspace{display:grid;grid-template-columns:330px 1fr;gap:24px;align-items:start}
+.side{position:sticky;top:18px;display:flex;flex-direction:column;gap:18px}
+.sec{background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px}
+.sec h3{font-size:12px;margin:0 0 10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+.ev{list-style:none;padding:0;margin:0}.ev li{padding:9px 0;border-top:1px dashed var(--line);font-size:13px}.ev li:first-child{border-top:0}
+.ev .note{color:var(--muted);font-size:12px}
+.badge{font-size:10px;font-weight:600;padding:1px 6px;border-radius:5px}.b-ok{background:var(--ok-bg);color:var(--accent)}.b-warn{background:var(--warn-bg);color:var(--warn)}
+.tree{list-style:none;padding:0;margin:0}
+.tree li{padding:8px 0;border-top:1px solid var(--line);font-size:14px}.tree li:first-child{border-top:0}
+.tree .f{display:flex;align-items:center;gap:8px}.tree .built{cursor:pointer}.tree .pending .name{color:var(--muted)}
+.tree .ic{width:16px;text-align:center}
+.tree .body{margin:6px 0 2px;padding:10px 12px;background:var(--paper);border:1px solid var(--line);border-radius:8px;white-space:pre-wrap;font-size:13px;display:none}
+.dl{width:100%}
+.main{min-width:0}
+.answer{background:#fff;border:1px solid var(--line);border-radius:14px;padding:22px;margin-bottom:20px}
+.answer h2{font-family:Georgia,serif;font-size:22px;margin:0 0 4px}.answer .tag{color:var(--muted);font-size:13px;margin:0 0 14px}
+.node{background:#fff;border:1px solid var(--line);border-radius:14px;padding:22px}
+.node .eyebrow{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--accent);font-weight:600}
+.node h3{font-family:Georgia,serif;font-size:20px;margin:4px 0 12px}
+.draft{white-space:pre-wrap;background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:14px 16px;font-size:14px;margin-bottom:14px}
+.branches{display:flex;gap:10px;flex-wrap:wrap;margin:0 0 10px}
+.branches button{flex:1;min-width:120px;font-size:14px;padding:11px 12px}
+.b-but{background:#8a6d3b}.b-no{background:#fff;color:var(--ink);border:1px solid var(--line)}
+.progress{font-size:13px;color:var(--muted);margin-top:8px}
+.done{background:var(--ok-bg);border-radius:10px;padding:14px 16px;font-size:14px}
+@media(max-width:820px){.workspace{grid-template-columns:1fr}.side{position:static}}
+</style></head><body><div class=page>
+<div class=top><h1 class=logo>FI<span>LG</span></h1><div class=authbar id=authbar></div></div>
 <div class=note-banner id=banner></div>
-<h1 class=logo>FI<span>LG</span></h1>
-<p class=sub>Drop in your idea. Get the offer + how to sell it, with the research graded — vendor spin labeled, not laundered.</p>
+<div class=intake id=intake>
+<p class=sub>Drop in your idea. Get your offer + the research graded, then <b>build the business plan live</b> — you decide each step; we draft the files.</p>
 <textarea id=idea placeholder="I'm good with automation and I think I could help [who] with [problem]... but I don't know what to sell or how."></textarea>
 <input id=email type=email placeholder="you@email.com">
-<button id=go onclick=run()>Build my offer →</button>
-<div class=status id=status></div>
+<button id=go onclick=start()>Build my plan →</button>
 <div class=err id=err></div>
-<div id=perma style="margin-top:16px;display:none"><a id=permalink href="#">🔗 Shareable link to this result</a></div>
-<div class=card id=card></div>
+</div>
+<div class=workspace id=workspace style="display:none">
+<aside class=side>
+<div class=sec><h3>Research — graded</h3><div id=research></div></div>
+<div class=sec><h3>Your business plan</h3><ul class=tree id=tree></ul></div>
+<button id=dl class=dl onclick=download() style="display:none">⬇ Download plan (.zip)</button>
+</aside>
+<main class=main>
+<div id=answer></div>
+<div id=node></div>
+<div class=err id=err2></div>
+</main>
+</div>
 <script>
 const CFG=window.FILG||{authEnabled:false,billingEnabled:false};
 let sb=null, session=null, me=null;
 function authHeaders(){return session?{'Authorization':'Bearer '+session.access_token}:{};}
-async function run(){
-  const idea=document.getElementById('idea').value, email=document.getElementById('email').value;
-  const go=document.getElementById('go'), st=document.getElementById('status'), err=document.getElementById('err');
-  err.textContent='';document.getElementById('card').style.display='none';
-  const body={idea}; if(!session) body.email=email;   // signed in → identity comes from the token
-  go.disabled=true;st.textContent='Researching + grading sources… (~1–2 min)';
+let SID=null;
+async function start(){
+  const idea=document.getElementById('idea').value.trim(), email=document.getElementById('email').value.trim();
+  const go=document.getElementById('go'), err=document.getElementById('err');
+  err.textContent='';
+  const body={idea}; if(!session) body.email=email;   // signed in → identity from the token
+  go.disabled=true; go.textContent='Researching…';
   try{
-    const r=await fetch('/api/run',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify(body)});
+    const r=await fetch('/api/plan/start',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify(body)});
     const d=await r.json();
-    if(!r.ok){err.textContent=d.error||'Something went wrong.';if(d.upgrade&&session&&CFG.billingEnabled)err.innerHTML+=' <a href=# onclick="upgrade();return false">Upgrade to Operator →</a>';go.disabled=false;st.textContent='';return;}
-    poll(d.job_id);
-  }catch(e){err.textContent='Network error.';go.disabled=false;st.textContent='';}
+    if(!r.ok){err.textContent=d.error||'Something went wrong.';if(d.upgrade)err.innerHTML+=' <a href=# onclick="upgrade();return false">Upgrade →</a>';go.disabled=false;go.textContent='Build my plan →';return;}
+    SID=d.id;
+    document.getElementById('intake').style.display='none';
+    document.getElementById('workspace').style.display='grid';
+    poll();
+  }catch(e){err.textContent='Network error.';go.disabled=false;go.textContent='Build my plan →';}
 }
-async function poll(id){
-  const st=document.getElementById('status'),go=document.getElementById('go');
-  const r=await fetch('/api/run/'+id);const d=await r.json();
-  if(d.status==='running'){setTimeout(()=>poll(id),2500);return;}
-  go.disabled=false;st.textContent='';
-  if(d.status==='error'){document.getElementById('err').textContent=d.error;return;}
-  const pl=document.getElementById('permalink'),pw=document.getElementById('perma');
-  pl.href='/r/'+id;pw.style.display='block';
-  render(d.result);
+async function poll(){
+  const r=await fetch('/api/plan/'+SID,{headers:authHeaders()});
+  const s=await r.json();
+  if(s.status==='researching'){document.getElementById('node').innerHTML='<div class=node>Researching + grading sources… (~1–2 min)</div>';setTimeout(poll,2500);return;}
+  render(s);
 }
-function render(res){
-  const c=document.getElementById('card');const s=res.stats;
-  if(res.artifacts_md){
-    c.innerHTML=`<h2>Your full offer is ready</h2><p class=tag>Generated for ~$${res.cost.toFixed(2)}. `+
-      `${s.checked} claims checked, ${s.cleared} cited, ${s.flagged} flagged.</p>`+
-      `<p>Open the full artifact set (offer · pricing · GTM · delivery · roadmap) via the link above.</p>`;
-    c.style.display='block';return;
-  }
-  const p=res.prose;
-  const rows=res.rows.map(x=>`<li><span class="${x.mark==='ok'?'ok':'warn'}">${x.mark==='ok'?'✅':'⚠️'}</span>
-   <span>${esc(x.text)} <span class="badge ${x.mark==='ok'?'b-ok':'b-warn'}">${x.mark==='ok'?'cited':'vendor — unverified'}</span>
-   <br><span class=note><a href="${esc(x.url)}" target=_blank rel=noopener>${esc(host(x.url))}</a> — ${esc(x.note)}</span></span></li>`).join('');
-  c.innerHTML=`<h2>${esc(p.title)}</h2><p class=tag>Generated for ~$${res.cost.toFixed(2)}. Every number graded.</p>
-   <p><b>The offer:</b> ${esc(p.offer)}</p><p><b>How you'd sell it:</b> ${esc(p.gtm)}</p>
-   <p><b>The evidence — graded:</b></p><ul class=ev>${rows}</ul>
-   <div class=recpt><b>${s.checked}</b> claims checked · <b>${s.cleared} cited</b> · ${s.flagged} flagged as vendor marketing and labeled.</div>`;
-  c.style.display='block';
+function render(s){
+  if(s.status==='error'){document.getElementById('node').innerHTML='<div class=node>Error: '+esc(s.error)+'</div>';return;}
+  renderResearch(s);renderAnswer(s);renderTree(s);renderNode(s);
 }
-function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML;}
+function renderResearch(s){
+  const rows=(s.research&&s.research.rows)||[];
+  document.getElementById('research').innerHTML='<ul class=ev>'+rows.map(x=>`<li>${x.mark==='ok'?'✅':'⚠️'} ${esc(x.text)} <span class="badge ${x.mark==='ok'?'b-ok':'b-warn'}">${x.mark==='ok'?'cited':'vendor'}</span><br><span class=note>${esc(host(x.url))} — ${esc(x.note)}</span></li>`).join('')+'</ul>';
+}
+function renderAnswer(s){
+  const p=s.research&&s.research.prose; if(!p)return;
+  document.getElementById('answer').innerHTML=`<h2>${esc(p.title)}</h2><p class=tag>Your offer, with the research graded — vendor spin labeled, not laundered.</p><p><b>The offer:</b> ${esc(p.offer)}</p><p><b>How you'd sell it:</b> ${esc(p.gtm)}</p>`;
+}
+function renderTree(s){
+  const built={}; (s.files||[]).forEach(f=>built[f.path]=f.content);
+  document.getElementById('tree').innerHTML=s.sections.map(sec=>{
+    if(built[sec.file]!=null){
+      return `<li class=built onclick="var b=this.querySelector('.body');b.style.display=b.style.display==='block'?'none':'block'"><div class=f><span class=ic>📄</span><span class=name>${esc(sec.file)}</span></div><div class=body>${esc(built[sec.file])}</div></li>`;
+    }
+    return `<li class=pending><div class=f><span class=ic>○</span><span class=name>${esc(sec.file)}</span></div></li>`;
+  }).join('');
+  document.getElementById('dl').style.display=s.done?'block':'none';
+}
+function renderNode(s){
+  const n=document.getElementById('node');
+  if(s.done){n.innerHTML='<div class=node><div class=done>✅ Your business plan is complete — '+s.total+' files. Download it on the left.</div></div>';return;}
+  const p=s.proposal; if(!p){n.innerHTML='';return;}
+  n.innerHTML=`<div class=node><span class=eyebrow>Step ${s.step+1} of ${s.total}</span><h3>${esc(p.title)}</h3>`+
+    `<div class=draft>${esc(p.draft)}</div>`+
+    `<p class=progress>Shape it — accept, accept with a caveat, or redirect. A note is optional.</p>`+
+    `<textarea id=note placeholder="Optional: 'yes, and also…' / 'okay, but…' / 'not quite — more like…'"></textarea>`+
+    `<div class=branches><button class=b-yes onclick="respond('yes_and')">Yes, and →</button>`+
+    `<button class=b-but onclick="respond('okay_but')">Okay, but…</button>`+
+    `<button class=b-no onclick="respond('not_quite')">Not quite</button></div></div>`;
+}
+async function respond(choice){
+  const noteEl=document.getElementById('note'); const note=noteEl?noteEl.value:'';
+  document.querySelectorAll('.branches button').forEach(b=>b.disabled=true);
+  const err=document.getElementById('err2'); err.textContent='';
+  try{
+    const r=await fetch('/api/plan/'+SID+'/respond',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({choice,note})});
+    const s=await r.json();
+    if(!r.ok){err.textContent=s.error||'Something went wrong.';document.querySelectorAll('.branches button').forEach(b=>b.disabled=false);return;}
+    render(s);
+  }catch(e){err.textContent='Network error.';document.querySelectorAll('.branches button').forEach(b=>b.disabled=false);}
+}
+async function download(){
+  try{
+    const r=await fetch('/api/plan/'+SID+'/download',{headers:authHeaders()});
+    if(r.status===402){const d=await r.json();if(confirm((d.error||'Unlock the download.')+'\\n\\nGo to checkout?'))upgrade();return;}
+    if(!r.ok){alert('Could not download.');return;}
+    const blob=await r.blob(),u=URL.createObjectURL(blob);
+    const a=document.createElement('a');a.href=u;a.download='filg-business-plan.zip';a.click();URL.revokeObjectURL(u);
+  }catch(e){alert('Network error.');}
+}
+function esc(s){const d=document.createElement('div');d.textContent=s==null?'':s;return d.innerHTML;}
 function host(u){try{return new URL(u).hostname.replace(/^www\\./,'');}catch(e){return u;}}
 
 // ── Auth (Supabase) + billing (Stripe) ──────────────────────────────────────
