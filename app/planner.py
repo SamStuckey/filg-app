@@ -69,12 +69,14 @@ def _cited_flagged(rows: list) -> tuple[str, str]:
 
 
 def propose(idea: str, section_key: str, research_data: dict, history: list,
-            note: str | None = None, mock: bool = False) -> tuple[str, float]:
-    """Draft one section. `note` is set when re-drafting after a 'not quite'. Returns (draft, cost)."""
+            steer: str | None = None, mock: bool = False) -> tuple[str, float]:
+    """Draft one section. `steer` is a branch instruction (set when re-drafting after a branch with
+    a note) that is injected into the prompt so the operator's choice actually shapes the output.
+    Returns (draft, cost)."""
     if mock:
         draft = _MOCK_DRAFT[section_key]
-        if note:
-            draft += f"\n\n*(revised — you said: “{note}”)*"
+        if steer:
+            draft += f"\n\n*(revised — {steer})*"
         return draft, 0.0
 
     from pipeline import LEDGER, call, SONNET  # heavy; only in real mode
@@ -83,31 +85,41 @@ def propose(idea: str, section_key: str, research_data: dict, history: list,
     cited, flagged = _cited_flagged(research_data["rows"])
     prior = "\n".join(f"- {h['section']}: {h['choice']}" + (f" — “{h['note']}”" if h.get("note") else "")
                       for h in history) or "- (none yet)"
-    redirect = f"\nThe operator pushed back on your last draft: “{note}”. Address it." if note else ""
+    steer_block = f"\n\nOPERATOR DIRECTION (honor this): {steer}" if steer else ""
     draft = call(f"plan_{section_key}", SONNET, max_tokens=1100, prompt=(
         f"You are the synthesis stage of FILG, building ONE section of a sellable business plan: "
         f"**{section['title']}**. Be concrete and specific; markdown; no preamble.\n\n"
         "Use the CITED research freely (cite inline with its URL). You MAY reference a FLAGGED "
         "claim only if you append '(unverified vendor claim)'. Never present a flagged number as "
-        f"fact.\n\nIDEA:\n{idea}\n\nDECISIONS SO FAR:\n{prior}{redirect}\n\n"
+        f"fact.\n\nIDEA:\n{idea}\n\nDECISIONS SO FAR:\n{prior}{steer_block}\n\n"
         f"CITED RESEARCH:\n{cited}\n\nFLAGGED (vendor) CLAIMS:\n{flagged}"))
     return draft, round(LEDGER.cost_slice(start), 4)
 
 
-def _finalize(section: dict, draft: str, choice: str, note: str | None) -> str:
-    """Compose the file content from the accepted draft + the operator's branch."""
-    out = draft
-    if choice == "okay_but" and note:
-        out += f"\n\n> **Operator caveat:** {note}"
-    elif choice == "yes_and" and note:
-        out += f"\n\n> **Operator add:** {note}"
-    return out
+# How each branch steers the next draft. The operator's choice + note become a prompt instruction,
+# so the buttons genuinely change what the LLM generates (not just a cosmetic footnote).
+def _steer(choice: str, note: str | None) -> str | None:
+    if choice == "not_quite":
+        return (f"The operator rejected the previous draft — redirect: “{note}”. Take a clearly "
+                f"different approach." if note
+                else "The operator rejected the previous draft. Take a clearly different angle.")
+    if not note:
+        return None  # plain acceptance — keep the draft as-is, no re-gen
+    if choice == "yes_and":
+        return f"The operator approves and wants to ADD/extend: “{note}”. Revise to weave this in."
+    if choice == "okay_but":
+        return f"The operator accepts but with this constraint/objection: “{note}”. Revise to honor it."
+    return None
 
 
 def advance(session: dict, choice: str, note: str | None, mock: bool = False) -> dict:
-    """Apply a branch to the current node. Mutates and returns a dict of fields to persist:
-    {files, step, proposal, history, status, cost}. `not_quite` re-drafts in place; the others
-    finalize the file and move on."""
+    """Apply a branch to the current node and return the fields to persist
+    ({files, step, proposal, history, status, cost}).
+
+    - not_quite → re-draft THIS section with a different angle (stay on the node).
+    - yes_and / okay_but with a note → re-synthesize THIS section honoring the note, then finalize.
+    - yes_and / okay_but with no note → accept the current draft as-is, then finalize.
+    Either way the choice+note are appended to history, which feeds every later section's prompt."""
     if choice not in CHOICES:
         raise ValueError(f"bad choice {choice!r}")
     step = session["step"]
@@ -116,17 +128,23 @@ def advance(session: dict, choice: str, note: str | None, mock: bool = False) ->
     history = list(session.get("history") or [])
     cost = session.get("cost") or 0.0
     note = (note or "").strip() or None
+    history.append({"section": section["key"], "choice": choice, "note": note})
 
     if choice == "not_quite":
         draft, c = propose(session["idea"], section["key"], session["research"], history,
-                           note=note, mock=mock)
-        history.append({"section": section["key"], "choice": choice, "note": note})
+                           steer=_steer(choice, note), mock=mock)
         return {"proposal": {"section": section["key"], "title": section["title"], "draft": draft},
                 "history": history, "cost": round(cost + c, 4)}
 
-    # yes_and / okay_but → finalize this file and advance
-    files[section["file"]] = _finalize(section, session["proposal"]["draft"], choice, note)
-    history.append({"section": section["key"], "choice": choice, "note": note})
+    # yes_and / okay_but → finalize this file (re-synthesizing if the note steers it), then advance
+    steer = _steer(choice, note)
+    if steer:
+        draft, c = propose(session["idea"], section["key"], session["research"], history,
+                           steer=steer, mock=mock)
+        cost = round(cost + c, 4)
+    else:
+        draft = session["proposal"]["draft"]
+    files[section["file"]] = draft
     if step + 1 < N:
         nxt = SECTIONS[step + 1]
         draft, c = propose(session["idea"], nxt["key"], session["research"], history, mock=mock)
@@ -157,19 +175,22 @@ if __name__ == "__main__":  # self-test (mock, no API)
     r = research("I play guitar and want to help people learn", mock=True)
     assert r["prose"]["title"]
     sess = {"idea": "guitar coaching", "research": r, "files": {}, "history": [], "step": 0,
-            "cost": 0.0}
+            "cost": 0.0, "status": "building"}
     prop, _ = first_proposal(sess["idea"], r, mock=True)
     sess["proposal"] = prop
     assert prop["section"] == "brief"
-    # not_quite stays on the same node
+    # not_quite stays on the same node and re-drafts
     upd = advance(sess, "not_quite", "make it punchier", mock=True)
     assert "revised" in upd["proposal"]["draft"] and "step" not in upd
     sess.update(upd)
-    # walk all sections with yes_and
-    for _ in range(N):
+    # yes_and WITH a note re-synthesizes the section (the note steers it, not just a footnote)
+    sess.update(advance(sess, "yes_and", "add a freemium hook", mock=True))
+    assert "revised" in sess["files"]["01_brief.md"] and sess["step"] == 1
+    # finish the rest with plain acceptance (no re-gen)
+    while sess.get("status") != "done":
         sess.update(advance(sess, "yes_and", None, mock=True))
-    assert sess["status"] == "done"
-    assert len(sess["files"]) == N
+    assert sess["status"] == "done" and len(sess["files"]) == N
+    assert "revised" not in sess["files"]["06_roadmap.md"]  # plain-accepted draft kept as-is
     md = bundle_markdown(sess["idea"], sess["files"])
     assert "Business plan" in md and "30-day roadmap" in md
     print("planner.py self-test OK —", N, "sections,", len(sess["files"]), "files")
