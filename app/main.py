@@ -360,7 +360,7 @@ button:hover{filter:brightness(1.04)}button:active{transform:translateY(1px)}but
 .tree .done .ic{background:var(--ok-bg);color:var(--ok)}.tree .active .ic{background:#e6efff;color:var(--sky);animation:pulse 1.1s infinite}
 .tree .pending .ic{border:1.5px solid var(--line);color:var(--muted)}
 .tree .nm .s{display:block;font-size:11px;color:var(--muted);font-weight:500}
-.tree .body{margin:8px 0 2px 30px;padding:12px 14px;background:var(--bg);border:1px solid var(--line);border-radius:12px;white-space:pre-wrap;font-size:13px;display:none}
+.tree .body{margin:8px 0 2px 30px;padding:12px 14px;background:var(--bg);border:1px solid var(--line);border-radius:12px;font-size:13px;display:none}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
 .dl{width:100%;background:var(--sun);color:#3a2c00}
 .main{min-width:0}
@@ -369,7 +369,10 @@ button:hover{filter:brightness(1.04)}button:active{transform:translateY(1px)}but
 .node{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:24px}
 .node .eyebrow{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--coral);font-weight:800}
 .node h3{font-size:21px;font-weight:800;margin:5px 0 2px}.node .h3sub{color:var(--muted);font-size:13px;margin:0 0 14px}
-.draft{white-space:pre-wrap;background:var(--bg);border:1px solid var(--line);border-radius:14px;padding:16px 18px;font-size:14.5px;margin-bottom:16px}
+.draft{background:var(--bg);border:1px solid var(--line);border-radius:14px;padding:16px 18px;font-size:14.5px;margin-bottom:16px}
+.md h4,.md h5{font-weight:800;margin:12px 0 4px;line-height:1.3}.md h4{font-size:15px}.md h5{font-size:13.5px}.md>:first-child{margin-top:0}
+.md p{margin:0 0 8px}.md p:last-child{margin-bottom:0}.md ul{margin:6px 0 8px;padding-left:20px}.md li{margin:3px 0}
+.md a{color:var(--sky)}.md strong{font-weight:800}.md code{background:#fff;border:1px solid var(--line);border-radius:5px;padding:0 4px;font-size:.92em}
 .lead{font-size:14px;color:var(--muted);margin:0 0 12px}
 .branches{display:flex;gap:10px;flex-wrap:wrap}.branches button{flex:1;min-width:130px;font-size:15px;padding:13px 12px}
 .b-but{background:var(--sky)}.b-no{background:#fff;color:var(--ink);border:1.5px solid var(--line)}
@@ -382,7 +385,7 @@ button:hover{filter:brightness(1.04)}button:active{transform:translateY(1px)}but
 .addons .ax{display:flex;flex-wrap:wrap;gap:8px}
 .addons .ax button{flex:1;min-width:120px;background:#fff;border:1.5px solid var(--line);color:var(--ink);font-size:13px;font-weight:800;padding:9px 10px;text-align:left}
 .addons .ax .bl{display:block;font-size:11px;color:var(--muted);font-weight:500}
-.expert{margin-top:12px;background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:12px 14px;font-size:13px;white-space:pre-wrap;display:none}
+.expert{margin-top:12px;background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:12px 14px;font-size:13px;display:none}
 .disc{font-size:11px;color:var(--muted);margin-top:8px}
 @media(max-width:820px){.workspace{grid-template-columns:1fr}.side{position:static}}
 </style></head><body><div class=page>
@@ -401,7 +404,7 @@ button:hover{filter:brightness(1.04)}button:active{transform:translateY(1px)}but
 <div class=sec><h3>Your plan</h3><ul class=tree id=tree></ul>
 <button id=dl class=dl onclick=download() style="display:none;margin-top:12px">⬇ Download plan (.zip)</button></div>
 <div class="sec addons"><h3>Add-ons · ask an expert</h3><div class=ax id=addons></div>
-<div class=expert id=expert></div><div class=disc id=adisc></div></div>
+<div class="expert md" id=expert></div><div class=disc id=adisc></div></div>
 <div class=sec><h3>Research — graded</h3><div id=research></div></div>
 </aside>
 <main class=main>
@@ -460,7 +463,7 @@ function renderTree(s){
   document.getElementById('tree').innerHTML=(s.sections||[]).map((sec,i)=>{
     const nm=`<span class=nm>${esc(sec.title)}<span class=s>${esc(sec.sub||'')}</span></span>`;
     if(built[sec.file]!=null){
-      return `<li class="done built" onclick="var b=this.querySelector('.body');b.style.display=b.style.display==='block'?'none':'block'"><div class=f><span class=ic>✓</span>${nm}</div><div class=body>${esc(built[sec.file])}</div></li>`;
+      return `<li class="done built" onclick="var b=this.querySelector('.body');b.style.display=b.style.display==='block'?'none':'block'"><div class=f><span class=ic>✓</span>${nm}</div><div class="body md">${mdToHtml(built[sec.file])}</div></li>`;
     }
     if(!s.done&&i===step){return `<li class=active><div class=f><span class=ic>✍︎</span>${nm}</div></li>`;}
     return `<li class=pending><div class=f><span class=ic>○</span>${nm}</div></li>`;
@@ -473,9 +476,11 @@ function renderNode(s){
   if(s.done){n.innerHTML='<div class=node><div class=done>🎉 Your plan\\'s ready — all '+s.total+' parts. Grab the download on the left, or ask an expert to pressure-test it.</div></div>';return;}
   const p=s.proposal; if(!p){n.innerHTML='';return;}
   const sec=(s.sections||[]).find(x=>x.title===p.title)||{};
-  n.innerHTML=`<div class=node><span class=eyebrow>Part ${s.step+1} of ${s.total}</span><h3>${esc(p.title)}</h3><p class=h3sub>${esc(sec.sub||'')}</p>`+
-    `<div class=draft>${esc(p.draft)}</div>`+
-    `<p class=lead>Here's a first swing. React and we'll shape it — your call drives what gets written next.</p>`+
+  const intro=s.step===0?`<p class=lead>We build your plan in ${s.total} parts — one at a time, your call on each (watch them fill in on the left). First up:</p>`:'';
+  n.innerHTML=`<div class=node><span class=eyebrow>Your plan · part ${s.step+1} of ${s.total}</span><h3>${esc(p.title)}</h3><p class=h3sub>${esc(sec.sub||'')}</p>`+
+    intro+
+    `<div class="draft md">${mdToHtml(p.draft)}</div>`+
+    `<p class=lead>Here's a first swing — react and we'll shape it. Your call drives what gets written next.</p>`+
     `<div class=branches><button class=b-yes onclick="branch('yes_and')">Yes, and…</button>`+
     `<button class=b-but onclick="branch('okay_but')">Okay, but…</button>`+
     `<button class=b-no onclick="branch('not_quite')">Not quite</button></div><div id=compose></div></div>`;
@@ -519,7 +524,7 @@ async function ask(key){
   try{
     const r=await fetch('/api/plan/'+SID+'/ask',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({archetype:key,question:q})});
     const d=await r.json();
-    out.textContent=r.ok?d.answer:(d.error||'Could not reach the advisor.');
+    if(r.ok){out.innerHTML=mdToHtml(d.answer);}else{out.textContent=d.error||'Could not reach the advisor.';}
   }catch(e){out.textContent='Network error.';}
 }
 async function download(){
@@ -533,6 +538,23 @@ async function download(){
 }
 function esc(s){const d=document.createElement('div');d.textContent=s==null?'':s;return d.innerHTML;}
 function host(u){try{return new URL(u).hostname.replace(/^www\\./,'');}catch(e){return u;}}
+function mdToHtml(md){
+  let h=esc(md==null?'':md);
+  h=h.replace(/`([^`]+)`/g,'<code>$1</code>');
+  h=h.replace(/\\*\\*([^*]+)\\*\\*/g,'<strong>$1</strong>');
+  h=h.replace(/\\[([^\\]]+)\\]\\((https?:[^)\\s]+)\\)/g,'<a href="$2" target=_blank rel=noopener>$1</a>');
+  const out=[]; let inList=false;
+  h.split('\\n').forEach(function(ln){
+    let m;
+    if(m=ln.match(/^(#{1,6})\\s+(.*)$/)){if(inList){out.push('</ul>');inList=false;}const lvl=Math.min(m[1].length+3,5);out.push('<h'+lvl+'>'+m[2]+'</h'+lvl+'>');return;}
+    if(m=ln.match(/^\\s*[-*]\\s+(.*)$/)){if(!inList){out.push('<ul>');inList=true;}out.push('<li>'+m[1]+'</li>');return;}
+    if(ln.trim()===''){if(inList){out.push('</ul>');inList=false;}return;}
+    if(inList){out.push('</ul>');inList=false;}
+    out.push('<p>'+ln+'</p>');
+  });
+  if(inList)out.push('</ul>');
+  return out.join('');
+}
 
 // ── Auth (Supabase) + billing (Stripe) ──────────────────────────────────────
 function renderAuth(){
