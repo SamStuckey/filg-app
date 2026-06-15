@@ -475,6 +475,17 @@ button:hover{filter:brightness(1.04)}button:active{transform:translateY(1px)}but
 .dr-sub{color:var(--muted);font-size:13px;margin:0 0 12px}
 .dr-go{width:100%;margin-top:2px;background:var(--sky)}
 .dr-out{margin-top:18px;font-size:14px;display:none}.dr-out .balloon+.balloon{margin-top:8px}
+/* styled modal + toast (replace native confirm/prompt/alert) */
+.modal-back{position:fixed;inset:0;background:rgba(20,17,14,.38);opacity:0;visibility:hidden;transition:opacity .18s;z-index:50}
+.modal-back.show{opacity:1;visibility:visible}
+.modal{position:fixed;left:50%;top:50%;transform:translate(-50%,-46%);width:min(420px,92vw);background:var(--card);border:1px solid var(--line);border-radius:18px;box-shadow:0 24px 60px rgba(20,17,14,.22);padding:22px 24px;z-index:51;opacity:0;visibility:hidden;transition:opacity .18s,transform .18s}
+.modal.open{opacity:1;visibility:visible;transform:translate(-50%,-50%)}
+.modal h3{font-size:19px;font-weight:800;margin:0 0 8px}
+.modal #modal-body{font-size:14.5px;color:var(--muted);margin-bottom:16px}.modal #modal-body p{margin:0}
+.modal-actions{display:flex;justify-content:flex-end;gap:10px}
+.toasts{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);display:flex;flex-direction:column;gap:8px;z-index:60;align-items:center;pointer-events:none}
+.toast{background:var(--ink);color:#fff;padding:11px 18px;border-radius:12px;font-size:14px;font-weight:700;box-shadow:0 8px 24px rgba(20,17,14,.2);transition:opacity .3s,transform .3s;max-width:90vw}
+.toast.err{background:var(--coral-d)}.toast.out{opacity:0;transform:translateY(8px)}
 .authgate{margin:6px 0 2px}.authgate button{width:100%;margin-bottom:8px}
 .gbtn{background:#fff;color:var(--ink);border:1.5px solid var(--line);font-weight:800}
 .authgate .or{color:var(--muted);font-size:13px;margin:4px 0 0}
@@ -519,6 +530,10 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <div class="dr-out md" id=drawer-out></div>
 </div></aside>
 <div class=drawer-back id=drawerback onclick=closeDrawer()></div>
+<div class=modal-back id=modalback onclick="_closeModal()"></div>
+<div class=modal id=modal role=dialog aria-modal=true aria-labelledby=modal-title aria-hidden=true>
+<h3 id=modal-title></h3><div id=modal-body></div><div class=modal-actions id=modal-actions></div></div>
+<div class=toasts id=toasts aria-live=polite></div>
 <div class=workspace id=workspace style="display:none">
 <aside class=side>
 <div class=sec><h3>Your plan</h3><ul class=tree id=tree></ul>
@@ -712,7 +727,7 @@ function toggleSessionBoard(key,el){
   if(i>=0){SESSION_BOARD.splice(i,1);}else{SESSION_BOARD.push(key);}
   el.classList.toggle('on',on);el.setAttribute('aria-pressed',String(on));
 }
-// Ask-an-expert + convene both open the advisor drawer (replaces the native prompt()).
+// Ask-an-expert + convene open the advisor drawer (a styled flyout, not a browser dialog).
 function ask(key){openDrawer('expert',key);}
 function convene(){openDrawer('board');}
 let DRAWER={mode:null,key:null}, DRAWER_TRIGGER=null;
@@ -746,6 +761,52 @@ function closeDrawer(){
   document.getElementById('drawerback').classList.remove('show');
   if(DRAWER_TRIGGER&&DRAWER_TRIGGER.focus){DRAWER_TRIGGER.focus();DRAWER_TRIGGER=null;}
 }
+// ── Styled toast + modal (replace native alert/confirm/prompt across the app) ──
+function toast(msg,kind){
+  const t=document.createElement('div');t.className='toast'+(kind?(' '+kind):'');
+  t.setAttribute('role','status');t.textContent=msg;
+  document.getElementById('toasts').appendChild(t);
+  setTimeout(()=>{t.classList.add('out');setTimeout(()=>t.remove(),320);},3600);
+}
+let MODAL_RESOLVE=null, MODAL_TRIGGER=null;
+function _openModal(focusSel){
+  MODAL_TRIGGER=document.activeElement;
+  const m=document.getElementById('modal');
+  m.classList.add('open');m.setAttribute('aria-hidden','false');
+  document.getElementById('modalback').classList.add('show');
+  setTimeout(()=>{const el=m.querySelector(focusSel);if(el)el.focus();},60);
+}
+function _closeModal(val){
+  const m=document.getElementById('modal');
+  if(!m.classList.contains('open'))return;
+  m.classList.remove('open');m.setAttribute('aria-hidden','true');
+  document.getElementById('modalback').classList.remove('show');
+  if(MODAL_TRIGGER&&MODAL_TRIGGER.focus){MODAL_TRIGGER.focus();MODAL_TRIGGER=null;}
+  const r=MODAL_RESOLVE;MODAL_RESOLVE=null;if(r)r(val);
+}
+function uiConfirm(title,msg,okLabel){
+  return new Promise(res=>{MODAL_RESOLVE=res;
+    document.getElementById('modal-title').textContent=title;
+    document.getElementById('modal-body').innerHTML='<p>'+esc(msg)+'</p>';
+    document.getElementById('modal-actions').innerHTML=
+      `<button type=button class=ghost onclick="_closeModal(false)">Cancel</button>`+
+      `<button type=button onclick="_closeModal(true)">${esc(okLabel||'OK')}</button>`;
+    _openModal('#modal-actions button:last-child');
+  });
+}
+function uiPrompt(title,label,type,placeholder){
+  return new Promise(res=>{MODAL_RESOLVE=res;
+    document.getElementById('modal-title').textContent=title;
+    document.getElementById('modal-body').innerHTML=
+      `<label for=modalinput class=sr-only>${esc(label)}</label>`+
+      `<input id=modalinput type=${type||'text'} placeholder="${esc(placeholder||'')}" style="margin:0">`;
+    document.getElementById('modal-actions').innerHTML=
+      `<button type=button class=ghost onclick="_closeModal(null)">Cancel</button>`+
+      `<button type=button onclick="_submitPrompt()">Send</button>`;
+    _openModal('#modalinput');
+  });
+}
+function _submitPrompt(){const i=document.getElementById('modalinput');_closeModal(i?i.value:null);}
 async function submitDrawer(){
   const q=document.getElementById('drawerq').value, go=document.getElementById('drawer-go'),
         out=document.getElementById('drawer-out');
@@ -772,11 +833,11 @@ async function submitDrawer(){
 async function download(){
   try{
     const r=await fetch('/api/plan/'+SID+'/download',{headers:authHeaders()});
-    if(r.status===402){const d=await r.json();if(confirm((d.error||'Unlock the download.')+'\\n\\nGo to checkout?'))upgrade();return;}
-    if(!r.ok){alert('Could not download.');return;}
+    if(r.status===402){const d=await r.json();if(await uiConfirm('Unlock the download',(d.error||'Unlock the download.'),'Go to checkout'))upgrade();return;}
+    if(!r.ok){toast('Could not download.','err');return;}
     const blob=await r.blob(),u=URL.createObjectURL(blob);
     const a=document.createElement('a');a.href=u;a.download='filg-business-plan.zip';a.click();URL.revokeObjectURL(u);
-  }catch(e){alert('Network error.');}
+  }catch(e){toast('Network error.','err');}
 }
 function esc(s){const d=document.createElement('div');d.textContent=s==null?'':s;return d.innerHTML;}
 function host(u){try{return new URL(u).hostname.replace(/^www\\./,'');}catch(e){return u;}}
@@ -828,12 +889,12 @@ async function loadMe(){
   if(!session){me=null;return;}
   try{const r=await fetch('/api/me',{headers:authHeaders()});me=r.ok?await r.json():null;}catch(e){me=null;}
 }
-async function signinGoogle(){saveIdea();const {error}=await sb.auth.signInWithOAuth({provider:'google',options:{redirectTo:location.origin}});if(error)alert(error.message);}
+async function signinGoogle(){saveIdea();const {error}=await sb.auth.signInWithOAuth({provider:'google',options:{redirectTo:location.origin}});if(error)toast(error.message,'err');}
 async function signinEmail(){
-  const email=prompt('Your email — we\\'ll send a one-click sign-in link:');
+  const email=await uiPrompt('Sign in','Your email','email','you@email.com');
   if(!email)return; saveIdea();
   const {error}=await sb.auth.signInWithOtp({email,options:{emailRedirectTo:location.origin}});
-  alert(error?error.message:'Check your inbox for the sign-in link.');
+  toast(error?error.message:'Check your inbox for the sign-in link.',error?'err':'');
 }
 async function signout(){await sb.auth.signOut();session=null;me=null;newPlan();renderAuth();}
 async function upgrade(){
@@ -841,13 +902,13 @@ async function upgrade(){
   try{
     const r=await fetch('/api/checkout',{method:'POST',headers:authHeaders()});
     const d=await r.json();
-    if(d.url)location.href=d.url; else alert(d.error||'Could not start checkout.');
-  }catch(e){alert('Network error starting checkout.');}
+    if(d.url)location.href=d.url; else toast(d.error||'Could not start checkout.','err');
+  }catch(e){toast('Network error starting checkout.','err');}
 }
 function show(id){['intake','workspace','profile'].forEach(x=>{const e=document.getElementById(x);if(e)e.style.display=(x===id?(x==='workspace'?'grid':'block'):'none');});}
 function newPlan(){show('intake');renderBoardPick();}
 async function showPlans(){
-  let d; try{const r=await fetch('/api/plans',{headers:authHeaders()});if(!r.ok){alert('Sign in to see your plans.');return;}d=await r.json();}catch(e){alert('Network error.');return;}
+  let d; try{const r=await fetch('/api/plans',{headers:authHeaders()});if(!r.ok){toast('Sign in to see your plans.','err');return;}d=await r.json();}catch(e){toast('Network error.','err');return;}
   show('profile');renderPlans(d);
 }
 function renderPlans(d){
@@ -879,11 +940,14 @@ async function initAuth(){
   const {data}=await sb.auth.getSession();session=data.session;await loadMe();renderAuth();
 }
 document.addEventListener('keydown',function(e){
-  const d=document.getElementById('drawer'), open=d&&d.classList.contains('open');
-  if(e.key==='Escape')closeDrawer();
+  const drawer=document.getElementById('drawer'), modal=document.getElementById('modal');
+  const dOpen=drawer&&drawer.classList.contains('open'), mOpen=modal&&modal.classList.contains('open');
+  if(e.key==='Escape'){if(mOpen)_closeModal();else if(dOpen)closeDrawer();}
   if((e.metaKey||e.ctrlKey)&&e.key==='Enter'&&e.target&&e.target.id==='drawerq')submitDrawer();
-  if(open&&e.key==='Tab'){   // trap focus inside the dialog
-    const f=d.querySelectorAll('button,textarea,input,a[href],[tabindex]:not([tabindex="-1"])');
+  if(mOpen&&e.key==='Enter'&&e.target&&e.target.id==='modalinput'){e.preventDefault();_submitPrompt();}
+  const ov=mOpen?modal:(dOpen?drawer:null);   // trap focus inside whichever overlay is open
+  if(ov&&e.key==='Tab'){
+    const f=ov.querySelectorAll('button,textarea,input,a[href],[tabindex]:not([tabindex="-1"])');
     if(!f.length)return;
     const first=f[0], last=f[f.length-1];
     if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}

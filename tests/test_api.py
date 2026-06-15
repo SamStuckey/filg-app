@@ -73,6 +73,16 @@ def test_advisor_uses_drawer_not_native_prompt(client):
     assert "prompt('Ask the advisor" not in html and "prompt('Ask your board" not in html
 
 
+def test_no_native_browser_dialogs(client):
+    # The ux-design skill forbids native alert/confirm/prompt for product UI. The whole app must
+    # use the styled toast/modal helpers instead. Match call-sites (foo(, not substrings of words).
+    import re
+    html = client.get("/").text
+    bad = re.findall(r"(?<![\w.])(?:alert|confirm|prompt)\s*\(", html)
+    assert not bad, f"native dialog call(s) leaked back in: {bad}"
+    assert "function toast(" in html and "function uiConfirm(" in html and "function uiPrompt(" in html
+
+
 def test_accessibility_essentials_present(client):
     # Guards the UX-pass a11y baseline (WCAG/POUR) against regression.
     html = client.get("/").text
