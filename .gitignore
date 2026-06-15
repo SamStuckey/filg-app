@@ -20,3 +20,6 @@ app/usage.json
 app/filg.db
 *.db-wal
 *.db-shm
+
+# pytest
+.pytest_cache/

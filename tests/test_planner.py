@@ -1,0 +1,49 @@
+"""Plan builder — prepare(), the decision-tree advance, and board feed-forward."""
+
+import planner
+
+
+def test_prepare_shapes_researches_and_vets():
+    prep = planner.prepare("I like basketball, MTG, food, and I'm good at sales", mock=True)
+    assert prep["shaped"]["thesis"] and prep["research"]["rows"]
+    assert prep["vetting"]["verdict"] in ("pursue", "pivot", "kill")
+    assert prep["proposal"]["section"] == "brief" and prep["cost"] == 0.0
+
+
+def test_working_idea_prefers_thesis():
+    assert planner._working_idea({"idea": "raw", "shaped": {"thesis": "focused"}}) == "focused"
+    assert planner._working_idea({"idea": "raw"}) == "raw"  # back-compat
+
+
+def _fresh_session():
+    prep = planner.prepare("guitar coaching idea", mock=True)
+    return {"idea": "guitar coaching", "shaped": prep["shaped"], "research": prep["research"],
+            "files": {}, "history": [], "step": 0, "cost": 0.0, "board": [],
+            "proposal": prep["proposal"], "status": "building"}
+
+
+def test_not_quite_stays_on_node():
+    s = _fresh_session()
+    upd = planner.advance(s, "not_quite", "make it punchier", mock=True)
+    assert "step" not in upd and "revised" in upd["proposal"]["draft"]
+
+
+def test_yes_and_finalizes_and_advances():
+    s = _fresh_session()
+    upd = planner.advance(s, "yes_and", None, mock=True)
+    assert upd["step"] == 1 and len(upd["files"]) == 1
+
+
+def test_board_reviews_each_section_and_feeds_forward():
+    s = _fresh_session()
+    upd = planner.advance(s, "yes_and", None, mock=True, directors=["closer", "cfo"])
+    assert len(upd["board"]) == 1 and len(upd["board"][0]["directors"]) == 2
+    assert upd["board"][0]["verdict"]                       # synthesized takeaway
+    assert "board-guided" in upd["proposal"]["draft"]       # takeaway steered the next draft
+    assert planner._board_notes(upd["board"]).startswith("- on")
+
+
+def test_no_board_means_no_reviews():
+    s = _fresh_session()
+    upd = planner.advance(s, "yes_and", None, mock=True)   # no directors
+    assert "board" not in upd
