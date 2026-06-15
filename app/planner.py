@@ -21,9 +21,13 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-# reuse the engine (prototype/ is a sibling of app/)
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "prototype"))
+# reuse the engine (prototype/ is a sibling of app/) and the app-side skill/persona layer (app/).
+sys.path.insert(0, str(Path(__file__).resolve().parent))                       # app/  → skills, personas
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "prototype"))  # prototype/ → engine
 import teardown  # noqa: E402
+import intake  # noqa: E402
+import personas  # noqa: E402
+import skill_registry as skills  # noqa: E402
 
 # The plan = an ordered set of files. Plain-language titles (operator voice), friendly filenames.
 SECTIONS = [
@@ -38,19 +42,14 @@ N = len(SECTIONS)
 
 CHOICES = {"yes_and", "not_quite", "okay_but"}
 
-# "Ask an expert" ships as FILG-owned COMPOSITE ARCHETYPES — never real named people. Naming a real
-# person would trigger right-of-publicity / the ELVIS Act / the NO FAKES Act (commercial use of
-# likeness/voice). Archetypes carry no such exposure. Advisors always self-ID as AI and never give
-# professional (legal/tax/financial) advice.
-ARCHETYPES = [
-    {"key": "closer",       "name": "The Closer",        "blurb": "direct-response sales & pricing nerve"},
-    {"key": "bootstrapper", "name": "The Bootstrapper",  "blurb": "ship lean, get to revenue fast"},
-    {"key": "brand",        "name": "The Brand Builder", "blurb": "positioning & audience"},
-    {"key": "cfo",          "name": "The Skeptical CFO", "blurb": "unit economics & risk"},
-]
-ARCHETYPE_KEYS = {a["key"] for a in ARCHETYPES}
-_DISCLAIMER = ("Heads up — I'm an AI composite advisor (not a real person), and this is general "
-               "business thinking, not legal, tax, or financial advice.")
+# "Ask an expert" + "Board of Directors" both draw on the persona registry (app/personas.py) — FILG-
+# owned COMPOSITE ARCHETYPES, never real named people. Naming/impersonating a real person would
+# trigger right-of-publicity / the ELVIS Act / the NO FAKES Act (commercial use of likeness/voice);
+# composite archetypes carry none. The legal + AI-self-ID rules live once in the director_base skill.
+# Names kept for back-compat with main.py; sourced from the registry so there's one list of advisors.
+ARCHETYPES = personas.catalog()
+ARCHETYPE_KEYS = personas.KEYS
+_DISCLAIMER = personas.DISCLAIMER
 
 _MOCK_DRAFT = {
     "brief": ("## Structured brief\n\n**Problem:** the operator can do the work but is stuck on "
@@ -74,6 +73,27 @@ _MOCK_DRAFT = {
 def research(idea: str, mock: bool = False) -> dict:
     """Step 0 — run the teardown engine once. Returns {prose, rows, stats, cost}."""
     return teardown.generate(idea, mock=mock)
+
+
+def _working_idea(session: dict) -> str:
+    """The focused thesis (from intake) is what synthesis runs on; fall back to the raw idea for
+    sessions created before intake existed."""
+    return (session.get("shaped") or {}).get("thesis") or session["idea"]
+
+
+def prepare(idea: str, mock: bool = False) -> dict:
+    """Full pre-build pass for a new session: intake (shape the grab-bag into one thesis) → research
+    the thesis → vet it (kill-gate) → draft section 0. Returns everything the session needs to start
+    building, plus a `cost` total. The raw `idea` is kept by the caller for display; everything
+    downstream runs on the focused `shaped['thesis']`."""
+    shaped, c_shape = intake.shape(idea, mock=mock)
+    thesis = shaped["thesis"]
+    research_data = research(thesis, mock=mock)
+    vetting, c_vet = intake.vet(idea, shaped, research_data, mock=mock)
+    proposal, c_prop = first_proposal(thesis, research_data, mock=mock)
+    return {"shaped": shaped, "research": research_data, "vetting": vetting, "proposal": proposal,
+            "research_cost": research_data["cost"],
+            "cost": round(research_data["cost"] + c_shape + c_vet + c_prop, 4)}
 
 
 def _cited_flagged(rows: list) -> tuple[str, str]:
@@ -100,12 +120,12 @@ def propose(idea: str, section_key: str, research_data: dict, history: list,
     prior = "\n".join(f"- {h['section']}: {h['choice']}" + (f" — “{h['note']}”" if h.get("note") else "")
                       for h in history) or "- (none yet)"
     steer_block = f"\n\nOPERATOR DIRECTION (honor this): {steer}" if steer else ""
-    draft = call(f"plan_{section_key}", SONNET, max_tokens=1100, prompt=(
-        f"You are the synthesis stage of FILG, building ONE section of a sellable business plan: "
-        f"**{section['title']}**. Be concrete and specific; markdown; no preamble.\n\n"
-        "Use the CITED research freely (cite inline with its URL). You MAY reference a FLAGGED "
-        "claim only if you append '(unverified vendor claim)'. Never present a flagged number as "
-        f"fact.\n\nIDEA:\n{idea}\n\nDECISIONS SO FAR:\n{prior}{steer_block}\n\n"
+    # Durable instruction (the IP) lives in the synth_section skill → cached system block; only the
+    # runtime data (which section, the idea, decisions, graded research) goes in the user message.
+    draft = call(f"plan_{section_key}", SONNET, max_tokens=1100,
+                 system=skills.system("synth_section"), cache=True, prompt=(
+        f"SECTION TO WRITE: **{section['title']}** ({section['sub']}).\n\n"
+        f"IDEA:\n{idea}\n\nDECISIONS SO FAR:\n{prior}{steer_block}\n\n"
         f"CITED RESEARCH:\n{cited}\n\nFLAGGED (vendor) CLAIMS:\n{flagged}"))
     return draft, round(LEDGER.cost_slice(start), 4)
 
@@ -142,10 +162,11 @@ def advance(session: dict, choice: str, note: str | None, mock: bool = False) ->
     history = list(session.get("history") or [])
     cost = session.get("cost") or 0.0
     note = (note or "").strip() or None
+    idea = _working_idea(session)  # synthesize on the focused thesis, not the raw grab-bag
     history.append({"section": section["key"], "choice": choice, "note": note})
 
     if choice == "not_quite":
-        draft, c = propose(session["idea"], section["key"], session["research"], history,
+        draft, c = propose(idea, section["key"], session["research"], history,
                            steer=_steer(choice, note), mock=mock)
         return {"proposal": {"section": section["key"], "title": section["title"], "draft": draft},
                 "history": history, "cost": round(cost + c, 4)}
@@ -153,7 +174,7 @@ def advance(session: dict, choice: str, note: str | None, mock: bool = False) ->
     # yes_and / okay_but → finalize this file (re-synthesizing if the note steers it), then advance
     steer = _steer(choice, note)
     if steer:
-        draft, c = propose(session["idea"], section["key"], session["research"], history,
+        draft, c = propose(idea, section["key"], session["research"], history,
                            steer=steer, mock=mock)
         cost = round(cost + c, 4)
     else:
@@ -161,7 +182,7 @@ def advance(session: dict, choice: str, note: str | None, mock: bool = False) ->
     files[section["file"]] = draft
     if step + 1 < N:
         nxt = SECTIONS[step + 1]
-        draft, c = propose(session["idea"], nxt["key"], session["research"], history, mock=mock)
+        draft, c = propose(idea, nxt["key"], session["research"], history, mock=mock)
         return {"files": files, "step": step + 1, "history": history, "cost": round(cost + c, 4),
                 "proposal": {"section": nxt["key"], "title": nxt["title"], "draft": draft}}
     return {"files": files, "step": N, "history": history, "status": "done", "proposal": None}
@@ -176,25 +197,23 @@ def first_proposal(idea: str, research_data: dict, mock: bool = False) -> tuple[
 
 def ask_expert(idea: str, files: dict, archetype_key: str, question: str,
                mock: bool = False) -> tuple[dict, float]:
-    """An add-on: get a take on the plan in a composite ARCHETYPE's voice. Returns
-    ({archetype, answer}, cost). Always prepends the AI / not-professional-advice disclosure."""
-    arch = next(a for a in ARCHETYPES if a["key"] == archetype_key)
+    """An add-on: get a take on the plan in a composite persona's voice (the one-off version of the
+    board). Returns ({archetype, answer}, cost). Always prepends the AI / not-pro-advice disclosure.
+    The persona's instruction = the shared director_base skill + that persona's voice (personas.py)."""
+    p = personas.get(archetype_key)
     q = (question or "").strip() or "What would you change to make this actually work?"
     if mock:
-        return {"archetype": arch["name"],
-                "answer": f"{_DISCLAIMER}\n\n**{arch['name']}** on “{q}”: tighten the offer to one "
+        return {"archetype": p["name"],
+                "answer": f"{_DISCLAIMER}\n\n**{p['name']}** on “{q}”: tighten the offer to one "
                           f"outcome, charge for it up front, and go get one yes this week. (mock)"}, 0.0
 
     from pipeline import LEDGER, call, SONNET  # heavy; only in real mode
     start = len(LEDGER.rows)
-    plan = "\n\n".join(f"## {p}\n{c}" for p, c in files.items()) or "(plan still in progress)"
-    ans = call(f"expert_{archetype_key}", SONNET, max_tokens=700, prompt=(
-        f"You are '{arch['name']}', a FICTIONAL composite business advisor ({arch['blurb']}). You are "
-        "NOT a real person and never claim to be; never give legal, tax, or financial advice. Give "
-        "punchy, specific, encouraging operator advice in your archetype's distinct voice — react to "
-        f"THIS plan, don't speak in generalities.\n\nIDEA: {idea}\n\nPLAN SO FAR:\n{plan}\n\n"
-        f"OPERATOR'S QUESTION: {q}"))
-    return {"archetype": arch["name"], "answer": f"{_DISCLAIMER}\n\n{ans}"}, round(LEDGER.cost_slice(start), 4)
+    plan = "\n\n".join(f"## {f}\n{c}" for f, c in files.items()) or "(plan still in progress)"
+    ans = call(f"expert_{archetype_key}", SONNET, max_tokens=700,
+               system=personas.system_for(archetype_key), cache=True, prompt=(
+        f"IDEA: {idea}\n\nPLAN SO FAR:\n{plan}\n\nOPERATOR'S QUESTION: {q}"))
+    return {"archetype": p["name"], "answer": f"{_DISCLAIMER}\n\n{ans}"}, round(LEDGER.cost_slice(start), 4)
 
 
 def bundle_markdown(idea: str, files: dict) -> str:
@@ -232,4 +251,12 @@ if __name__ == "__main__":  # self-test (mock, no API)
     assert "Business plan" in md
     exp, _ = ask_expert(sess["idea"], sess["files"], "closer", "is the price right?", mock=True)
     assert exp["archetype"] == "The Closer" and "AI composite" in exp["answer"]
-    print("planner.py self-test OK —", N, "sections,", len(sess["files"]), "files, expert ok")
+    # prepare(): intake shapes a grab-bag → thesis drives synthesis; vet returns a verdict
+    prep = prepare("I like basketball, MTG, food, and I'm good at sales", mock=True)
+    assert prep["shaped"]["thesis"] and prep["vetting"]["verdict"] in ("pursue", "pivot", "kill")
+    sess2 = {"idea": "raw grab-bag", "shaped": prep["shaped"], "research": prep["research"],
+             "files": {}, "history": [], "step": 0, "cost": prep["cost"], "proposal": prep["proposal"]}
+    assert _working_idea(sess2) == prep["shaped"]["thesis"]  # builds on the focused thesis
+    assert _working_idea({"idea": "x"}) == "x"               # back-compat: no shaped → raw idea
+    print("planner.py self-test OK —", N, "sections,", len(sess["files"]),
+          "files, expert ok, prepare ok")

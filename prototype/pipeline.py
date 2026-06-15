@@ -99,8 +99,13 @@ LEDGER = Ledger()
 
 # --- Low-level call with server-tool resume ----------------------------------
 def call(stage: str, model: str, prompt: str, *, max_tokens: int = 1500,
-         tools: list | None = None, system: str | None = None) -> str:
-    """One logical turn. Resumes server-tool loops on pause_turn. Returns text."""
+         tools: list | None = None, system: str | None = None, cache: bool = False) -> str:
+    """One logical turn. Resumes server-tool loops on pause_turn. Returns text.
+
+    `system` is the stable instruction block (a skill body). Pass `cache=True` to mark it
+    cache-eligible (prompt caching): the system prefix is identical across every run of a stage,
+    so caching it reads at ~0.1× input price after the first call — the cheapest token win we have.
+    """
     messages = [{"role": "user", "content": prompt}]
     text_parts: list[str] = []
     for _ in range(6):  # cap resume hops
@@ -108,7 +113,9 @@ def call(stage: str, model: str, prompt: str, *, max_tokens: int = 1500,
         if tools:
             kwargs["tools"] = tools
         if system:
-            kwargs["system"] = system
+            kwargs["system"] = (
+                [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
+                if cache else system)
         resp = client.messages.create(**kwargs)
         LEDGER.add(stage, model, resp.usage)
         text_parts.extend(b.text for b in resp.content if b.type == "text")
@@ -132,11 +139,45 @@ def judge(c: "Claim") -> str:
         "believes the number."
     )
     raw = (call("judge", HAIKU, prompt, max_tokens=24) or "").upper()
+    return _normalize_verdict(raw)
+
+
+def _normalize_verdict(raw: str) -> str:
     # The model doesn't always obey "one token" — normalize to the verdict it named.
+    raw = (raw or "").upper()
     for tok in ("FLAG_SELF_INTERESTED", "CROSS_CHECK", "TRUST"):
         if tok in raw:
             return tok
     return "?"
+
+
+def judge_batch(claims: list["Claim"]) -> list[str]:
+    """Judge every claim's source credibility in ONE Haiku call instead of one call per claim.
+    A 14-claim run drops from 14 judge calls to 1 — the gate's biggest avoidable token + latency
+    cost. Returns verdicts aligned to `claims`; falls back to per-claim judging if the batch reply
+    can't be parsed (so a malformed batch never silently mis-grades)."""
+    if not claims:
+        return []
+    listing = "\n".join(f'{i + 1}. CLAIM: {c.text}\n   SOURCE: {c.source_url}'
+                        for i, c in enumerate(claims))
+    out = call("judge", HAIKU, max_tokens=40 + 12 * len(claims), prompt=(
+        "You are a source-credibility auditor. For EACH numbered claim below, judge whether it "
+        "should be trusted as fact or flagged as a self-interested marketing claim. Use "
+        "FLAG_SELF_INTERESTED when the source is a company that profits if a reader believes the "
+        "number; TRUST for primary/neutral sources (government, official stats, standards bodies, "
+        "independent research); CROSS_CHECK otherwise.\n\n"
+        f"{listing}\n\n"
+        'Reply ONLY with a JSON array, same order: [{"i": 1, "verdict": "TRUST"}, ...]. '
+        "verdict ∈ {TRUST, CROSS_CHECK, FLAG_SELF_INTERESTED}."))
+    data = extract_json(out)
+    if isinstance(data, list) and len(data) == len(claims):
+        by_i = {}
+        for item in data:
+            if isinstance(item, dict) and "i" in item:
+                by_i[int(item["i"])] = _normalize_verdict(str(item.get("verdict", "")))
+        if len(by_i) == len(claims):
+            return [by_i.get(i + 1, "?") for i in range(len(claims))]
+    return [judge(c) for c in claims]  # fallback: never silently mis-grade
 
 
 def extract_json(text: str):
@@ -230,10 +271,12 @@ class Verdict:
     reason: str
 
 
-def gate_claim(c: Claim) -> Verdict:
-    """Heuristic tier + Haiku judge. Flag self-interested / non-primary quant claims."""
+def gate_claim(c: Claim, jv: str | None = None) -> Verdict:
+    """Heuristic tier + Haiku judge. Flag self-interested / non-primary quant claims.
+    Pass `jv` to reuse a verdict from a batched `judge_batch` instead of judging here."""
     tier, sells = classify_domain(c.source_url)
-    jv = judge(c)
+    if jv is None:
+        jv = judge(c)
     flagged = (
         jv == "FLAG_SELF_INTERESTED"
         or (tier == TIER_VENDOR and c.quantitative and sells is not None
@@ -250,6 +293,13 @@ def gate_claim(c: Claim) -> Verdict:
     else:
         reason = f"{tier.lower()} source, judge={jv}"
     return Verdict(c, tier, jv, flagged, reason)
+
+
+def gate_claims(claims: list[Claim]) -> list[Verdict]:
+    """Batched gate: one judge call for all claims, then assemble verdicts. Use this over a
+    per-claim `gate_claim` loop whenever you have the full claim set up front (teardown + pipeline)."""
+    jvs = judge_batch(claims)
+    return [gate_claim(c, jv) for c, jv in zip(claims, jvs)]
 
 
 def self_interested(tier: str, jv: str) -> bool:
@@ -333,7 +383,7 @@ def main() -> int:
 
     # 4. GATE
     print("\nGATE — credibility check on quantitative claims (heuristic + Haiku judge)…")
-    verdicts = [gate_claim(c) for c in quant]
+    verdicts = gate_claims(quant)  # one batched judge call for all claims (token win)
     flagged = [v for v in verdicts if v.flagged]
     clean = [v for v in verdicts if not v.flagged]
     for v in verdicts:

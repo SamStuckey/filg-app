@@ -36,10 +36,14 @@ import markdown
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 
-# import the engine + guardrail (prototype/ is a sibling of app/)
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "prototype"))
+# import the engine + guardrail (prototype/) and the app-side skill/persona/board layer (app/).
+_APP_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(_APP_DIR.parent / "prototype"))
+sys.path.insert(0, str(_APP_DIR))  # app/ → bare sibling imports (personas, intake, board, skills)
 import teardown  # noqa: E402
 import usage     # noqa: E402
+import personas  # noqa: E402 — advisor/director registry (shared by ask-an-expert + the board)
+import board     # noqa: E402 — Board of Directors orchestration
 
 from . import auth, billing, planner, store  # noqa: E402 — persistence, auth, billing, plan-builder
 
@@ -205,6 +209,8 @@ def _plan_state(s: dict) -> dict:
     return {
         "id": s["id"], "status": s["status"], "idea": s["idea"], "error": s.get("error"),
         "research": s.get("research"),
+        "shaped": s.get("shaped"), "vetting": s.get("vetting"),
+        "directors": s.get("directors") or [], "board": s.get("board") or [],
         "files": [{"path": p, "content": c} for p, c in (s.get("files") or {}).items()],
         "sections": [{"file": x["file"], "title": x["title"]} for x in planner.SECTIONS],
         "step": s.get("step", 0), "total": planner.N, "proposal": s.get("proposal"),
@@ -215,12 +221,12 @@ def _plan_state(s: dict) -> dict:
 def _plan_research(session_id: str, idea: str, user: str) -> None:
     try:
         with RUN_LOCK:
-            res = planner.research(idea, mock=MOCK)
-            prop, c0 = planner.first_proposal(idea, res, mock=MOCK)
-        usage.record_run(user, res["cost"])   # the metered free run (also bumps the daily total)
-        usage.record_spend(c0)                 # first section draft → daily kill switch only
-        store.plan_save(session_id, status="building", research=res, step=0, proposal=prop,
-                        cost=round(res["cost"] + c0, 4))
+            prep = planner.prepare(idea, mock=MOCK)   # intake → research(thesis) → vet → first draft
+        usage.record_run(user, prep["research_cost"])           # the metered free run + daily total
+        usage.record_spend(prep["cost"] - prep["research_cost"])  # intake + vet + first draft → daily
+        store.plan_save(session_id, status="building", research=prep["research"], step=0,
+                        proposal=prep["proposal"], shaped=prep["shaped"], vetting=prep["vetting"],
+                        cost=prep["cost"])
     except Exception as e:  # noqa: BLE001
         store.plan_save(session_id, status="error", error=str(e))
 
@@ -237,8 +243,9 @@ async def api_plan_start(request: Request):
     allowed, reason = usage.can_run(user, is_paid=_is_paid(user, verified))
     if not allowed:
         return JSONResponse({"error": reason, "upgrade": True}, status_code=402)
+    directors = [k for k in (body.get("directors") or []) if k in personas.KEYS]  # optional board
     sid = uuid.uuid4().hex[:12]
-    store.plan_create(sid, user, idea)
+    store.plan_create(sid, user, idea, directors=directors)
     threading.Thread(target=_plan_research, args=(sid, idea, user), daemon=True).start()
     return {"id": sid}
 
@@ -275,12 +282,28 @@ async def api_plan_respond(sid: str, request: Request):
     choice = body.get("choice")
     if choice not in planner.CHOICES:
         return JSONResponse({"error": "pick yes_and / not_quite / okay_but"}, status_code=400)
+    old_step = s.get("step", 0)
     try:
         with RUN_LOCK:
             upd = planner.advance(s, choice, body.get("note"), mock=MOCK)
+            # If a board is set, it vets each section as it's finalized ("each step vetted by your
+            # board"). `files` in the update means a section was just finalized.
+            directors = s.get("directors") or []
+            if directors and "files" in upd:
+                section = planner.SECTIONS[old_step]
+                draft = upd["files"].get(section["file"])
+                if draft:
+                    work_idea = planner._working_idea(s)
+                    review, bcost = board.review_section(
+                        work_idea, section["title"], draft,
+                        planner.bundle_markdown(work_idea, upd["files"]), directors, mock=MOCK)
+                    reviews = list(s.get("board") or [])
+                    reviews.append({"section": section["file"], "title": section["title"], **review})
+                    upd["board"] = reviews
+                    upd["cost"] = round((upd.get("cost", 0) or 0) + bcost, 4)  # folded into the delta below
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"error": str(e)}, status_code=500)
-    usage.record_spend(round((upd.get("cost", 0) or 0) - (s.get("cost") or 0), 4))  # per-section draft
+    usage.record_spend(round((upd.get("cost", 0) or 0) - (s.get("cost") or 0), 4))  # draft + board review
     store.plan_save(sid, **upd)
     return _plan_state(store.plan_get(sid))
 
@@ -302,6 +325,34 @@ async def api_plan_ask(sid: str, request: Request):
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"error": str(e)}, status_code=500)
     usage.record_spend(cost)
+    return res
+
+
+@app.post("/api/plan/{sid}/board")
+async def api_plan_board(sid: str, request: Request):
+    """Convene the Board of Directors on the plan-so-far. The standing, multi-advisor version of
+    'ask an expert': several composite directors weigh in and FILG synthesizes the collaboration
+    matrix (agreement / conflict / net verdict). `directors` in the body re-picks + persists the
+    board; otherwise the session's board (or the default starter board) is used."""
+    s = store.plan_get(sid)
+    if not s:
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    body = await request.json()
+    picked = body.get("directors")
+    directors = [k for k in (picked or s.get("directors") or personas.DEFAULT_BOARD)
+                 if k in personas.KEYS] or personas.DEFAULT_BOARD
+    question = (body.get("question") or "").strip() or \
+        "Vet the plan so far — what's the one thing I should change before continuing?"
+    work_idea = planner._working_idea(s)
+    plan_text = planner.bundle_markdown(work_idea, s.get("files") or {})
+    try:
+        with RUN_LOCK:
+            res, cost = board.convene(work_idea, plan_text, question, directors, mock=MOCK)
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": str(e)}, status_code=500)
+    usage.record_spend(cost)
+    if picked:  # persist a freshly chosen board so later steps are vetted by it
+        store.plan_save(sid, directors=directors)
     return res
 
 
@@ -329,7 +380,7 @@ async def index():
     cfg = json.dumps({"authEnabled": auth.AUTH_ENABLED, "billingEnabled": billing.BILLING_ENABLED,
                       "supabaseUrl": os.environ.get("SUPABASE_URL", ""),
                       "supabaseAnon": os.environ.get("SUPABASE_ANON_KEY", ""),
-                      "archetypes": planner.ARCHETYPES})
+                      "archetypes": personas.catalog(), "defaultBoard": personas.DEFAULT_BOARD})
     head = f"<script>window.FILG={cfg}</script>"
     if auth.AUTH_ENABLED:
         head += '<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>'
@@ -400,6 +451,20 @@ button:hover{filter:brightness(1.04)}button:active{transform:translateY(1px)}but
 .addons .ax .bl{display:block;font-size:11px;color:var(--muted);font-weight:500}
 .expert{margin-top:12px;background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:12px 14px;font-size:13px;display:none}
 .disc{font-size:11px;color:var(--muted);margin-top:8px}
+.vet{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:18px 20px;margin-bottom:16px}
+.vet .vhead{display:flex;align-items:center;gap:10px;margin-bottom:6px}
+.vet h3{font-size:16px;font-weight:800;margin:0}
+.verdict{font-size:12px;font-weight:800;padding:3px 11px;border-radius:20px;text-transform:uppercase;letter-spacing:.04em}
+.verdict.pursue{background:var(--ok-bg);color:var(--ok)}.verdict.pivot{background:var(--warn-bg);color:var(--warn)}.verdict.kill{background:#fdeaea;color:#c0392b}
+.vet .thesis{font-size:14.5px;margin:0 0 10px}.vet .vrow{font-size:13px;color:var(--muted);margin:3px 0}.vet .vrow b{color:var(--ink)}
+.bdirs{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+.bchip{font-size:12px;font-weight:700;padding:5px 10px;border-radius:20px;border:1.5px solid var(--line);background:#fff;cursor:pointer;color:var(--ink)}
+.bchip.on{background:#eef4ff;border-color:var(--sky);color:var(--sky)}
+.convene{width:100%;background:var(--sky);font-size:14px}
+.bout{margin-top:12px;font-size:13px;display:none}.bout .mtx{background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin-bottom:8px}
+.bout .dname{font-weight:800;font-size:12.5px;margin-top:8px}
+.boardpick{margin:0 0 12px}.boardpick .lab{font-size:13px;color:var(--muted);font-weight:700;margin-bottom:6px;text-align:left}
+.boardpick .opts{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-start}
 .authgate{margin:6px 0 2px}.authgate button{width:100%;margin-bottom:8px}
 .gbtn{background:#fff;color:var(--ink);border:1.5px solid var(--line);font-weight:800}
 .authgate .or{color:var(--muted);font-size:13px;margin:4px 0 0}
@@ -418,6 +483,7 @@ button:hover{filter:brightness(1.04)}button:active{transform:translateY(1px)}but
 <h2>You've got a business in you. Let's find it. 🚀</h2>
 <p class=sub>Drop in your idea. You'll get the offer + the research graded — then we build the whole plan together, your call at every step.</p>
 <textarea id=idea placeholder="e.g. I'm handy with automations and I think I could help dentists stop missing new-patient calls — but I don't know what to sell or how."></textarea>
+<div class=boardpick id=boardpick></div>
 <div id=authgate></div>
 <input id=email type=email placeholder="you@email.com">
 <button id=go class=go onclick=start()>Build my plan →</button>
@@ -430,9 +496,14 @@ button:hover{filter:brightness(1.04)}button:active{transform:translateY(1px)}but
 <button id=dl class=dl onclick=download() style="display:none;margin-top:12px">⬇ Download plan (.zip)</button></div>
 <div class="sec addons"><h3>Add-ons · ask an expert</h3><div class=ax id=addons></div>
 <div class="expert md" id=expert></div><div class=disc id=adisc></div></div>
+<div class="sec board" id=boardsec style="display:none"><h3>Board of Directors</h3>
+<div class=bdirs id=boarddirs></div>
+<button type=button class=convene id=convene onclick=convene()>Convene the board</button>
+<div class="bout md" id=boardout></div><div class=disc>AI composite directors — not real people, not professional advice.</div></div>
 <div class=sec><h3>Research — graded</h3><div id=research></div></div>
 </aside>
 <main class=main>
+<div id=vet></div>
 <div id=answer></div>
 <div id=node></div>
 <div class=err id=err2></div>
@@ -449,6 +520,7 @@ async function start(){
   err.textContent='';
   if(CFG.authEnabled&&!session){gateIntake();return;}   // login required when auth is on
   const body={idea}; if(!session) body.email=email;   // signed in → identity from the token
+  if(BOARD.length) body.directors=BOARD;               // optional Board of Directors → vets each step
   go.disabled=true; go.textContent='Researching…';
   try{
     const r=await fetch('/api/plan/start',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify(body)});
@@ -472,7 +544,7 @@ async function poll(){
 }
 function render(s){
   if(s.status==='error'){document.getElementById('node').innerHTML='<div class=node><h3>Hit a snag</h3><p class=lead>'+esc(s.error)+'</p></div>';return;}
-  renderResearch(s);renderAnswer(s);renderTree(s);renderNode(s);renderAddons(s);
+  renderResearch(s);renderVet(s);renderAnswer(s);renderTree(s);renderNode(s);renderAddons(s);renderBoard(s);
 }
 function renderResearch(s){
   const rows=(s.research&&s.research.rows)||[];
@@ -542,6 +614,69 @@ function renderAddons(s){
   box.innerHTML=ax.map(a=>`<button type=button onclick="ask('${a.key}')">${esc(a.name)}<span class=bl>${esc(a.blurb)}</span></button>`).join('');
   document.getElementById('adisc').textContent='AI composite advisors — not real people, not professional advice.';
   box.dataset.done='1';
+}
+function renderVet(s){
+  const el=document.getElementById('vet'); if(!el)return;
+  const v=s.vetting, sh=s.shaped;
+  if(!v&&!sh){el.innerHTML='';return;}
+  const verdict=(v&&v.verdict)||'';
+  const head=verdict?`<span class="verdict ${esc(verdict)}">${esc(verdict)}</span>`:'';
+  const thesis=sh&&sh.thesis?`<p class=thesis><b>Your focus:</b> ${esc(sh.thesis)}</p>`:'';
+  const edge=sh&&sh.founder_edge?`<p class=vrow><b>Your edge:</b> ${esc(sh.founder_edge)}</p>`:'';
+  const alts=(sh&&sh.wedges_considered&&sh.wedges_considered.length>1)?`<p class=vrow><b>Also considered:</b> ${esc(sh.wedges_considered.slice(1).join(' · '))}</p>`:'';
+  const reason=v&&v.reason?`<p class=vrow>${esc(v.reason)}</p>`:'';
+  const risk=v&&v.biggest_risk?`<p class=vrow><b>Biggest risk:</b> ${esc(v.biggest_risk)}</p>`:'';
+  const test=v&&v.first_test?`<p class=vrow><b>Cheapest first test:</b> ${esc(v.first_test)}</p>`:'';
+  const cq=(sh&&sh.clarifying_question)?`<p class=vrow>🤔 ${esc(sh.clarifying_question)}</p>`:'';
+  el.innerHTML=`<div class=vet><div class=vhead>${head}<h3>Before we build — the honest read</h3></div>${thesis}${edge}${alts}${reason}${risk}${test}${cq}</div>`;
+}
+// Board selection state (keys); seeded from the default board, editable in intake + sidebar.
+let BOARD=(CFG.defaultBoard||[]).slice();
+function personaName(key){const p=(CFG.archetypes||[]).find(a=>a.key===key);return p?p.name:key;}
+function renderBoardPick(){
+  const el=document.getElementById('boardpick'); if(!el)return;
+  const ax=CFG.archetypes||[]; if(!ax.length){el.innerHTML='';return;}
+  el.innerHTML=`<div class=lab>Pick your Board of Directors — they'll vet every step (optional):</div>`+
+    `<div class=opts>`+ax.map(a=>`<button type=button class="bchip${BOARD.includes(a.key)?' on':''}" onclick="toggleBoard('${a.key}',this)" title="${esc(a.blurb)}">${esc(a.name)}</button>`).join('')+`</div>`;
+}
+function toggleBoard(key,btn){
+  const i=BOARD.indexOf(key);
+  if(i>=0){BOARD.splice(i,1);btn&&btn.classList.remove('on');}else{BOARD.push(key);btn&&btn.classList.add('on');}
+}
+function renderBoard(s){
+  const sec=document.getElementById('boardsec'); if(!sec)return;
+  if(s.status==='researching'){sec.style.display='none';return;}
+  sec.style.display='';
+  const chosen=(s.directors&&s.directors.length?s.directors:BOARD);
+  document.getElementById('boarddirs').innerHTML=(CFG.archetypes||[]).map(a=>
+    `<span class="bchip${chosen.includes(a.key)?' on':''}" onclick="toggleSessionBoard('${a.key}',this)" title="${esc(a.blurb)}">${esc(a.name)}</span>`).join('');
+  const out=document.getElementById('boardout');
+  const reviews=s.board||[];
+  if(reviews.length){
+    out.style.display='block';
+    out.innerHTML=reviews.slice().reverse().map(r=>`<div class=mtx><b>${esc(r.title)}</b> — ${esc(r.verdict||'')}</div>`).join('');
+  }
+}
+let SESSION_BOARD=null;
+function toggleSessionBoard(key,el){
+  if(SESSION_BOARD===null)SESSION_BOARD=[];
+  const i=SESSION_BOARD.indexOf(key);
+  if(i>=0){SESSION_BOARD.splice(i,1);el.classList.remove('on');}else{SESSION_BOARD.push(key);el.classList.add('on');}
+}
+async function convene(){
+  const btn=document.getElementById('convene'),out=document.getElementById('boardout');
+  const q=prompt('Ask your board about the plan (optional):'); if(q===null)return;
+  out.style.display='block';out.innerHTML='<p class=lead>Convening the board…</p>';btn.disabled=true;
+  const body={question:q}; if(SESSION_BOARD!==null)body.directors=SESSION_BOARD;
+  try{
+    const r=await fetch('/api/plan/'+SID+'/board',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify(body)});
+    const d=await r.json();btn.disabled=false;
+    if(!r.ok){out.innerHTML=esc(d.error||'Could not convene the board.');return;}
+    out.innerHTML=d.directors.map(x=>`<div class=mtx><div class=dname>${esc(x.name)}</div>${mdToHtml(x.take)}</div>`).join('')+
+      `<div class=mtx><div class=dname>Consensus</div>${esc(d.consensus)}</div>`+
+      (d.conflicts&&d.conflicts.toLowerCase()!=='none'?`<div class=mtx><div class=dname>Conflict</div>${esc(d.conflicts)}</div>`:'')+
+      `<div class=mtx><div class=dname>Net verdict</div><b>${esc(d.verdict)}</b></div>`;
+  }catch(e){btn.disabled=false;out.innerHTML='Network error.';}
 }
 async function ask(key){
   const out=document.getElementById('expert'); out.style.display='block';
@@ -629,7 +764,7 @@ async function upgrade(){
   }catch(e){alert('Network error starting checkout.');}
 }
 function show(id){['intake','workspace','profile'].forEach(x=>{const e=document.getElementById(x);if(e)e.style.display=(x===id?(x==='workspace'?'grid':'block'):'none');});}
-function newPlan(){show('intake');}
+function newPlan(){show('intake');renderBoardPick();}
 async function showPlans(){
   let d; try{const r=await fetch('/api/plans',{headers:authHeaders()});if(!r.ok){alert('Sign in to see your plans.');return;}d=await r.json();}catch(e){alert('Network error.');return;}
   show('profile');renderPlans(d);
@@ -645,7 +780,7 @@ function renderPlans(d){
     `<div style="margin:10px 0 16px"><button onclick=newPlan()>+ New plan</button></div>`+rows+integ+`</div>`;
 }
 async function resume(id){
-  SID=id;show('workspace');
+  SID=id;show('workspace');SESSION_BOARD=null;
   const ab=document.getElementById('addons');if(ab)delete ab.dataset.done;
   const ex=document.getElementById('expert');if(ex){ex.style.display='none';ex.innerHTML='';}
   try{const r=await fetch('/api/plan/'+SID,{headers:authHeaders()});const s=await r.json();render(s);if(s.status==='researching')poll();}catch(e){document.getElementById('err2').textContent='Could not load that plan.';}
@@ -656,7 +791,7 @@ async function initAuth(){
   const q=new URLSearchParams(location.search);
   if(q.get('upgraded'))banner('🎉 You\\'re on Operator. Your plans + integrations are unlocked.');
   if(q.get('canceled'))banner('Checkout canceled — no charge. You\\'re still on the free tier.');
-  restoreIdea();
+  restoreIdea();renderBoardPick();
   if(!CFG.authEnabled||!window.supabase){renderAuth();return;}
   sb=window.supabase.createClient(CFG.supabaseUrl,CFG.supabaseAnon);
   sb.auth.onAuthStateChange(async (_e,s)=>{session=s;await loadMe();renderAuth();});

@@ -80,9 +80,19 @@ def init() -> None:
                     "  step INTEGER NOT NULL DEFAULT 0,"
                     "  proposal TEXT,"              # JSON {section, title, draft}
                     "  history TEXT,"               # JSON [{section, choice, note}]
+                    "  shaped TEXT,"                # JSON intake result {thesis, founder_edge, wedges...}
+                    "  vetting TEXT,"               # JSON vet result {verdict, scores, first_test...}
+                    "  directors TEXT,"             # JSON [persona_key] — the chosen Board of Directors
+                    "  board TEXT,"                 # JSON [{section, ...review}] — per-step board reviews
                     "  cost REAL NOT NULL DEFAULT 0,"
                     "  error TEXT,"
                     "  created_at TEXT NOT NULL)")
+                # Migration for DBs created before the intake/vet/board columns existed (SQLite has no
+                # ADD COLUMN IF NOT EXISTS) — add any missing ones, ignore if already present.
+                have = {r["name"] for r in con.execute("PRAGMA table_info(plan_sessions)")}
+                for col in ("shaped", "vetting", "directors", "board"):
+                    if col not in have:
+                        con.execute(f"ALTER TABLE plan_sessions ADD COLUMN {col} TEXT")
         finally:
             con.close()
         _initialized = True
@@ -193,19 +203,21 @@ def is_paid(email: str) -> bool:
 
 
 # ── Plan-builder sessions ────────────────────────────────────────────────────
-_PLAN_JSON = ("research", "files", "proposal", "history")  # columns stored as JSON
+_PLAN_JSON = ("research", "files", "proposal", "history",  # columns stored as JSON
+              "shaped", "vetting", "directors", "board")
 
 
-def plan_create(session_id: str, user: str, idea: str) -> None:
+def plan_create(session_id: str, user: str, idea: str, directors: list | None = None) -> None:
     init()
     con = _connect()
     try:
         with con:
             con.execute(
-                "INSERT INTO plan_sessions (id, user, idea, status, files, history, created_at) "
-                "VALUES (?,?,?,?,?,?,?)",
+                "INSERT INTO plan_sessions "
+                "(id, user, idea, status, files, history, directors, board, created_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
                 (session_id, user, idea, "researching", "{}", "[]",
-                 datetime.now(timezone.utc).isoformat()))
+                 json.dumps(directors or []), "[]", datetime.now(timezone.utc).isoformat()))
     finally:
         con.close()
 
@@ -281,13 +293,18 @@ if __name__ == "__main__":  # quick self-test (no API)
     upsert_subscription("p@x.com", status="active", current_period_end=1)  # past → expired
     assert is_paid("p@x.com") is False
     # plan sessions
-    plan_create("pl1", "u@x.com", "an idea about guitar coaching")
+    plan_create("pl1", "u@x.com", "an idea about guitar coaching", directors=["closer", "cfo"])
     assert plan_get("pl1")["status"] == "researching"
+    assert plan_get("pl1")["directors"] == ["closer", "cfo"]   # board persists from creation
     plan_save("pl1", status="building", step=1, files={"01_brief.md": "# Brief"},
-              proposal={"section": "offer", "draft": "..."})
+              proposal={"section": "offer", "draft": "..."},
+              shaped={"thesis": "focused idea"}, vetting={"verdict": "pursue"},
+              board=[{"section": "01_brief.md", "verdict": "ship it"}])
     s = plan_get("pl1")
     assert s["status"] == "building" and s["step"] == 1
     assert s["files"]["01_brief.md"] == "# Brief" and s["proposal"]["section"] == "offer"
+    assert s["shaped"]["thesis"] == "focused idea" and s["vetting"]["verdict"] == "pursue"
+    assert s["board"][0]["section"] == "01_brief.md"
     assert plan_get("nope") is None
     mine = plan_list("u@x.com")
     assert len(mine) == 1 and mine[0]["id"] == "pl1" and plan_list("nobody@x.com") == []

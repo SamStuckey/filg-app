@@ -114,13 +114,13 @@ def page_shell(title: str, desc: str, body: str) -> str:
 
 # ─── Evidence assembly (deterministic — the gate's labels are authoritative) ──
 def build_evidence(idea: str, headlines: int):
-    from pipeline import plan, research_lane, gate_claim, research_primary  # lazy: --rebuild needs no API
+    from pipeline import plan, research_lane, gate_claims, research_primary  # lazy: --rebuild needs no API
     lanes = plan(idea)
     with ThreadPoolExecutor(max_workers=3) as ex:
         lane_claims = list(ex.map(lambda ln: research_lane(idea, ln), lanes))
     quant = [c for lane in lane_claims for c in lane if c.quantitative]
 
-    verdicts = [gate_claim(c) for c in quant]
+    verdicts = gate_claims(quant)  # one batched judge call for all claims (token win)
     cleared = [v for v in verdicts if not v.flagged]
     flagged = [v for v in verdicts if v.flagged]
 
