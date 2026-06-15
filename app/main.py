@@ -28,6 +28,7 @@ import json
 import os
 import sys
 import threading
+import traceback
 import uuid
 import zipfile
 from pathlib import Path
@@ -68,6 +69,7 @@ def _run_job(job_id: str, idea: str, user: str, mode: str) -> None:
         usage.record_run(user, res["cost"])
         store.finish(job_id, res, mode)
     except Exception as e:  # noqa: BLE001 — surface failures to the client, don't crash the worker
+        traceback.print_exc()  # full trace → Render stdout logs (client only sees str(e))
         store.fail(job_id, str(e))
 
 
@@ -228,6 +230,7 @@ def _plan_research(session_id: str, idea: str, user: str) -> None:
                         proposal=prep["proposal"], shaped=prep["shaped"], vetting=prep["vetting"],
                         cost=prep["cost"])
     except Exception as e:  # noqa: BLE001
+        traceback.print_exc()  # full trace → Render stdout logs (client only sees str(e))
         store.plan_save(session_id, status="error", error=str(e))
 
 

@@ -58,7 +58,8 @@ def _synthesize(idea: str, focus: str, takes: list[dict]) -> tuple[dict, float]:
         '"conflicts": "where they disagree and the tradeoff (1-2 sentences, or \'none\' )", '
         '"verdict": "the net recommendation to the operator (1-2 sentences, decisive)"}\n\n'
         f"QUESTION:\n{focus}\n\nIDEA:\n{idea}\n\nDIRECTORS' TAKES:\n{board_block}"))
-    data = extract_json(out) or {}
+    data = extract_json(out)
+    data = data if isinstance(data, dict) else {}
     return ({"consensus": (data.get("consensus") or "").strip(),
              "conflicts": (data.get("conflicts") or "none").strip(),
              "verdict": (data.get("verdict") or "").strip()},

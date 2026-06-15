@@ -54,7 +54,8 @@ def shape(idea: str, mock: bool = False) -> tuple[dict, float]:
     start = len(LEDGER.rows)
     out = call("intake", SONNET, max_tokens=600, system=skills.system("intake"), cache=True,
                prompt=f"The operator typed this in plain text:\n\n{idea}\n\nShape it now.")
-    data = extract_json(out) or {}
+    data = extract_json(out)
+    data = data if isinstance(data, dict) else {}  # tolerate a non-object reply
     shaped = {
         "coherent": bool(data.get("coherent", True)),
         "thesis": (data.get("thesis") or idea).strip(),
@@ -80,7 +81,8 @@ def vet(idea: str, shaped: dict, research: dict | None = None, mock: bool = Fals
         f"OPERATOR'S RAW INPUT:\n{idea}\n\nFOCUSED THESIS (from intake):\n{shaped.get('thesis', '')}\n\n"
         f"FOUNDER EDGE:\n{shaped.get('founder_edge', '(none named)')}\n\n"
         f"GATE-CLEARED EVIDENCE (context only):\n{cited or '- (no research yet)'}\n\nVet it now."))
-    data = extract_json(out) or {}
+    data = extract_json(out)
+    data = data if isinstance(data, dict) else {}  # tolerate a non-object reply
     verdict = str(data.get("verdict", "pursue")).lower()
     if verdict not in ("pursue", "pivot", "kill"):
         verdict = "pursue"

@@ -181,12 +181,17 @@ def judge_batch(claims: list["Claim"]) -> list[str]:
 
 
 def extract_json(text: str):
-    """Pull the first JSON object/array out of a model response (handles fences)."""
+    """Pull the first JSON object/array out of a model response (handles fences). Picks whichever
+    delimiter OPENS FIRST, so an object that contains an array ({"a":[...]}) parses as the object —
+    not the inner array. (Parsing the inner array was a real bug: callers got a list and `.get` blew
+    up.)"""
     fence = re.search(r"```(?:json)?\s*(.*?)```", text, re.DOTALL)
     candidate = fence.group(1) if fence else text
-    for opener, closer in (("[", "]"), ("{", "}")):
-        i, j = candidate.find(opener), candidate.rfind(closer)
-        if i != -1 and j > i:
+    openers = sorted(((candidate.find(o), o, c) for o, c in (("{", "}"), ("[", "]"))
+                      if candidate.find(o) != -1))
+    for i, opener, closer in openers:  # earliest opener first = outermost value
+        j = candidate.rfind(closer)
+        if j > i:
             try:
                 return json.loads(candidate[i:j + 1])
             except json.JSONDecodeError:

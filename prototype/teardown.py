@@ -165,7 +165,8 @@ def write_prose(idea: str, rows) -> dict:
         "Be concrete and specific. Do NOT invent statistics — only the evidence section carries numbers.\n\n"
         f"IDEA:\n{idea}\n\nGATE-CLEARED EVIDENCE (context only):\n{cleared_block}"
     ))
-    data = extract_json(out) or {}
+    data = extract_json(out)
+    data = data if isinstance(data, dict) else {}
     return {"title": data.get("title") or "Cited Offer Teardown",
             "idea_line": data.get("idea_line") or idea[:160],
             "offer": data.get("offer") or "(offer synthesis unavailable)",
