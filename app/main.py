@@ -456,6 +456,8 @@ button{background:var(--coral);color:#fff;border:0;font:inherit;font-weight:800;
 button:hover{filter:brightness(1.04)}button:active{transform:translateY(1px)}button:disabled{opacity:.55;cursor:default}
 .intake{max-width:680px;margin:28px auto;text-align:center}.intake textarea,.intake input{text-align:left}
 .intake h2{font-size:30px;font-weight:800;letter-spacing:-.02em;margin:0 0 6px}.intake .go{font-size:17px;padding:15px 26px}
+.brandquote{margin:0 0 18px;font-family:"Fraunces",Georgia,serif;font-size:clamp(20px,3.4vw,26px);font-weight:600;font-style:italic;letter-spacing:-.01em;color:var(--ink);line-height:1.2}
+.brandquote cite{display:block;font-style:normal;font-family:inherit;font-size:13px;font-weight:700;color:var(--muted);margin-top:6px}
 .err{color:var(--coral-d);margin-top:12px;font-weight:700}
 .authbar{display:flex;align-items:center;gap:14px;font-size:14px}
 .authbar .who{color:var(--muted)}.authbar b{color:var(--coral)}
@@ -575,6 +577,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <div class=top><h1 class=logo><button type=button class=logobtn onclick=newPlan() aria-label="FILG — start a new idea"><svg class=logomark viewBox="0 0 32 32" aria-hidden=true><rect width=32 height=32 rx=8 fill=#FF6B4A></rect><path d="M16 4c-3.2 2.8-4.3 7.4-4.3 11.8v3.2h8.6v-3.2C20.3 11.4 19.2 6.8 16 4z" fill=#fff></path><circle cx=16 cy=12 r=2.1 fill=#2E7CF6></circle><path d="M11.7 15.5 8.6 20.5l3.1-1.3z" fill=#fff></path><path d="M20.3 15.5 23.4 20.5l-3.1-1.3z" fill=#fff></path><path d="M13.6 19.5h4.8L16 25.5z" fill=#FFC23F></path></svg>FI<span>LG</span></button></h1><div class=authbar id=authbar></div></div>
 <div class=note-banner id=banner></div>
 <div class=intake id=intake>
+<blockquote class=brandquote>“Fuck it. Let’s go.”<cite>— You, 30 seconds ago</cite></blockquote>
 <h2>You've got a business in you. Let's find it. 🚀</h2>
 <p class=sub>Drop in your idea. You'll get the offer + the research graded — then we build the whole plan together, your call at every step.</p>
 <label for=idea class=sr-only>Your business idea</label>
