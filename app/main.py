@@ -404,6 +404,7 @@ __FILG_HEAD__
 .page{max-width:1140px;margin:0 auto;padding:22px 22px 72px}
 .top{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
 h1.logo{font-size:30px;font-weight:800;letter-spacing:-.02em;margin:0}.logo span{color:var(--coral)}
+.logobtn{background:none;border:0;padding:0;margin:0;font:inherit;color:inherit;letter-spacing:inherit;cursor:pointer}.logobtn:hover{opacity:.85}
 .sub{color:var(--muted);margin:0 0 18px;font-size:17px}
 textarea,input{width:100%;padding:14px 16px;border:1.5px solid var(--line);border-radius:14px;font:inherit;background:#fff;margin-bottom:12px}
 textarea:focus,input:focus{outline:none;border-color:var(--sky)}textarea{min-height:120px;resize:vertical}
@@ -521,7 +522,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 .tree button.f{width:100%;background:none;border:0;font:inherit;color:inherit;text-align:left;cursor:pointer;padding:0}
 .tree button.f:hover .nm{color:var(--sky)}
 </style></head><body><div class=page>
-<div class=top><h1 class=logo>FI<span>LG</span></h1><div class=authbar id=authbar></div></div>
+<div class=top><h1 class=logo><button type=button class=logobtn onclick=newPlan() aria-label="FILG — start a new idea">FI<span>LG</span></button></h1><div class=authbar id=authbar></div></div>
 <div class=note-banner id=banner></div>
 <div class=intake id=intake>
 <h2>You've got a business in you. Let's find it. 🚀</h2>
@@ -923,7 +924,7 @@ async function upgrade(){
   }catch(e){toast('Network error starting checkout.','err');}
 }
 function show(id){['intake','workspace','profile'].forEach(x=>{const e=document.getElementById(x);if(e)e.style.display=(x===id?(x==='workspace'?'grid':'block'):'none');});}
-function newPlan(){show('intake');renderBoardPick();}
+function newPlan(){show('intake');renderBoardPick();gateIntake();}
 async function showPlans(){
   let d; try{const r=await fetch('/api/plans',{headers:authHeaders()});if(!r.ok){toast('Sign in to see your plans.','err');return;}d=await r.json();}catch(e){toast('Network error.','err');return;}
   show('profile');renderPlans(d);
