@@ -2,7 +2,8 @@
 
 Brand: **FILG** ("fuck it, let's go"). Domains: **filg.ai** + **fuckitletsgo.ai**.
 
-The standing funnel for the demand-validation sprint (`../validation_strategy.md`). Two pieces:
+The standing funnel for the demand-validation sprint (`validation_strategy.md` in the sibling
+[filg-docs](https://github.com/SamStuckey/filg-docs) repo). Two pieces:
 
 1. **`index.html`** — a single self-contained landing page. No build step, no dependencies (one
    Google Font). Leads with the receipt, shows a real graded sample, fake-door `$39` pricing, and
@@ -46,7 +47,7 @@ The page already fires custom events:
 - `signup` with `{list}` — captures, split by funnel.
 
 With Plausible's goals you can read visitor→signup conversion and fake-door CTR directly against the
-PASS/KILL thresholds in `../validation_strategy.md`.
+PASS/KILL thresholds in `validation_strategy.md` ([filg-docs](https://github.com/SamStuckey/filg-docs)).
 
 ---
 

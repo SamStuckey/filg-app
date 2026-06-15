@@ -22,7 +22,10 @@ business.
 | `prototype/pipeline_economics.py` · `test_01_*.md` | The cost/quality kill-gate work. |
 | `landing/` | The marketing site (self-contained static HTML) + the hosted teardown archive. Deploy the folder; point both domains at it. |
 | `teardowns/` | Markdown sources + structured rows for each teardown issue. |
-| Planning docs | `business_plan.md`, `validation_strategy.md`, `vet.md`, `launch_todo.md`, `research_findings.md`, `00_brief.md`. |
+
+> **Planning + research docs** live in the sibling [filg-docs](https://github.com/SamStuckey/filg-docs)
+> repo: business plan, validation strategy, launch checklist, research findings, dogfood runs, brief,
+> and the session handoff (`NEXT_SESSION.md`). This repo is code + deploy artifacts only.
 
 ## Quickstart (engine)
 ```bash
@@ -50,7 +53,8 @@ See `landing/README.md`.
 
 ## Next: the thin MVP
 Idea input → async pipeline run (label-don't-chase) → artifact workspace; free tier capped at 1 run;
-Stripe paywall for the $39/mo "Operator" tier; light auth. `launch_todo.md` Phase 3 has the checklist.
+Stripe paywall for the $39/mo "Operator" tier; light auth. See `launch_todo.md` Phase 3 in
+[filg-docs](https://github.com/SamStuckey/filg-docs) for the checklist.
 
 ---
 © Sam Stuckey. Private — not for redistribution.

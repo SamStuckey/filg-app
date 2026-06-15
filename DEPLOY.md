@@ -3,12 +3,12 @@
 Ship the **free tier** first (the launch goal); flip on auth + billing later with no code change.
 The app degrades gracefully — with only `ANTHROPIC_API_KEY` set it runs free-tier-only.
 
-> Prereqs: repo on GitHub (`SamStuckey/fuckitletsgo`), an Anthropic API key. Render deploys from
+> Prereqs: repo on GitHub (`SamStuckey/filg-app`), an Anthropic API key. Render deploys from
 > `main` via [`render.yaml`](./render.yaml) (Python service, `starter` plan, 1 GB persistent disk
 > at `/var/data` for the SQLite DB).
 
 ## 1. Create the service
-1. [Render dashboard](https://dashboard.render.com) → **New → Blueprint** → pick `SamStuckey/fuckitletsgo`.
+1. [Render dashboard](https://dashboard.render.com) → **New → Blueprint** → pick `SamStuckey/filg-app`.
 2. Render reads `render.yaml` and proposes the `filg` service. It prompts for the `sync: false` secrets —
    for a free-tier launch set **only**:
    - `ANTHROPIC_API_KEY` → your real key. **This is what flips the app from mock to live.**
@@ -64,9 +64,10 @@ the app keeps working on the email fallback. ~10 min.
 Heads-ups: enabling auth makes **login required to build** (no more anonymous email runs). Free cap
 is currently 1 plan/lifetime (`FILG_FREE_RUNS`); revisit alongside monetization. TODO before heavy
 use: ownership check on `/api/plan/{id}` + download (a signed-in user shouldn't load another's plan
-by id) — tracked in `NEXT_SESSION.md`.
+by id) — tracked in `NEXT_SESSION.md` ([filg-docs](https://github.com/SamStuckey/filg-docs)).
 
 ## Notes
 - The persistent disk pins the service to a **single instance** (fine — runs are serialized in-process).
-  Scaling out is the trigger for the Postgres migration (next milestone, `launch_todo.md`).
+  Scaling out is the trigger for the Postgres migration (next milestone — `launch_todo.md` in
+  [filg-docs](https://github.com/SamStuckey/filg-docs)).
 - Local dev: `FILG_MOCK=1 uvicorn app.main:app --app-dir .` → free, no API/auth/billing.

@@ -1,5 +1,5 @@
 # Render blueprint — one-click deploy once the repo is on GitHub.
-# Render dashboard → New → Blueprint → pick the filg repo. Set the `sync: false` secrets when prompted.
+# Render dashboard → New → Blueprint → pick the filg-app repo. Set the `sync: false` secrets when prompted.
 # Auth + billing are optional: leave the SUPABASE_*/STRIPE_* keys blank to launch free-tier-only;
 # fill them to turn on real login + the $39/mo Operator plan (no redeploy logic changes).
 services:

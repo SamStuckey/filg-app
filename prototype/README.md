@@ -21,7 +21,8 @@ python3 source_credibility_gate.py --judge   # + Haiku cross-check (needs ANTHRO
 ```
 
 ## Result on the real dogfood claims
-Seeded with the actual claims from `dogfood_run_01.md` and `dogfood_run_02.md`. The gate
+Seeded with the actual claims from the two dogfood runs (`dogfood_run_01.md` + `dogfood_run_02.md`
+in the sibling [filg-docs](https://github.com/SamStuckey/filg-docs) repo). The gate
 **failed** (exit 1) and flagged **6 self-interested** stats, including:
 - "$201,600/yr from switching billers" — listerventures.com (an RCM vendor) ✓ the one I caught by hand
 - in-house billing "$55-80K/yr" — carecloud.com (sells outsourced billing)
