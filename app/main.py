@@ -282,25 +282,12 @@ async def api_plan_respond(sid: str, request: Request):
     choice = body.get("choice")
     if choice not in planner.CHOICES:
         return JSONResponse({"error": "pick yes_and / not_quite / okay_but"}, status_code=400)
-    old_step = s.get("step", 0)
     try:
         with RUN_LOCK:
-            upd = planner.advance(s, choice, body.get("note"), mock=MOCK)
-            # If a board is set, it vets each section as it's finalized ("each step vetted by your
-            # board"). `files` in the update means a section was just finalized.
-            directors = s.get("directors") or []
-            if directors and "files" in upd:
-                section = planner.SECTIONS[old_step]
-                draft = upd["files"].get(section["file"])
-                if draft:
-                    work_idea = planner._working_idea(s)
-                    review, bcost = board.review_section(
-                        work_idea, section["title"], draft,
-                        planner.bundle_markdown(work_idea, upd["files"]), directors, mock=MOCK)
-                    reviews = list(s.get("board") or [])
-                    reviews.append({"section": section["file"], "title": section["title"], **review})
-                    upd["board"] = reviews
-                    upd["cost"] = round((upd.get("cost", 0) or 0) + bcost, 4)  # folded into the delta below
+            # If a board is set it vets each finalized section and its takeaway steers the next draft
+            # (planner.advance runs the board inline). cost includes any board review.
+            upd = planner.advance(s, choice, body.get("note"), mock=MOCK,
+                                  directors=s.get("directors") or None)
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"error": str(e)}, status_code=500)
     usage.record_spend(round((upd.get("cost", 0) or 0) - (s.get("cost") or 0), 4))  # draft + board review
@@ -465,6 +452,17 @@ button:hover{filter:brightness(1.04)}button:active{transform:translateY(1px)}but
 .bout .dname{font-weight:800;font-size:12.5px;margin-top:8px}
 .boardpick{margin:0 0 12px}.boardpick .lab{font-size:13px;color:var(--muted);font-weight:700;margin-bottom:6px;text-align:left}
 .boardpick .opts{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-start}
+.bround{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:20px 22px;margin-bottom:20px}
+.bround h4{font-size:15px;font-weight:800;margin:0 0 12px}
+.balloons{display:flex;flex-direction:column;gap:8px}
+.balloon{border:1.5px solid var(--line);border-radius:14px;overflow:hidden}
+.balloon .bh{display:flex;align-items:center;gap:8px;padding:10px 13px;cursor:pointer;font-weight:800;font-size:13.5px;background:#fff;user-select:none}
+.balloon .bh:hover{background:var(--bg)}.balloon .bh .caret{margin-left:auto;color:var(--muted);font-size:12px;transition:transform .12s}
+.balloon.open .bh .caret{transform:rotate(90deg)}
+.balloon .bb{padding:0 13px 12px;font-size:13.5px;display:none}.balloon.open .bb{display:block}
+.takeaway{margin-top:14px;background:var(--ok-bg);border:1px solid #cfe9d8;border-radius:14px;padding:13px 15px;font-size:14px}
+.takeaway .tl{font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--ok);margin-bottom:5px}
+.takeaway .split{display:block;margin-top:6px;color:var(--muted);font-size:13px}
 .authgate{margin:6px 0 2px}.authgate button{width:100%;margin-bottom:8px}
 .gbtn{background:#fff;color:var(--ink);border:1.5px solid var(--line);font-weight:800}
 .authgate .or{color:var(--muted);font-size:13px;margin:4px 0 0}
@@ -506,6 +504,7 @@ button:hover{filter:brightness(1.04)}button:active{transform:translateY(1px)}but
 <div id=vet></div>
 <div id=answer></div>
 <div id=node></div>
+<div id=boardround></div>
 <div class=err id=err2></div>
 </main>
 </div>
@@ -544,7 +543,21 @@ async function poll(){
 }
 function render(s){
   if(s.status==='error'){document.getElementById('node').innerHTML='<div class=node><h3>Hit a snag</h3><p class=lead>'+esc(s.error)+'</p></div>';return;}
-  renderResearch(s);renderVet(s);renderAnswer(s);renderTree(s);renderNode(s);renderAddons(s);renderBoard(s);
+  renderResearch(s);renderVet(s);renderAnswer(s);renderTree(s);renderNode(s);renderAddons(s);renderBoard(s);renderBoardRound(s);
+}
+function renderBoardRound(s){
+  const el=document.getElementById('boardround'); if(!el)return;
+  const reviews=s.board||[];
+  if(!reviews.length){el.innerHTML='';return;}
+  const r=reviews[reviews.length-1];   // the board's take on the section just finalized
+  const balloons=(r.directors||[]).map((d,i)=>{
+    const id='bal_'+i;
+    return `<div class=balloon id=${id}><div class=bh onclick="document.getElementById('${id}').classList.toggle('open')">💬 See what ${esc(d.name)} says<span class=caret>▸</span></div><div class="bb md">${mdToHtml(d.take)}</div></div>`;
+  }).join('');
+  const split=(r.conflicts&&r.conflicts.toLowerCase()!=='none')?`<span class=split>Where they split: ${esc(r.conflicts)}</span>`:'';
+  el.innerHTML=`<div class=bround><h4>🗣️ Your board weighed in on “${esc(r.title)}”</h4>`+
+    `<div class=balloons>${balloons}</div>`+
+    `<div class=takeaway><div class=tl>Board takeaway</div>${esc(r.verdict||'')}${split}</div></div>`;
 }
 function renderResearch(s){
   const rows=(s.research&&s.research.rows)||[];
@@ -647,15 +660,10 @@ function renderBoard(s){
   const sec=document.getElementById('boardsec'); if(!sec)return;
   if(s.status==='researching'){sec.style.display='none';return;}
   sec.style.display='';
-  const chosen=(s.directors&&s.directors.length?s.directors:BOARD);
+  // Chips reflect the active board; tap to add/drop a director for on-demand convening.
+  if(SESSION_BOARD===null) SESSION_BOARD=(s.directors&&s.directors.length?s.directors.slice():BOARD.slice());
   document.getElementById('boarddirs').innerHTML=(CFG.archetypes||[]).map(a=>
-    `<span class="bchip${chosen.includes(a.key)?' on':''}" onclick="toggleSessionBoard('${a.key}',this)" title="${esc(a.blurb)}">${esc(a.name)}</span>`).join('');
-  const out=document.getElementById('boardout');
-  const reviews=s.board||[];
-  if(reviews.length){
-    out.style.display='block';
-    out.innerHTML=reviews.slice().reverse().map(r=>`<div class=mtx><b>${esc(r.title)}</b> — ${esc(r.verdict||'')}</div>`).join('');
-  }
+    `<span class="bchip${SESSION_BOARD.includes(a.key)?' on':''}" onclick="toggleSessionBoard('${a.key}',this)" title="${esc(a.blurb)}">${esc(a.name)}</span>`).join('');
 }
 let SESSION_BOARD=null;
 function toggleSessionBoard(key,el){

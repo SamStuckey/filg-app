@@ -27,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "prototype"))  #
 import teardown  # noqa: E402
 import intake  # noqa: E402
 import personas  # noqa: E402
+import board  # noqa: E402 — Board of Directors review, run inline so its takeaway can steer next draft
 import skill_registry as skills  # noqa: E402
 
 # The plan = an ordered set of files. Plain-language titles (operator voice), friendly filenames.
@@ -103,14 +104,19 @@ def _cited_flagged(rows: list) -> tuple[str, str]:
 
 
 def propose(idea: str, section_key: str, research_data: dict, history: list,
-            steer: str | None = None, mock: bool = False) -> tuple[str, float]:
+            steer: str | None = None, board_notes: str | None = None,
+            mock: bool = False) -> tuple[str, float]:
     """Draft one section. `steer` is a branch instruction (set when re-drafting after a branch with
-    a note) that is injected into the prompt so the operator's choice actually shapes the output.
-    Returns (draft, cost)."""
+    a note). `board_notes` are the board's net takeaways on earlier sections — injected so the
+    directors actually shape what gets written next, not just comment after the fact. Both go into
+    the prompt so the operator's choices and their board genuinely steer the output. Returns
+    (draft, cost)."""
     if mock:
         draft = _MOCK_DRAFT[section_key]
         if steer:
             draft += f"\n\n*(revised — {steer})*"
+        if board_notes:
+            draft += "\n\n*(board-guided)*"
         return draft, 0.0
 
     from pipeline import LEDGER, call, SONNET  # heavy; only in real mode
@@ -120,14 +126,25 @@ def propose(idea: str, section_key: str, research_data: dict, history: list,
     prior = "\n".join(f"- {h['section']}: {h['choice']}" + (f" — “{h['note']}”" if h.get("note") else "")
                       for h in history) or "- (none yet)"
     steer_block = f"\n\nOPERATOR DIRECTION (honor this): {steer}" if steer else ""
+    board_block = (f"\n\nBOARD GUIDANCE (your directors' net takeaways on earlier sections — honor "
+                   f"them):\n{board_notes}") if board_notes else ""
     # Durable instruction (the IP) lives in the synth_section skill → cached system block; only the
-    # runtime data (which section, the idea, decisions, graded research) goes in the user message.
+    # runtime data (which section, the idea, decisions, graded research, board) goes in the user message.
     draft = call(f"plan_{section_key}", SONNET, max_tokens=1100,
                  system=skills.system("synth_section"), cache=True, prompt=(
         f"SECTION TO WRITE: **{section['title']}** ({section['sub']}).\n\n"
-        f"IDEA:\n{idea}\n\nDECISIONS SO FAR:\n{prior}{steer_block}\n\n"
+        f"IDEA:\n{idea}\n\nDECISIONS SO FAR:\n{prior}{steer_block}{board_block}\n\n"
         f"CITED RESEARCH:\n{cited}\n\nFLAGGED (vendor) CLAIMS:\n{flagged}"))
     return draft, round(LEDGER.cost_slice(start), 4)
+
+
+def _board_notes(reviews: list) -> str | None:
+    """Condense per-section board reviews into a guidance block for the next section's synthesis —
+    this is how the board's takeaway actually influences the output, not just narrates it."""
+    if not reviews:
+        return None
+    return "\n".join(f"- on “{r.get('title', r.get('section'))}”: {r.get('verdict', '')}"
+                     for r in reviews) or None
 
 
 # How each branch steers the next draft. The operator's choice + note become a prompt instruction,
@@ -146,20 +163,26 @@ def _steer(choice: str, note: str | None) -> str | None:
     return None
 
 
-def advance(session: dict, choice: str, note: str | None, mock: bool = False) -> dict:
+def advance(session: dict, choice: str, note: str | None, mock: bool = False,
+            directors: list | None = None) -> dict:
     """Apply a branch to the current node and return the fields to persist
-    ({files, step, proposal, history, status, cost}).
+    ({files, step, proposal, history, status, cost, board}).
 
     - not_quite → re-draft THIS section with a different angle (stay on the node).
     - yes_and / okay_but with a note → re-synthesize THIS section honoring the note, then finalize.
     - yes_and / okay_but with no note → accept the current draft as-is, then finalize.
-    Either way the choice+note are appended to history, which feeds every later section's prompt."""
+    The choice+note are appended to history, which feeds every later section's prompt.
+
+    If `directors` is set (the operator built a Board of Directors), each finalized section is vetted
+    by the board (board.review_section) — each director's take + a synthesized takeaway — and that
+    takeaway is fed into the NEXT section's synthesis, so the board genuinely steers the output."""
     if choice not in CHOICES:
         raise ValueError(f"bad choice {choice!r}")
     step = session["step"]
     section = SECTIONS[step]
     files = dict(session.get("files") or {})
     history = list(session.get("history") or [])
+    reviews = list(session.get("board") or [])
     cost = session.get("cost") or 0.0
     note = (note or "").strip() or None
     idea = _working_idea(session)  # synthesize on the focused thesis, not the raw grab-bag
@@ -167,7 +190,7 @@ def advance(session: dict, choice: str, note: str | None, mock: bool = False) ->
 
     if choice == "not_quite":
         draft, c = propose(idea, section["key"], session["research"], history,
-                           steer=_steer(choice, note), mock=mock)
+                           steer=_steer(choice, note), board_notes=_board_notes(reviews), mock=mock)
         return {"proposal": {"section": section["key"], "title": section["title"], "draft": draft},
                 "history": history, "cost": round(cost + c, 4)}
 
@@ -175,17 +198,31 @@ def advance(session: dict, choice: str, note: str | None, mock: bool = False) ->
     steer = _steer(choice, note)
     if steer:
         draft, c = propose(idea, section["key"], session["research"], history,
-                           steer=steer, mock=mock)
+                           steer=steer, board_notes=_board_notes(reviews), mock=mock)
         cost = round(cost + c, 4)
     else:
         draft = session["proposal"]["draft"]
     files[section["file"]] = draft
+
+    # The board reviews the section just finalized; its takeaway then steers the next draft.
+    if directors:
+        review, bc = board.review_section(idea, section["title"], draft,
+                                          bundle_markdown(idea, files), directors, mock=mock)
+        reviews.append({"section": section["file"], "title": section["title"], **review})
+        cost = round(cost + bc, 4)
+
     if step + 1 < N:
         nxt = SECTIONS[step + 1]
-        draft, c = propose(idea, nxt["key"], session["research"], history, mock=mock)
-        return {"files": files, "step": step + 1, "history": history, "cost": round(cost + c, 4),
-                "proposal": {"section": nxt["key"], "title": nxt["title"], "draft": draft}}
-    return {"files": files, "step": N, "history": history, "status": "done", "proposal": None}
+        draft, c = propose(idea, nxt["key"], session["research"], history,
+                           board_notes=_board_notes(reviews), mock=mock)
+        upd = {"files": files, "step": step + 1, "history": history, "cost": round(cost + c, 4),
+               "proposal": {"section": nxt["key"], "title": nxt["title"], "draft": draft}}
+    else:
+        upd = {"files": files, "step": N, "history": history, "status": "done",
+               "proposal": None, "cost": round(cost, 4)}
+    if directors:
+        upd["board"] = reviews
+    return upd
 
 
 def first_proposal(idea: str, research_data: dict, mock: bool = False) -> tuple[dict, float]:
@@ -258,5 +295,12 @@ if __name__ == "__main__":  # self-test (mock, no API)
              "files": {}, "history": [], "step": 0, "cost": prep["cost"], "proposal": prep["proposal"]}
     assert _working_idea(sess2) == prep["shaped"]["thesis"]  # builds on the focused thesis
     assert _working_idea({"idea": "x"}) == "x"               # back-compat: no shaped → raw idea
+    # board-driven advance: each finalized section gets a board review, takeaway steers the next draft
+    sess2.update({"history": [], "step": 0, "cost": 0.0, "board": []})
+    upd = advance(sess2, "yes_and", None, mock=True, directors=["closer", "cfo"])
+    assert len(upd["board"]) == 1 and len(upd["board"][0]["directors"]) == 2  # per-director takes
+    assert upd["board"][0]["verdict"]                                          # synthesized takeaway
+    assert "board-guided" in upd["proposal"]["draft"]                          # takeaway steered next
+    assert _board_notes(upd["board"]).startswith("- on")
     print("planner.py self-test OK —", N, "sections,", len(sess["files"]),
-          "files, expert ok, prepare ok")
+          "files, expert ok, prepare ok, board ok")
