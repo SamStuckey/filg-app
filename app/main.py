@@ -439,7 +439,7 @@ button:hover{filter:brightness(1.04)}button:active{transform:translateY(1px)}but
 .addons .ax{display:flex;flex-wrap:wrap;gap:8px}
 .addons .ax button{flex:1;min-width:120px;background:#fff;border:1.5px solid var(--line);color:var(--ink);font-size:13px;font-weight:800;padding:9px 10px;text-align:left}
 .addons .ax .bl{display:block;font-size:11px;color:var(--muted);font-weight:500}
-.expert{margin-top:12px;background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:12px 14px;font-size:13px;display:none}
+.bhelp{font-size:12px;color:var(--muted);margin:0 0 10px}
 .disc{font-size:11px;color:var(--muted);margin-top:8px}
 .vet{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:18px 20px;margin-bottom:16px}
 .vet .vhead{display:flex;align-items:center;gap:10px;margin-bottom:6px}
@@ -451,15 +451,13 @@ button:hover{filter:brightness(1.04)}button:active{transform:translateY(1px)}but
 .bchip{font-size:12px;font-weight:700;padding:5px 10px;border-radius:20px;border:1.5px solid var(--line);background:#fff;cursor:pointer;color:var(--ink)}
 .bchip.on{background:#eef4ff;border-color:var(--sky);color:var(--sky)}
 .convene{width:100%;background:var(--sky);font-size:14px}
-.bout{margin-top:12px;font-size:13px;display:none}.bout .mtx{background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin-bottom:8px}
-.bout .dname{font-weight:800;font-size:12.5px;margin-top:8px}
 .boardpick{margin:0 0 12px}.boardpick .lab{font-size:13px;color:var(--muted);font-weight:700;margin-bottom:6px;text-align:left}
 .boardpick .opts{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-start}
 .bround{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:20px 22px;margin-bottom:20px}
 .bround h4{font-size:15px;font-weight:800;margin:0 0 12px}
 .balloons{display:flex;flex-direction:column;gap:8px}
 .balloon{border:1.5px solid var(--line);border-radius:14px;overflow:hidden}
-.balloon .bh{display:flex;align-items:center;gap:8px;padding:10px 13px;cursor:pointer;font-weight:800;font-size:13.5px;background:#fff;user-select:none}
+.balloon .bh{display:flex;align-items:center;gap:8px;width:100%;padding:10px 13px;cursor:pointer;font:inherit;font-weight:800;font-size:13.5px;color:var(--ink);background:#fff;border:0;border-radius:0;text-align:left}
 .balloon .bh:hover{background:var(--bg)}.balloon .bh .caret{margin-left:auto;color:var(--muted);font-size:12px;transition:transform .12s}
 .balloon.open .bh .caret{transform:rotate(90deg)}
 .balloon .bb{padding:0 13px 12px;font-size:13.5px;display:none}.balloon.open .bb{display:block}
@@ -516,11 +514,12 @@ button:hover{filter:brightness(1.04)}button:active{transform:translateY(1px)}but
 <div class=sec><h3>Your plan</h3><ul class=tree id=tree></ul>
 <button id=dl class=dl onclick=download() style="display:none;margin-top:12px">⬇ Download plan (.zip)</button></div>
 <div class="sec addons"><h3>Add-ons · ask an expert</h3><div class=ax id=addons></div>
-<div class="expert md" id=expert></div><div class=disc id=adisc></div></div>
+<div class=disc id=adisc></div></div>
 <div class="sec board" id=boardsec style="display:none"><h3>Board of Directors</h3>
+<p class=bhelp>Tap to add or drop a director, then convene them on your plan.</p>
 <div class=bdirs id=boarddirs></div>
 <button type=button class=convene id=convene onclick=convene()>Convene the board</button>
-<div class="bout md" id=boardout></div><div class=disc>AI composite directors — not real people, not professional advice.</div></div>
+<div class=disc>AI composite directors — not real people, not professional advice.</div></div>
 <div class=sec><h3>Research — graded</h3><div id=research></div></div>
 </aside>
 <main class=main>
@@ -575,7 +574,7 @@ function renderBoardRound(s){
   const r=reviews[reviews.length-1];   // the board's take on the section just finalized
   const balloons=(r.directors||[]).map((d,i)=>{
     const id='bal_'+i;
-    return `<div class=balloon id=${id}><div class=bh onclick="document.getElementById('${id}').classList.toggle('open')">💬 See what ${esc(d.name)} says<span class=caret>▸</span></div><div class="bb md">${mdToHtml(d.take)}</div></div>`;
+    return `<div class=balloon id=${id}><button type=button class=bh onclick="document.getElementById('${id}').classList.toggle('open')">💬 See what ${esc(d.name)} says<span class=caret>▸</span></button><div class="bb md">${mdToHtml(d.take)}</div></div>`;
   }).join('');
   const split=(r.conflicts&&r.conflicts.toLowerCase()!=='none')?`<span class=split>Where they split: ${esc(r.conflicts)}</span>`:'';
   el.innerHTML=`<div class=bround><h4>🗣️ Your board weighed in on “${esc(r.title)}”</h4>`+
@@ -740,7 +739,7 @@ async function submitDrawer(){
       const d=await r.json();go.disabled=false;
       if(!r.ok){out.innerHTML=esc(d.error||'Could not convene the board.');return;}
       const split=(d.conflicts&&d.conflicts.toLowerCase()!=='none')?`<span class=split>Where they split: ${esc(d.conflicts)}</span>`:'';
-      out.innerHTML=d.directors.map((x,i)=>`<div class=balloon id=dbal_${i}><div class=bh onclick="document.getElementById('dbal_${i}').classList.toggle('open')">💬 See what ${esc(x.name)} says<span class=caret>▸</span></div><div class="bb md">${mdToHtml(x.take)}</div></div>`).join('')+
+      out.innerHTML=d.directors.map((x,i)=>`<div class=balloon id=dbal_${i}><button type=button class=bh onclick="document.getElementById('dbal_${i}').classList.toggle('open')">💬 See what ${esc(x.name)} says<span class=caret>▸</span></button><div class="bb md">${mdToHtml(x.take)}</div></div>`).join('')+
         `<div class=takeaway><div class=tl>Board takeaway</div>${esc(d.verdict)}${split}</div>`+
         `<div class=disc>${esc(d.disclaimer||'')}</div>`;
     }
@@ -840,7 +839,7 @@ function renderPlans(d){
 async function resume(id){
   SID=id;show('workspace');SESSION_BOARD=null;
   const ab=document.getElementById('addons');if(ab)delete ab.dataset.done;
-  const ex=document.getElementById('expert');if(ex){ex.style.display='none';ex.innerHTML='';}
+  closeDrawer();
   try{const r=await fetch('/api/plan/'+SID,{headers:authHeaders()});const s=await r.json();render(s);if(s.status==='researching')poll();}catch(e){document.getElementById('err2').textContent='Could not load that plan.';}
 }
 function resumeDownload(id){SID=id;download();}
