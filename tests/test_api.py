@@ -71,3 +71,16 @@ def test_advisor_uses_drawer_not_native_prompt(client):
     assert 'class=drawer' in html and 'id=drawer-out' in html
     assert "function openDrawer" in html and "function submitDrawer" in html
     assert "prompt('Ask the advisor" not in html and "prompt('Ask your board" not in html
+
+
+def test_accessibility_essentials_present(client):
+    # Guards the UX-pass a11y baseline (WCAG/POUR) against regression.
+    html = client.get("/").text
+    assert "focus-visible{outline" in html            # visible keyboard focus
+    assert "prefers-reduced-motion" in html           # honors reduced motion
+    assert "role=dialog aria-modal=true" in html      # drawer is a real dialog
+    assert 'aria-live=polite' in html                 # screen-reader status
+    for lbl in ("<label for=idea", "<label for=email", "<label for=drawerq"):
+        assert lbl in html                            # inputs are labeled
+    assert "aria-pressed" in html                     # toggle chips expose state
+    assert "DRAWER_TRIGGER" in html                   # focus restored on drawer close

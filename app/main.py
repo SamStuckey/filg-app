@@ -486,24 +486,34 @@ button:hover{filter:brightness(1.04)}button:active{transform:translateY(1px)}but
 .integrations{background:var(--card);border:1px dashed var(--line);border-radius:16px;padding:16px 18px;margin-top:18px;color:var(--muted);font-size:14px}
 .empty{color:var(--muted);text-align:center;margin:30px 0}
 @media(max-width:820px){.workspace{grid-template-columns:1fr}.side{position:static}}
+/* ── accessibility ───────────────────────────────────────────── */
+a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,[tabindex]:focus-visible{outline:2.5px solid var(--sky);outline-offset:2px}
+@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+.tree button.f{width:100%;background:none;border:0;font:inherit;color:inherit;text-align:left;cursor:pointer;padding:0}
+.tree button.f:hover .nm{color:var(--sky)}
 </style></head><body><div class=page>
 <div class=top><h1 class=logo>FI<span>LG</span></h1><div class=authbar id=authbar></div></div>
 <div class=note-banner id=banner></div>
 <div class=intake id=intake>
 <h2>You've got a business in you. Let's find it. 🚀</h2>
 <p class=sub>Drop in your idea. You'll get the offer + the research graded — then we build the whole plan together, your call at every step.</p>
+<label for=idea class=sr-only>Your business idea</label>
 <textarea id=idea placeholder="e.g. I'm handy with automations and I think I could help dentists stop missing new-patient calls — but I don't know what to sell or how."></textarea>
 <div class=boardpick id=boardpick></div>
 <div id=authgate></div>
+<label for=email class=sr-only>Your email</label>
 <input id=email type=email placeholder="you@email.com">
 <button id=go class=go onclick=start()>Build my plan →</button>
 <div class=err id=err></div>
 </div>
 <div id=profile style="display:none"></div>
-<aside class=drawer id=drawer aria-hidden=true>
-<div class=dr-head><span id=drawer-title>Ask an expert</span><button type=button class=dr-x onclick=closeDrawer() aria-label=Close>×</button></div>
+<div id=live class=sr-only aria-live=polite></div>
+<aside class=drawer id=drawer role=dialog aria-modal=true aria-labelledby=drawer-title aria-hidden=true>
+<div class=dr-head><span id=drawer-title>Ask an expert</span><button type=button class=dr-x onclick=closeDrawer() aria-label="Close panel">×</button></div>
 <div class=dr-body>
 <p class=dr-sub id=drawer-sub></p>
+<label for=drawerq class=sr-only>Your question for the advisor</label>
 <textarea id=drawerq rows=3 placeholder="Ask a question — or leave blank for their honest take."></textarea>
 <button type=button class=dr-go id=drawer-go onclick=submitDrawer()>Ask →</button>
 <div class="dr-out md" id=drawer-out></div>
@@ -553,19 +563,26 @@ async function start(){
     poll();
   }catch(e){err.textContent='Network error.';go.disabled=false;go.textContent='Build my plan →';}
 }
+function say(msg){const l=document.getElementById('live'); if(l)l.textContent=msg;}  // announce to screen readers
 async function poll(){
   const r=await fetch('/api/plan/'+SID,{headers:authHeaders()});
   const s=await r.json();
   renderTree(s);renderAddons(s);     // show the plan outline immediately, even while researching
   if(s.status==='researching'){
     document.getElementById('node').innerHTML='<div class=node><span class=eyebrow>Working</span><h3>Researching + grading your market…</h3><p class=lead>Pulling sources and grading every number — vendor spin gets labeled, not laundered. ~1–2 min. Watch your plan fill in on the left.</p></div>';
+    say('Researching and grading your market.');
     setTimeout(poll,2500);return;
   }
   render(s);
 }
 function render(s){
-  if(s.status==='error'){document.getElementById('node').innerHTML='<div class=node><h3>Hit a snag</h3><p class=lead>'+esc(s.error)+'</p></div>';return;}
+  if(s.status==='error'){
+    document.getElementById('node').innerHTML='<div class=node><h3>Hit a snag</h3><p class=lead>'+esc(s.error)+'</p><button type=button onclick=newPlan()>Start over</button></div>';
+    say('Something went wrong: '+(s.error||'')); return;
+  }
   renderResearch(s);renderVet(s);renderAnswer(s);renderTree(s);renderNode(s);renderAddons(s);renderBoard(s);renderBoardRound(s);
+  if(s.done)say('Your plan is complete — all '+s.total+' parts ready to download.');
+  else if(s.vetting&&s.vetting.verdict)say('Research graded. Verdict: '+s.vetting.verdict+'. Ready to build part '+((s.step||0)+1)+'.');
 }
 function renderBoardRound(s){
   const el=document.getElementById('boardround'); if(!el)return;
@@ -596,10 +613,10 @@ function renderTree(s){
   document.getElementById('tree').innerHTML=(s.sections||[]).map((sec,i)=>{
     const nm=`<span class=nm>${esc(sec.title)}<span class=s>${esc(sec.sub||'')}</span></span>`;
     if(built[sec.file]!=null){
-      return `<li class="done built" onclick="var b=this.querySelector('.body');b.style.display=b.style.display==='block'?'none':'block'"><div class=f><span class=ic>✓</span>${nm}</div><div class="body md">${mdToHtml(built[sec.file])}</div></li>`;
+      return `<li class="done built"><button type=button class=f aria-expanded=false onclick="var b=this.parentNode.querySelector('.body');var o=b.style.display==='block';b.style.display=o?'none':'block';this.setAttribute('aria-expanded',String(!o))"><span class=ic aria-hidden=true>✓</span>${nm}</button><div class="body md">${mdToHtml(built[sec.file])}</div></li>`;
     }
-    if(!s.done&&i===step){return `<li class=active><div class=f><span class=ic>✍︎</span>${nm}</div></li>`;}
-    return `<li class=pending><div class=f><span class=ic>○</span>${nm}</div></li>`;
+    if(!s.done&&i===step){return `<li class=active><div class=f><span class=ic aria-hidden=true>✍︎</span>${nm}</div></li>`;}
+    return `<li class=pending><div class=f><span class=ic aria-hidden=true>○</span>${nm}</div></li>`;
   }).join('');
   const dl=document.getElementById('dl'); if(dl)dl.style.display=s.done?'block':'none';
 }
@@ -671,12 +688,13 @@ function personaName(key){const p=(CFG.archetypes||[]).find(a=>a.key===key);retu
 function renderBoardPick(){
   const el=document.getElementById('boardpick'); if(!el)return;
   const ax=CFG.archetypes||[]; if(!ax.length){el.innerHTML='';return;}
-  el.innerHTML=`<div class=lab>Pick your Board of Directors — they'll vet every step (optional):</div>`+
-    `<div class=opts>`+ax.map(a=>`<button type=button class="bchip${BOARD.includes(a.key)?' on':''}" onclick="toggleBoard('${a.key}',this)" title="${esc(a.blurb)}">${esc(a.name)}</button>`).join('')+`</div>`;
+  el.innerHTML=`<div class=lab id=boardpicklab>Pick your Board of Directors — they'll vet every step (optional):</div>`+
+    `<div class=opts role=group aria-labelledby=boardpicklab>`+ax.map(a=>`<button type=button class="bchip${BOARD.includes(a.key)?' on':''}" aria-pressed=${BOARD.includes(a.key)} onclick="toggleBoard('${a.key}',this)" title="${esc(a.blurb)}">${esc(a.name)}</button>`).join('')+`</div>`;
 }
 function toggleBoard(key,btn){
-  const i=BOARD.indexOf(key);
-  if(i>=0){BOARD.splice(i,1);btn&&btn.classList.remove('on');}else{BOARD.push(key);btn&&btn.classList.add('on');}
+  const i=BOARD.indexOf(key), on=i<0;
+  if(i>=0){BOARD.splice(i,1);}else{BOARD.push(key);}
+  if(btn){btn.classList.toggle('on',on);btn.setAttribute('aria-pressed',String(on));}
 }
 function renderBoard(s){
   const sec=document.getElementById('boardsec'); if(!sec)return;
@@ -685,20 +703,22 @@ function renderBoard(s){
   // Chips reflect the active board; tap to add/drop a director for on-demand convening.
   if(SESSION_BOARD===null) SESSION_BOARD=(s.directors&&s.directors.length?s.directors.slice():BOARD.slice());
   document.getElementById('boarddirs').innerHTML=(CFG.archetypes||[]).map(a=>
-    `<span class="bchip${SESSION_BOARD.includes(a.key)?' on':''}" onclick="toggleSessionBoard('${a.key}',this)" title="${esc(a.blurb)}">${esc(a.name)}</span>`).join('');
+    `<button type=button class="bchip${SESSION_BOARD.includes(a.key)?' on':''}" aria-pressed=${SESSION_BOARD.includes(a.key)} onclick="toggleSessionBoard('${a.key}',this)" title="${esc(a.blurb)}">${esc(a.name)}</button>`).join('');
 }
 let SESSION_BOARD=null;
 function toggleSessionBoard(key,el){
   if(SESSION_BOARD===null)SESSION_BOARD=[];
-  const i=SESSION_BOARD.indexOf(key);
-  if(i>=0){SESSION_BOARD.splice(i,1);el.classList.remove('on');}else{SESSION_BOARD.push(key);el.classList.add('on');}
+  const i=SESSION_BOARD.indexOf(key), on=i<0;
+  if(i>=0){SESSION_BOARD.splice(i,1);}else{SESSION_BOARD.push(key);}
+  el.classList.toggle('on',on);el.setAttribute('aria-pressed',String(on));
 }
 // Ask-an-expert + convene both open the advisor drawer (replaces the native prompt()).
 function ask(key){openDrawer('expert',key);}
 function convene(){openDrawer('board');}
-let DRAWER={mode:null,key:null};
+let DRAWER={mode:null,key:null}, DRAWER_TRIGGER=null;
 function openDrawer(mode,key){
   DRAWER={mode,key:key||null};
+  DRAWER_TRIGGER=document.activeElement;   // restore focus here on close (WCAG)
   const title=document.getElementById('drawer-title'),sub=document.getElementById('drawer-sub'),
         go=document.getElementById('drawer-go'),out=document.getElementById('drawer-out'),
         q=document.getElementById('drawerq');
@@ -714,13 +734,17 @@ function openDrawer(mode,key){
     sub.textContent=(chosen.length?('Convening: '+chosen.map(personaName).join(', ')):'Your full board')+' — AI composite directors, not professional advice.';
     go.textContent='Convene the board →';
   }
-  document.getElementById('drawer').classList.add('open');
+  const d=document.getElementById('drawer');
+  d.classList.add('open');d.setAttribute('aria-hidden','false');
   document.getElementById('drawerback').classList.add('show');
   setTimeout(()=>q.focus(),80);
 }
 function closeDrawer(){
-  document.getElementById('drawer').classList.remove('open');
+  const d=document.getElementById('drawer');
+  if(!d.classList.contains('open'))return;
+  d.classList.remove('open');d.setAttribute('aria-hidden','true');
   document.getElementById('drawerback').classList.remove('show');
+  if(DRAWER_TRIGGER&&DRAWER_TRIGGER.focus){DRAWER_TRIGGER.focus();DRAWER_TRIGGER=null;}
 }
 async function submitDrawer(){
   const q=document.getElementById('drawerq').value, go=document.getElementById('drawer-go'),
@@ -855,8 +879,16 @@ async function initAuth(){
   const {data}=await sb.auth.getSession();session=data.session;await loadMe();renderAuth();
 }
 document.addEventListener('keydown',function(e){
+  const d=document.getElementById('drawer'), open=d&&d.classList.contains('open');
   if(e.key==='Escape')closeDrawer();
   if((e.metaKey||e.ctrlKey)&&e.key==='Enter'&&e.target&&e.target.id==='drawerq')submitDrawer();
+  if(open&&e.key==='Tab'){   // trap focus inside the dialog
+    const f=d.querySelectorAll('button,textarea,input,a[href],[tabindex]:not([tabindex="-1"])');
+    if(!f.length)return;
+    const first=f[0], last=f[f.length-1];
+    if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}
+    else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}
+  }
 });
 initAuth();
 </script>
