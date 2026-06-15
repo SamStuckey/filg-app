@@ -197,6 +197,22 @@ async def share(job_id: str):
     return render_result_page(job)
 
 
+@app.get("/p/{sid}", response_class=HTMLResponse)
+async def share_plan(sid: str):
+    """Public, read-only view of a plan the owner explicitly shared (private by default)."""
+    s = store.plan_get(sid)
+    if not s or not s.get("shared"):
+        return HTMLResponse(
+            "<p style='font-family:sans-serif;max-width:520px;margin:60px auto;padding:0 22px'>"
+            "This plan isn't shared or doesn't exist.</p>", status_code=404)
+    idea = planner._working_idea(s)
+    inner = markdown.markdown(planner.bundle_markdown(idea, s.get("files") or {}), extensions=["extra"])
+    title = ((s.get("shaped") or {}).get("thesis") or s["idea"] or "Shared business plan")[:120]
+    article = (f'<article><span class="eyebrow">Shared business plan · built with FILG</span>'
+               f'{inner}{CTA}</article>')
+    return teardown.page_shell("Shared plan — FILG", title, article)
+
+
 # ── Interactive plan builder (idea → decision tree → downloadable file tree) ──
 def _identity(request: Request, body_email: str | None = None) -> tuple[str, bool]:
     """Resolve (user, verified) — a verified Supabase user wins; else the body email (free tier)."""
@@ -230,7 +246,7 @@ def _plan_state(s: dict) -> dict:
         "files": [{"path": p, "content": c} for p, c in (s.get("files") or {}).items()],
         "sections": [{"file": x["file"], "title": x["title"]} for x in planner.SECTIONS],
         "step": s.get("step", 0), "total": planner.N, "proposal": s.get("proposal"),
-        "done": s["status"] == "done",
+        "done": s["status"] == "done", "shared": bool(s.get("shared")),
     }
 
 
@@ -275,7 +291,8 @@ async def api_plans(request: Request):
         return JSONResponse({"error": "Sign in to see your plans."}, status_code=401)
     paid = _is_paid(authed["email"], verified=True)
     plans = [{"id": p["id"], "idea": p["idea"], "status": p["status"], "step": p["step"],
-              "created_at": p["created_at"], "done": p["status"] == "done"}
+              "created_at": p["created_at"], "done": p["status"] == "done",
+              "shared": bool(p.get("shared"))}
              for p in store.plan_list(authed["email"])]
     return {"email": authed["email"], "paid": paid, "total": planner.N, "plans": plans}
 
@@ -360,6 +377,31 @@ async def api_plan_board(sid: str, request: Request):
     return res
 
 
+@app.post("/api/plan/{sid}/delete")
+async def api_plan_delete(sid: str, request: Request):
+    """Permanently delete a plan (owner only). Note: deleting does NOT refund a free-tier run — each
+    build already cost compute (cost guardrail), so delete is for tidiness, not free re-rolls."""
+    s = store.plan_get(sid)
+    if not s or not _owns(request, s):
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    store.plan_delete(sid)
+    return {"ok": True}
+
+
+@app.post("/api/plan/{sid}/share")
+async def api_plan_share(sid: str, request: Request):
+    """Toggle a plan's public read-only share link (owner only). Body {shared: bool} (default true).
+    Returns the shareable URL. Plans are private by default — this opts one in."""
+    s = store.plan_get(sid)
+    if not s or not _owns(request, s):
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    body = await request.json()
+    shared = body.get("shared", True)
+    store.plan_set_shared(sid, shared)
+    base = (os.environ.get("FILG_PUBLIC_URL", "").rstrip("/") or str(request.base_url).rstrip("/"))
+    return {"shared": bool(shared), "url": f"{base}/p/{sid}" if shared else None}
+
+
 @app.get("/api/plan/{sid}/download")
 async def api_plan_download(sid: str, request: Request):
     s = store.plan_get(sid)
@@ -397,6 +439,7 @@ async def index():
 # ── Single-page plan-builder frontend (brand-aligned; no build step) ─────────
 PAGE = """<!doctype html><html lang=en><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1"><title>FILG — build your business plan, with receipts</title>
+<link rel="icon" href='data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"%3E%3Crect width="32" height="32" rx="8" fill="%23FF6B4A"/%3E%3Cpath d="M16 4c-3.2 2.8-4.3 7.4-4.3 11.8v3.2h8.6v-3.2C20.3 11.4 19.2 6.8 16 4z" fill="%23fff"/%3E%3Ccircle cx="16" cy="12" r="2.1" fill="%232E7CF6"/%3E%3Cpath d="M11.7 15.5 8.6 20.5l3.1-1.3z" fill="%23fff"/%3E%3Cpath d="M20.3 15.5 23.4 20.5l-3.1-1.3z" fill="%23fff"/%3E%3Cpath d="M13.6 19.5h4.8L16 25.5z" fill="%23FFC23F"/%3E%3C/svg%3E'>
 __FILG_HEAD__
 <style>
 :root{--bg:#FFFDF7;--ink:#1B1726;--muted:#6E6878;--line:#EFE9DD;--card:#fff;--coral:#FF6B4A;--coral-d:#E85535;--sky:#2E7CF6;--sun:#FFC23F;--ok-bg:#E7F5EC;--ok:#1E9E5A;--warn-bg:#FFF3E0;--warn:#C9740B}
@@ -404,7 +447,8 @@ __FILG_HEAD__
 .page{max-width:1140px;margin:0 auto;padding:22px 22px 72px}
 .top{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
 h1.logo{font-size:30px;font-weight:800;letter-spacing:-.02em;margin:0}.logo span{color:var(--coral)}
-.logobtn{background:none;border:0;padding:0;margin:0;font:inherit;color:inherit;letter-spacing:inherit;cursor:pointer}.logobtn:hover{opacity:.85}
+.logobtn{display:inline-flex;align-items:center;gap:8px;background:none;border:0;padding:0;margin:0;font:inherit;color:inherit;letter-spacing:inherit;cursor:pointer}.logobtn:hover{opacity:.85}
+.logomark{width:1.05em;height:1.05em;flex:none}
 .sub{color:var(--muted);margin:0 0 18px;font-size:17px}
 textarea,input{width:100%;padding:14px 16px;border:1.5px solid var(--line);border-radius:14px;font:inherit;background:#fff;margin-bottom:12px}
 textarea:focus,input:focus{outline:none;border-color:var(--sky)}textarea{min-height:120px;resize:vertical}
@@ -445,6 +489,11 @@ button:hover{filter:brightness(1.04)}button:active{transform:translateY(1px)}but
 .md h4,.md h5{font-weight:800;margin:12px 0 4px;line-height:1.3}.md h4{font-size:15px}.md h5{font-size:13.5px}.md>:first-child{margin-top:0}
 .md p{margin:0 0 8px}.md p:last-child{margin-bottom:0}.md ul{margin:6px 0 8px;padding-left:20px}.md li{margin:3px 0}
 .md a{color:var(--sky)}.md strong{font-weight:800}.md code{background:#fff;border:1px solid var(--line);border-radius:5px;padding:0 4px;font-size:.92em}
+.md table{border-collapse:collapse;width:100%;margin:12px 0;font-size:13.5px;overflow:hidden;border-radius:10px;border:1px solid var(--line)}
+.md th,.md td{border-bottom:1px solid var(--line);border-right:1px solid var(--line);padding:8px 11px;text-align:left;vertical-align:top}
+.md th:last-child,.md td:last-child{border-right:0}.md tbody tr:last-child td{border-bottom:0}
+.md thead th{background:var(--bg);font-weight:800;font-size:12.5px}
+.md tbody tr:nth-child(even){background:#fcfbf6}
 .lead{font-size:14px;color:var(--muted);margin:0 0 12px}
 .branches{display:flex;gap:10px;flex-wrap:wrap}.branches button{flex:1;min-width:130px;font-size:15px;padding:13px 12px}
 .b-but{background:var(--sky)}.b-no{background:#fff;color:var(--ink);border:1.5px solid var(--line)}
@@ -522,7 +571,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 .tree button.f{width:100%;background:none;border:0;font:inherit;color:inherit;text-align:left;cursor:pointer;padding:0}
 .tree button.f:hover .nm{color:var(--sky)}
 </style></head><body><div class=page>
-<div class=top><h1 class=logo><button type=button class=logobtn onclick=newPlan() aria-label="FILG — start a new idea">FI<span>LG</span></button></h1><div class=authbar id=authbar></div></div>
+<div class=top><h1 class=logo><button type=button class=logobtn onclick=newPlan() aria-label="FILG — start a new idea"><svg class=logomark viewBox="0 0 32 32" aria-hidden=true><rect width=32 height=32 rx=8 fill=#FF6B4A></rect><path d="M16 4c-3.2 2.8-4.3 7.4-4.3 11.8v3.2h8.6v-3.2C20.3 11.4 19.2 6.8 16 4z" fill=#fff></path><circle cx=16 cy=12 r=2.1 fill=#2E7CF6></circle><path d="M11.7 15.5 8.6 20.5l3.1-1.3z" fill=#fff></path><path d="M20.3 15.5 23.4 20.5l-3.1-1.3z" fill=#fff></path><path d="M13.6 19.5h4.8L16 25.5z" fill=#FFC23F></path></svg>FI<span>LG</span></button></h1><div class=authbar id=authbar></div></div>
 <div class=note-banner id=banner></div>
 <div class=intake id=intake>
 <h2>You've got a business in you. Let's find it. 🚀</h2>
@@ -556,7 +605,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <aside class=side>
 <div class=sec><h3>Your plan</h3><ul class=tree id=tree></ul>
 <button id=dl class=dl onclick=download() style="display:none;margin-top:12px">⬇ Download plan (.zip)</button></div>
-<div class="sec addons"><h3>Add-ons · ask an expert</h3><div class=ax id=addons></div>
+<div class="sec addons"><h3>Ask an expert</h3><div class=ax id=addons></div>
 <div class=disc id=adisc></div></div>
 <div class="sec board" id=boardsec style="display:none"><h3>Board of Directors</h3>
 <p class=bhelp>Tap to add or drop a director, then convene them on your plan.</p>
@@ -864,15 +913,27 @@ function mdToHtml(md){
   h=h.replace(/`([^`]+)`/g,'<code>$1</code>');
   h=h.replace(/\\*\\*([^*]+)\\*\\*/g,'<strong>$1</strong>');
   h=h.replace(/\\[([^\\]]+)\\]\\((https?:[^)\\s]+)\\)/g,'<a href="$2" target=_blank rel=noopener>$1</a>');
-  const out=[]; let inList=false;
-  h.split('\\n').forEach(function(ln){
-    let m;
-    if(m=ln.match(/^(#{1,6})\\s+(.*)$/)){if(inList){out.push('</ul>');inList=false;}const lvl=Math.min(m[1].length+3,5);out.push('<h'+lvl+'>'+m[2]+'</h'+lvl+'>');return;}
-    if(m=ln.match(/^\\s*[-*]\\s+(.*)$/)){if(!inList){out.push('<ul>');inList=true;}out.push('<li>'+m[1]+'</li>');return;}
-    if(ln.trim()===''){if(inList){out.push('</ul>');inList=false;}return;}
+  const lines=h.split('\\n'); const out=[]; let inList=false; let i=0;
+  const cells=function(r){return r.replace(/^\\s*\\|/,'').replace(/\\|\\s*$/,'').split('|').map(function(c){return c.trim();});};
+  const isRow=function(s){return /^\\s*\\|.*\\|\\s*$/.test(s);};
+  const isSep=function(s){return /^\\s*\\|?[\\s:|-]*-{2,}[\\s:|-]*$/.test(s);};
+  while(i<lines.length){
+    const ln=lines[i]; let m;
+    // markdown table: a '| ... |' header row followed by a '|---|---|' separator
+    if(isRow(ln)&&i+1<lines.length&&isSep(lines[i+1])){
+      if(inList){out.push('</ul>');inList=false;}
+      const head=cells(ln); const body=[]; i+=2;
+      while(i<lines.length&&isRow(lines[i])){body.push(cells(lines[i]));i++;}
+      let t='<table><thead><tr>'+head.map(function(c){return '<th>'+c+'</th>';}).join('')+'</tr></thead><tbody>';
+      t+=body.map(function(r){return '<tr>'+r.map(function(c){return '<td>'+c+'</td>';}).join('')+'</tr>';}).join('');
+      out.push(t+'</tbody></table>'); continue;
+    }
+    if(m=ln.match(/^(#{1,6})\\s+(.*)$/)){if(inList){out.push('</ul>');inList=false;}const lvl=Math.min(m[1].length+3,5);out.push('<h'+lvl+'>'+m[2]+'</h'+lvl+'>');i++;continue;}
+    if(m=ln.match(/^\\s*[-*]\\s+(.*)$/)){if(!inList){out.push('<ul>');inList=true;}out.push('<li>'+m[1]+'</li>');i++;continue;}
+    if(ln.trim()===''){if(inList){out.push('</ul>');inList=false;}i++;continue;}
     if(inList){out.push('</ul>');inList=false;}
-    out.push('<p>'+ln+'</p>');
-  });
+    out.push('<p>'+ln+'</p>');i++;
+  }
   if(inList)out.push('</ul>');
   return out.join('');
 }
@@ -932,7 +993,10 @@ async function showPlans(){
 function renderPlans(d){
   const rows=d.plans.length?d.plans.map(p=>{
     const meta=p.done?`Finished · ${d.total} parts`:(p.status==='researching'?'Researching…':`In progress · part ${(p.step||0)+1} of ${d.total}`);
-    const acts=`<button onclick="resume('${p.id}')">${p.done?'Open / iterate':'Resume'}</button>`+(p.done?`<button class=gbtn onclick="resumeDownload('${p.id}')">Download</button>`:'');
+    const acts=`<button onclick="resume('${p.id}')">${p.done?'Open / iterate':'Resume'}</button>`+
+      (p.done?`<button class=gbtn onclick="resumeDownload('${p.id}')">Download</button>`:'')+
+      `<button class=gbtn onclick="sharePlan('${p.id}')">${p.shared?'🔗 Shared':'Share'}</button>`+
+      `<button class=gbtn onclick="deletePlan('${p.id}')" aria-label="Delete plan">Delete</button>`;
     return `<div class=pcard><div><div class=idea>${esc((p.idea||'Untitled').slice(0,90))}</div><div class=meta>${meta} · ${esc(new Date(p.created_at).toLocaleDateString())}</div></div><div class=act><span class="pill ${p.done?'done':''}">${p.done?'done':'WIP'}</span>${acts}</div></div>`;
   }).join(''):`<p class=empty>No plans yet — build your first one.</p>`;
   const integ=d.paid?`<div class=integrations><b>Operator integrations</b> — CRM kickstarts &amp; more, coming soon.</div>`:`<div class=integrations>Upgrade to Operator for integrations (CRM kickstarts &amp; more) — coming soon.</div>`;
@@ -946,6 +1010,24 @@ async function resume(id){
   try{const r=await fetch('/api/plan/'+SID,{headers:authHeaders()});const s=await r.json();render(s);if(s.status==='researching')poll();}catch(e){document.getElementById('err2').textContent='Could not load that plan.';}
 }
 function resumeDownload(id){SID=id;download();}
+async function deletePlan(id){
+  if(!await uiConfirm('Delete this plan?','This permanently removes the plan. It won\\'t free up a free build.','Delete'))return;
+  try{
+    const r=await fetch('/api/plan/'+id+'/delete',{method:'POST',headers:authHeaders()});
+    if(!r.ok){toast('Could not delete.','err');return;}
+    toast('Plan deleted.'); showPlans();
+  }catch(e){toast('Network error.','err');}
+}
+async function sharePlan(id){
+  try{
+    const r=await fetch('/api/plan/'+id+'/share',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({shared:true})});
+    const d=await r.json();
+    if(!r.ok){toast(d.error||'Could not share.','err');return;}
+    try{await navigator.clipboard.writeText(d.url);toast('🔗 Share link copied to clipboard');}
+    catch(e){toast('Share link: '+d.url);}
+    showPlans();
+  }catch(e){toast('Network error.','err');}
+}
 function banner(msg){const b=document.getElementById('banner');b.textContent=msg;b.style.display='block';}
 async function initAuth(){
   const q=new URLSearchParams(location.search);

@@ -22,8 +22,8 @@ services:
         value: /var/data/filg.db
       - key: FILG_PAID_EMAILS      # secret — manual comp allowlist (real paid status comes from Stripe)
         sync: false
-      - key: FILG_FREE_RUNS        # free runs per user (cost guardrail)
-        value: "1"
+      - key: FILG_FREE_RUNS        # free plans per user (cost guardrail)
+        value: "3"
       - key: FILG_DAILY_BUDGET     # global $/day kill switch (cost guardrail)
         value: "5"                 # conservative launch default (~12 real runs/day); raise once validated
       - key: FILG_PUBLIC_URL       # public base url for Stripe checkout success/cancel redirects

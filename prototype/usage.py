@@ -13,7 +13,7 @@ Shares one DB file with the app's job store (`FILG_DB`, default `app/filg.db`); 
 persistent disk in production. Production proper: Postgres + Stripe entitlement.
 
 Env overrides:
-  FILG_FREE_RUNS     free runs per user            (default 1)
+  FILG_FREE_RUNS     free plans (runs) per user    (default 3)
   FILG_DAILY_BUDGET  global $/day kill switch       (default 20)
   FILG_DB            path to the shared sqlite db   (FILG_USAGE_DB still honored as a fallback)
 """
@@ -28,7 +28,7 @@ from datetime import date
 _HERE = os.path.dirname(os.path.abspath(__file__))
 DB = (os.environ.get("FILG_DB") or os.environ.get("FILG_USAGE_DB")
       or os.path.join(_HERE, "..", "app", "filg.db"))
-FREE_RUNS = int(os.environ.get("FILG_FREE_RUNS", "1"))
+FREE_RUNS = int(os.environ.get("FILG_FREE_RUNS", "3"))
 DAILY_BUDGET = float(os.environ.get("FILG_DAILY_BUDGET", "20"))
 
 _lock = threading.Lock()        # serialize the read-modify-write so the cap stays exact under load
@@ -78,7 +78,8 @@ def can_run(user_id: str, is_paid: bool = False) -> tuple[bool, str]:
                 return True, "ok (paid)"
             urow = con.execute("SELECT runs FROM usage_users WHERE user_id=?", (user_id,)).fetchone()
             if (urow["runs"] if urow else 0) >= FREE_RUNS:
-                return False, f"free limit reached ({FREE_RUNS} run) — upgrade to keep going"
+                plural = "s" if FREE_RUNS != 1 else ""
+                return False, f"free limit reached ({FREE_RUNS} plan{plural}) — upgrade to keep going"
             return True, "ok"
         finally:
             con.close()

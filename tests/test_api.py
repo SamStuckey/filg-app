@@ -84,6 +84,27 @@ def test_plan_ownership_enforced_when_auth_on(client, monkeypatch):
                       headers={"Authorization": "Bearer " + mint("owner@x.com")}).status_code == 200
 
 
+def test_share_and_delete(client):
+    from app import store
+    store.plan_create("sh1", "u@x.com", "guitar coaching idea")
+    store.plan_save("sh1", status="done", files={"1-the-setup.md": "# Setup\nThe plan."})
+    assert client.get("/p/sh1").status_code == 404            # private by default
+    r = client.post("/api/plan/sh1/share", json={"shared": True})
+    assert r.status_code == 200 and r.json()["url"].endswith("/p/sh1")
+    pub = client.get("/p/sh1")
+    assert pub.status_code == 200 and "Setup" in pub.text     # public read-only render
+    assert client.post("/api/plan/sh1/delete").status_code == 200
+    assert client.get("/api/plan/sh1").status_code == 404
+    assert client.get("/p/sh1").status_code == 404            # gone after delete
+
+
+def test_tables_favicon_and_headings(client):
+    html = client.get("/").text
+    assert "<table><thead><tr>" in html and ".md table{" in html  # client renders + styles md tables
+    assert 'rel="icon"' in html and "class=logomark" in html      # custom favicon + header mark
+    assert "<h3>Ask an expert</h3>" in html and "Add-ons ·" not in html
+
+
 def test_healthz(client):
     d = client.get("/healthz").json()
     assert d["ok"] is True and d["mock"] is True

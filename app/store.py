@@ -84,15 +84,18 @@ def init() -> None:
                     "  vetting TEXT,"               # JSON vet result {verdict, scores, first_test...}
                     "  directors TEXT,"             # JSON [persona_key] — the chosen Board of Directors
                     "  board TEXT,"                 # JSON [{section, ...review}] — per-step board reviews
+                    "  shared INTEGER NOT NULL DEFAULT 0,"  # 1 → readable at the public /p/{id} share link
                     "  cost REAL NOT NULL DEFAULT 0,"
                     "  error TEXT,"
                     "  created_at TEXT NOT NULL)")
-                # Migration for DBs created before the intake/vet/board columns existed (SQLite has no
-                # ADD COLUMN IF NOT EXISTS) — add any missing ones, ignore if already present.
+                # Migration for DBs created before later columns existed (SQLite has no ADD COLUMN IF
+                # NOT EXISTS) — add any missing ones, ignore if already present.
                 have = {r["name"] for r in con.execute("PRAGMA table_info(plan_sessions)")}
                 for col in ("shaped", "vetting", "directors", "board"):
                     if col not in have:
                         con.execute(f"ALTER TABLE plan_sessions ADD COLUMN {col} TEXT")
+                if "shared" not in have:
+                    con.execute("ALTER TABLE plan_sessions ADD COLUMN shared INTEGER NOT NULL DEFAULT 0")
         finally:
             con.close()
         _initialized = True
@@ -263,12 +266,35 @@ def plan_list(user: str, limit: int = 50) -> list[dict]:
     con = _connect()
     try:
         rows = con.execute(
-            "SELECT id, idea, status, step, created_at FROM plan_sessions "
+            "SELECT id, idea, status, step, shared, created_at FROM plan_sessions "
             "WHERE user=? ORDER BY created_at DESC LIMIT ?",
             (user.strip().lower(), limit)).fetchall()
     finally:
         con.close()
     return [dict(r) for r in rows]
+
+
+def plan_set_shared(session_id: str, shared: bool) -> None:
+    """Toggle whether a plan is readable at its public /p/{id} share link."""
+    init()
+    con = _connect()
+    try:
+        with con:
+            con.execute("UPDATE plan_sessions SET shared=? WHERE id=?",
+                        (1 if shared else 0, session_id))
+    finally:
+        con.close()
+
+
+def plan_delete(session_id: str) -> None:
+    """Permanently remove a plan session."""
+    init()
+    con = _connect()
+    try:
+        with con:
+            con.execute("DELETE FROM plan_sessions WHERE id=?", (session_id,))
+    finally:
+        con.close()
 
 
 if __name__ == "__main__":  # quick self-test (no API)
@@ -308,4 +334,12 @@ if __name__ == "__main__":  # quick self-test (no API)
     assert plan_get("nope") is None
     mine = plan_list("u@x.com")
     assert len(mine) == 1 and mine[0]["id"] == "pl1" and plan_list("nobody@x.com") == []
+    # share toggle + delete
+    assert plan_get("pl1")["shared"] == 0 and mine[0]["shared"] == 0
+    plan_set_shared("pl1", True)
+    assert plan_get("pl1")["shared"] == 1
+    plan_set_shared("pl1", False)
+    assert plan_get("pl1")["shared"] == 0
+    plan_delete("pl1")
+    assert plan_get("pl1") is None and plan_list("u@x.com") == []
     print("store.py self-test OK")
