@@ -60,6 +60,29 @@ def test_unknown_session_404(client):
     assert client.get("/api/plan/nope").status_code == 404
 
 
+def test_plan_ownership_enforced_when_auth_on(client, monkeypatch):
+    # With auth enabled, an owned plan is private: only the owner's verified token can load it.
+    import base64, hashlib, hmac, json, time
+    from app import auth, store
+    secret = "test-secret"
+    monkeypatch.setattr(auth, "JWT_SECRET", secret)
+    monkeypatch.setattr(auth, "AUTH_ENABLED", True)
+
+    def mint(email):
+        seg = lambda d: base64.urlsafe_b64encode(json.dumps(d).encode()).rstrip(b"=").decode()
+        h, p = seg({"alg": "HS256", "typ": "JWT"}), seg({"sub": "u", "email": email, "exp": time.time() + 60})
+        sig = base64.urlsafe_b64encode(
+            hmac.new(secret.encode(), f"{h}.{p}".encode(), hashlib.sha256).digest()).rstrip(b"=").decode()
+        return f"{h}.{p}.{sig}"
+
+    store.plan_create("own1", "owner@x.com", "an idea about dentists")
+    assert client.get("/api/plan/own1").status_code == 404  # no token → private
+    assert client.get("/api/plan/own1",
+                      headers={"Authorization": "Bearer " + mint("other@x.com")}).status_code == 404
+    assert client.get("/api/plan/own1",
+                      headers={"Authorization": "Bearer " + mint("owner@x.com")}).status_code == 200
+
+
 def test_healthz(client):
     d = client.get("/healthz").json()
     assert d["ok"] is True and d["mock"] is True

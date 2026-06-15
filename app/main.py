@@ -206,6 +206,20 @@ def _identity(request: Request, body_email: str | None = None) -> tuple[str, boo
     return (body_email or "").strip().lower(), False
 
 
+def _owns(request: Request, session: dict) -> bool:
+    """Whether the requester may access this plan session. When auth is OFF (free/dev), the id is the
+    capability and there's no identity to enforce, so allow. When auth is ON, a session owned by a
+    verified email is private: require the requester's verified email to match. Ownerless legacy/anon
+    sessions stay open. Callers return 404 (not 403) on failure so a plan's existence doesn't leak."""
+    if not auth.AUTH_ENABLED:
+        return True
+    owner = (session.get("user") or "").strip().lower()
+    if not owner:
+        return True
+    authed = auth.user_from_request(request)
+    return bool(authed and (authed["email"] or "").strip().lower() == owner)
+
+
 def _plan_state(s: dict) -> dict:
     """Shape a session row for the frontend."""
     return {
@@ -267,9 +281,9 @@ async def api_plans(request: Request):
 
 
 @app.get("/api/plan/{sid}")
-async def api_plan_get(sid: str):
+async def api_plan_get(sid: str, request: Request):
     s = store.plan_get(sid)
-    if not s:
+    if not s or not _owns(request, s):
         return JSONResponse({"error": "unknown session"}, status_code=404)
     return _plan_state(s)
 
@@ -277,7 +291,7 @@ async def api_plan_get(sid: str):
 @app.post("/api/plan/{sid}/respond")
 async def api_plan_respond(sid: str, request: Request):
     s = store.plan_get(sid)
-    if not s:
+    if not s or not _owns(request, s):
         return JSONResponse({"error": "unknown session"}, status_code=404)
     if s["status"] != "building":
         return JSONResponse({"error": f"session is {s['status']}"}, status_code=409)
@@ -302,7 +316,7 @@ async def api_plan_respond(sid: str, request: Request):
 async def api_plan_ask(sid: str, request: Request):
     """Add-on: ask a composite archetype advisor about the plan-in-progress."""
     s = store.plan_get(sid)
-    if not s:
+    if not s or not _owns(request, s):
         return JSONResponse({"error": "unknown session"}, status_code=404)
     body = await request.json()
     archetype = body.get("archetype")
@@ -325,7 +339,7 @@ async def api_plan_board(sid: str, request: Request):
     matrix (agreement / conflict / net verdict). `directors` in the body re-picks + persists the
     board; otherwise the session's board (or the default starter board) is used."""
     s = store.plan_get(sid)
-    if not s:
+    if not s or not _owns(request, s):
         return JSONResponse({"error": "unknown session"}, status_code=404)
     body = await request.json()
     picked = body.get("directors")
@@ -349,7 +363,9 @@ async def api_plan_board(sid: str, request: Request):
 @app.get("/api/plan/{sid}/download")
 async def api_plan_download(sid: str, request: Request):
     s = store.plan_get(sid)
-    if not s or s["status"] != "done":
+    if not s or not _owns(request, s):
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    if s["status"] != "done":
         return JSONResponse({"error": "plan isn't finished yet"}, status_code=400)
     user, verified = _identity(request)
     if not _is_paid(user, verified):
