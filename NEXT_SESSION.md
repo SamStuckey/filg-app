@@ -1,5 +1,34 @@
 # NEXT SESSION — pick up here
 
+## ⏭️ Quick restart (read first)
+**Do first:** load the personal `personal-architecture` skill (it wasn't available in the last
+session — that environment only had the project skill + defaults).
+
+**Immediate pending task — split FILG into app + docs repos** per your paired-repo convention
+(`<project>-app`/`-service`/`-site` + `<project>-docs`). Decision was left to you (3 options offered,
+dismissed — waiting on you):
+- A) keep `fuckitletsgo` as the app repo + add `fuckitletsgo-docs` (no rename → Render link untouched). *recommended/lowest-risk*
+- B) rename → `filg-app` + create `filg-docs` (re-points the Render deploy link; verify after)
+- C) rename → `fuckitletsgo-app` + `fuckitletsgo-docs` (same Render caveat)
+
+Proposed file mapping:
+- **app repo:** `app/` · `prototype/` · `landing/` · `teardowns/` · `Dockerfile` · `render.yaml` ·
+  `requirements.txt` · `.env.example` · `.gitignore` · `CLAUDE.md` · `DEPLOY.md` · `README.md`
+- **docs repo:** `00_brief.md` · `business_plan.md` · `validation_strategy.md` · `vet.md` ·
+  `launch_todo.md` · `sprint_todos.md` · `research_findings.md` · `GRADUATION.md` · `NEXT_SESSION.md` ·
+  `copy_bank.md` · `dogfood_run_01.md` · `dogfood_run_02.md`
+- Constraints: Render deploys from `fuckitletsgo` (rename usually survives via repo-ID + GitHub
+  redirect, but verify); a history-preserving split needs local `git` (the last env's git remote was
+  scoped to one repo); the new `-docs` repo must be added to session scope before writing to it.
+
+**State of the product (all on `main`, pushed):** app is live on Render (`filg.onrender.com`);
+`fuckitletsgo.ai` live w/ TLS; `filg.ai` DNS pointed (A `@`→216.24.57.1, CNAME `www`→filg.onrender.com),
+verifying. Auth+profiles, Stripe billing, and the plan-builder overhaul are BUILT but auth/billing are
+OFF until Supabase/Stripe env is set (runbook: `DEPLOY.md` §4–5). Everything mock-verified; real-LLM
+path untested in the cloud env (no key there). Details below.
+
+---
+
 > Handoff note. Last session: shipped persistence + auth/billing, **deployed the free tier live on
 > Render**, pointed the domain, and scoped the monetization work. Next: build the monetization flow.
 
