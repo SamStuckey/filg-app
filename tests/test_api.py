@@ -63,3 +63,11 @@ def test_unknown_session_404(client):
 def test_healthz(client):
     d = client.get("/healthz").json()
     assert d["ok"] is True and d["mock"] is True
+
+
+def test_advisor_uses_drawer_not_native_prompt(client):
+    # Ask-an-expert / convene must use the flyout drawer, never the native prompt() dialog.
+    html = client.get("/").text
+    assert 'class=drawer' in html and 'id=drawer-out' in html
+    assert "function openDrawer" in html and "function submitDrawer" in html
+    assert "prompt('Ask the advisor" not in html and "prompt('Ask your board" not in html

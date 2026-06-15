@@ -466,6 +466,17 @@ button:hover{filter:brightness(1.04)}button:active{transform:translateY(1px)}but
 .takeaway{margin-top:14px;background:var(--ok-bg);border:1px solid #cfe9d8;border-radius:14px;padding:13px 15px;font-size:14px}
 .takeaway .tl{font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--ok);margin-bottom:5px}
 .takeaway .split{display:block;margin-top:6px;color:var(--muted);font-size:13px}
+.drawer-back{position:fixed;inset:0;background:rgba(20,17,14,.38);opacity:0;visibility:hidden;transition:opacity .2s;z-index:40}
+.drawer-back.show{opacity:1;visibility:visible}
+.drawer{position:fixed;top:0;right:0;height:100vh;width:min(440px,93vw);background:var(--card);border-left:1px solid var(--line);box-shadow:-14px 0 44px rgba(20,17,14,.14);transform:translateX(101%);transition:transform .24s cubic-bezier(.4,0,.2,1);z-index:41;display:flex;flex-direction:column}
+.drawer.open{transform:translateX(0)}
+.dr-head{display:flex;align-items:center;justify-content:space-between;padding:20px 22px;border-bottom:1px solid var(--line);flex:none}
+.dr-head span{font-size:18px;font-weight:800;letter-spacing:-.01em}
+.dr-x{background:none;color:var(--muted);font-size:26px;line-height:1;padding:0 6px;font-weight:400}.dr-x:hover{color:var(--ink)}
+.dr-body{padding:18px 22px 26px;overflow-y:auto;flex:1}
+.dr-sub{color:var(--muted);font-size:13px;margin:0 0 12px}
+.dr-go{width:100%;margin-top:2px;background:var(--sky)}
+.dr-out{margin-top:18px;font-size:14px;display:none}.dr-out .balloon+.balloon{margin-top:8px}
 .authgate{margin:6px 0 2px}.authgate button{width:100%;margin-bottom:8px}
 .gbtn{background:#fff;color:var(--ink);border:1.5px solid var(--line);font-weight:800}
 .authgate .or{color:var(--muted);font-size:13px;margin:4px 0 0}
@@ -491,6 +502,15 @@ button:hover{filter:brightness(1.04)}button:active{transform:translateY(1px)}but
 <div class=err id=err></div>
 </div>
 <div id=profile style="display:none"></div>
+<aside class=drawer id=drawer aria-hidden=true>
+<div class=dr-head><span id=drawer-title>Ask an expert</span><button type=button class=dr-x onclick=closeDrawer() aria-label=Close>×</button></div>
+<div class=dr-body>
+<p class=dr-sub id=drawer-sub></p>
+<textarea id=drawerq rows=3 placeholder="Ask a question — or leave blank for their honest take."></textarea>
+<button type=button class=dr-go id=drawer-go onclick=submitDrawer()>Ask →</button>
+<div class="dr-out md" id=drawer-out></div>
+</div></aside>
+<div class=drawer-back id=drawerback onclick=closeDrawer()></div>
 <div class=workspace id=workspace style="display:none">
 <aside class=side>
 <div class=sec><h3>Your plan</h3><ul class=tree id=tree></ul>
@@ -674,30 +694,57 @@ function toggleSessionBoard(key,el){
   const i=SESSION_BOARD.indexOf(key);
   if(i>=0){SESSION_BOARD.splice(i,1);el.classList.remove('on');}else{SESSION_BOARD.push(key);el.classList.add('on');}
 }
-async function convene(){
-  const btn=document.getElementById('convene'),out=document.getElementById('boardout');
-  const q=prompt('Ask your board about the plan (optional):'); if(q===null)return;
-  out.style.display='block';out.innerHTML='<p class=lead>Convening the board…</p>';btn.disabled=true;
-  const body={question:q}; if(SESSION_BOARD!==null)body.directors=SESSION_BOARD;
-  try{
-    const r=await fetch('/api/plan/'+SID+'/board',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify(body)});
-    const d=await r.json();btn.disabled=false;
-    if(!r.ok){out.innerHTML=esc(d.error||'Could not convene the board.');return;}
-    out.innerHTML=d.directors.map(x=>`<div class=mtx><div class=dname>${esc(x.name)}</div>${mdToHtml(x.take)}</div>`).join('')+
-      `<div class=mtx><div class=dname>Consensus</div>${esc(d.consensus)}</div>`+
-      (d.conflicts&&d.conflicts.toLowerCase()!=='none'?`<div class=mtx><div class=dname>Conflict</div>${esc(d.conflicts)}</div>`:'')+
-      `<div class=mtx><div class=dname>Net verdict</div><b>${esc(d.verdict)}</b></div>`;
-  }catch(e){btn.disabled=false;out.innerHTML='Network error.';}
+// Ask-an-expert + convene both open the advisor drawer (replaces the native prompt()).
+function ask(key){openDrawer('expert',key);}
+function convene(){openDrawer('board');}
+let DRAWER={mode:null,key:null};
+function openDrawer(mode,key){
+  DRAWER={mode,key:key||null};
+  const title=document.getElementById('drawer-title'),sub=document.getElementById('drawer-sub'),
+        go=document.getElementById('drawer-go'),out=document.getElementById('drawer-out'),
+        q=document.getElementById('drawerq');
+  out.style.display='none';out.innerHTML='';q.value='';go.disabled=false;
+  if(mode==='expert'){
+    const p=(CFG.archetypes||[]).find(a=>a.key===key)||{};
+    title.textContent=p.name||'Ask an expert';
+    sub.textContent=(p.blurb?('Composite advisor · '+p.blurb):'AI composite advisor')+' — not professional advice.';
+    go.textContent='Ask '+(p.name||'the advisor')+' →';
+  }else{
+    const chosen=(SESSION_BOARD&&SESSION_BOARD.length?SESSION_BOARD:(CFG.defaultBoard||[]));
+    title.textContent='Your Board of Directors';
+    sub.textContent=(chosen.length?('Convening: '+chosen.map(personaName).join(', ')):'Your full board')+' — AI composite directors, not professional advice.';
+    go.textContent='Convene the board →';
+  }
+  document.getElementById('drawer').classList.add('open');
+  document.getElementById('drawerback').classList.add('show');
+  setTimeout(()=>q.focus(),80);
 }
-async function ask(key){
-  const out=document.getElementById('expert'); out.style.display='block';
-  const q=prompt('Ask the advisor about your plan (optional):'); if(q===null)return;
-  out.textContent='Thinking…';
+function closeDrawer(){
+  document.getElementById('drawer').classList.remove('open');
+  document.getElementById('drawerback').classList.remove('show');
+}
+async function submitDrawer(){
+  const q=document.getElementById('drawerq').value, go=document.getElementById('drawer-go'),
+        out=document.getElementById('drawer-out');
+  out.style.display='block';
+  out.innerHTML='<p class=lead>'+(DRAWER.mode==='board'?'Convening the board…':'Thinking…')+'</p>';
+  go.disabled=true;
   try{
-    const r=await fetch('/api/plan/'+SID+'/ask',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({archetype:key,question:q})});
-    const d=await r.json();
-    if(r.ok){out.innerHTML=mdToHtml(d.answer);}else{out.textContent=d.error||'Could not reach the advisor.';}
-  }catch(e){out.textContent='Network error.';}
+    if(DRAWER.mode==='expert'){
+      const r=await fetch('/api/plan/'+SID+'/ask',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({archetype:DRAWER.key,question:q})});
+      const d=await r.json();go.disabled=false;
+      out.innerHTML=r.ok?mdToHtml(d.answer):esc(d.error||'Could not reach the advisor.');
+    }else{
+      const body={question:q}; if(SESSION_BOARD!==null)body.directors=SESSION_BOARD;
+      const r=await fetch('/api/plan/'+SID+'/board',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify(body)});
+      const d=await r.json();go.disabled=false;
+      if(!r.ok){out.innerHTML=esc(d.error||'Could not convene the board.');return;}
+      const split=(d.conflicts&&d.conflicts.toLowerCase()!=='none')?`<span class=split>Where they split: ${esc(d.conflicts)}</span>`:'';
+      out.innerHTML=d.directors.map((x,i)=>`<div class=balloon id=dbal_${i}><div class=bh onclick="document.getElementById('dbal_${i}').classList.toggle('open')">💬 See what ${esc(x.name)} says<span class=caret>▸</span></div><div class="bb md">${mdToHtml(x.take)}</div></div>`).join('')+
+        `<div class=takeaway><div class=tl>Board takeaway</div>${esc(d.verdict)}${split}</div>`+
+        `<div class=disc>${esc(d.disclaimer||'')}</div>`;
+    }
+  }catch(e){go.disabled=false;out.innerHTML='Network error.';}
 }
 async function download(){
   try{
@@ -808,6 +855,10 @@ async function initAuth(){
   sb.auth.onAuthStateChange(async (_e,s)=>{session=s;await loadMe();renderAuth();});
   const {data}=await sb.auth.getSession();session=data.session;await loadMe();renderAuth();
 }
+document.addEventListener('keydown',function(e){
+  if(e.key==='Escape')closeDrawer();
+  if((e.metaKey||e.ctrlKey)&&e.key==='Enter'&&e.target&&e.target.id==='drawerq')submitDrawer();
+});
 initAuth();
 </script>
 </div></body></html>"""
