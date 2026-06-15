@@ -554,7 +554,8 @@ button:hover{filter:brightness(1.04)}button:active{transform:translateY(1px)}but
 .toast{background:var(--ink);color:#fff;padding:11px 18px;border-radius:12px;font-size:14px;font-weight:700;box-shadow:0 8px 24px rgba(20,17,14,.2);transition:opacity .3s,transform .3s;max-width:90vw}
 .toast.err{background:var(--coral-d)}.toast.out{opacity:0;transform:translateY(8px)}
 .authgate{margin:6px 0 2px}.authgate button{width:100%;margin-bottom:8px}
-.gbtn{background:#fff;color:var(--ink);border:1.5px solid var(--line);font-weight:800}
+.gbtn{display:flex;align-items:center;justify-content:center;gap:10px;background:#fff;color:var(--ink);border:1.5px solid var(--line);font-weight:800}
+.gicon{width:18px;height:18px;flex:none}
 .authgate .or{color:var(--muted);font-size:13px;margin:4px 0 0}
 .plans{max-width:760px;margin:8px auto}.plans h2{font-size:24px;font-weight:800;margin:8px 0 4px}
 .pcard{display:flex;justify-content:space-between;align-items:center;gap:12px;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px 18px;margin-bottom:12px}
@@ -957,8 +958,8 @@ function gateIntake(){
   if(CFG.authEnabled&&!session){
     email.style.display='none';go.style.display='none';
     gate.innerHTML=`<div class=authgate>`+
-      (CFG.supabaseUrl?`<button class=gbtn onclick=signinGoogle()>Continue with Google</button>`:'')+
-      `<button class=gbtn onclick=signinEmail()>Email me a sign-in link</button>`+
+      (CFG.supabaseUrl?`<button class=gbtn onclick=signinGoogle()><svg class=gicon viewBox="0 0 18 18" aria-hidden=true><path fill="#4285F4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.92c1.71-1.57 2.68-3.89 2.68-6.62z"></path><path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.92-2.26c-.81.54-1.84.86-3.04.86-2.34 0-4.32-1.58-5.03-3.7H.96v2.33A9 9 0 0 0 9 18z"></path><path fill="#FBBC05" d="M3.97 10.72a5.4 5.4 0 0 1 0-3.44V4.95H.96a9 9 0 0 0 0 8.1l3.01-2.33z"></path><path fill="#EA4335" d="M9 3.58c1.32 0 2.5.45 3.44 1.35l2.58-2.58C13.46.9 11.43 0 9 0A9 9 0 0 0 .96 4.95l3.01 2.33C4.68 5.16 6.66 3.58 9 3.58z"></path></svg>Continue with Google</button>`:'')+
+      `<button class=gbtn onclick=signinEmail()>✉️ Email me a sign-in link</button>`+
       `<p class=or>Free to start — sign in so your plans save to your profile.</p></div>`;
   }else{gate.innerHTML='';go.style.display='';email.style.display=CFG.authEnabled?'none':'';}
 }
