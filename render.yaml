@@ -28,12 +28,12 @@ services:
         value: "5"                 # conservative launch default (~12 real runs/day); raise once validated
       - key: FILG_PUBLIC_URL       # public base url for Stripe checkout success/cancel redirects
         value: https://fuckitletsgo.ai
-      # ── Auth (Supabase) — leave blank for free-tier-only launch ──
-      - key: SUPABASE_URL          # project url (frontend) — e.g. https://xxxx.supabase.co
+      # ── Auth (Supabase, asymmetric/JWKS) — leave blank for free-tier-only launch ──
+      # Server verifies user JWTs against the project's public JWKS via SUPABASE_URL — no shared
+      # secret. Needs an asymmetric signing key active (Settings → JWT Keys).
+      - key: SUPABASE_URL              # project url; also the JWKS source for token verification
         sync: false
-      - key: SUPABASE_ANON_KEY     # publishable anon key (frontend)
-        sync: false
-      - key: SUPABASE_JWT_SECRET   # secret — verifies user JWTs server-side (Settings → API → JWT Secret)
+      - key: SUPABASE_PUBLISHABLE_KEY  # sb_publishable_… (frontend) — safe in the browser
         sync: false
       # ── Billing (Stripe) — leave blank until you're ready to charge ──
       - key: STRIPE_SECRET_KEY     # secret — sk_live_… / sk_test_…

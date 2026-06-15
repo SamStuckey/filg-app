@@ -62,18 +62,19 @@ def test_unknown_session_404(client):
 
 def test_plan_ownership_enforced_when_auth_on(client, monkeypatch):
     # With auth enabled, an owned plan is private: only the owner's verified token can load it.
-    import base64, hashlib, hmac, json, time
+    # Mint ES256 tokens like Supabase's asymmetric system and point the verifier at our public key.
+    import time, types
+    import jwt
+    from cryptography.hazmat.primitives.asymmetric import ec
     from app import auth, store
-    secret = "test-secret"
-    monkeypatch.setattr(auth, "JWT_SECRET", secret)
+    priv = ec.generate_private_key(ec.SECP256R1())
     monkeypatch.setattr(auth, "AUTH_ENABLED", True)
+    monkeypatch.setattr(auth, "_jwk_client", types.SimpleNamespace(
+        get_signing_key_from_jwt=lambda t: types.SimpleNamespace(key=priv.public_key())))
 
     def mint(email):
-        seg = lambda d: base64.urlsafe_b64encode(json.dumps(d).encode()).rstrip(b"=").decode()
-        h, p = seg({"alg": "HS256", "typ": "JWT"}), seg({"sub": "u", "email": email, "exp": time.time() + 60})
-        sig = base64.urlsafe_b64encode(
-            hmac.new(secret.encode(), f"{h}.{p}".encode(), hashlib.sha256).digest()).rstrip(b"=").decode()
-        return f"{h}.{p}.{sig}"
+        return jwt.encode({"sub": "u", "email": email, "aud": "authenticated", "exp": time.time() + 60},
+                          priv, algorithm="ES256", headers={"kid": "test"})
 
     store.plan_create("own1", "owner@x.com", "an idea about dentists")
     assert client.get("/api/plan/own1").status_code == 404  # no token → private

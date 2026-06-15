@@ -1,52 +1,59 @@
 #!/usr/bin/env python3
 """
-Supabase auth — verify the JWT Supabase issues, with a dev fallback.
+Supabase auth — verify user JWTs against the project's ASYMMETRIC signing keys (JWKS).
 
-Supabase signs user JWTs HS256 with the project's JWT secret (Dashboard → Project Settings → API →
-JWT Secret). We verify signature + expiry with stdlib `hmac` — no PyJWT/`cryptography` dependency, so
-it runs anywhere. Identity is the token's email: the same key we bill on.
+Supabase's current system signs user tokens with an asymmetric key (ES256/RS256) and publishes the
+PUBLIC half at the project's JWKS endpoint. We fetch that public key and verify the signature with it,
+so this server never holds a forge-able signing secret — it only needs the public `SUPABASE_URL`.
+(We deliberately moved off the legacy HS256 shared-secret path, which Supabase is deprecating.)
 
-If `SUPABASE_JWT_SECRET` is unset (local / mock / dev), auth is "off": callers fall back to the email
-typed in the request body as an UNVERIFIED identity. That keeps the free tier frictionless (try it
-with just an email) while the paid tier is always gated on a verified user (see main.py).
+Identity is the token's email — the same key we bill on. Verification also requires `aud=authenticated`,
+so only real signed-in users pass (not anon tokens).
+
+If `SUPABASE_URL` is unset (local / mock / dev), auth is "off": callers fall back to the email typed
+in the request body as an UNVERIFIED identity. That keeps the free tier frictionless while the paid
+tier is always gated on a verified user (see main.py).
 """
 
 from __future__ import annotations
 
-import base64
-import hashlib
-import hmac
-import json
 import os
-import time
 
-JWT_SECRET = os.environ.get("SUPABASE_JWT_SECRET", "")
-AUTH_ENABLED = bool(JWT_SECRET)
+import jwt  # PyJWT (+ cryptography for ES256/RS256) — see requirements.txt
+from jwt import PyJWKClient
+
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
+AUTH_ENABLED = bool(SUPABASE_URL)
+
+_ALGORITHMS = ["ES256", "RS256"]   # Supabase asymmetric signing keys (ECC P-256 / RSA)
+_AUDIENCE = "authenticated"        # signed-in users; rejects anon tokens
+_JWKS_PATH = "/auth/v1/.well-known/jwks.json"
+
+_jwk_client: PyJWKClient | None = None
 
 
-def _b64url_decode(seg: str) -> bytes:
-    return base64.urlsafe_b64decode(seg + "=" * (-len(seg) % 4))
+def _client() -> PyJWKClient | None:
+    """Lazily build + cache the JWKS client (it caches fetched public keys internally)."""
+    global _jwk_client
+    if _jwk_client is None and SUPABASE_URL:
+        _jwk_client = PyJWKClient(f"{SUPABASE_URL}{_JWKS_PATH}")
+    return _jwk_client
 
 
 def verify_token(token: str) -> dict | None:
-    """Return the claims of a valid, unexpired Supabase HS256 token, else None."""
-    if not JWT_SECRET or not token or token.count(".") != 2:
+    """Return the claims of a valid, unexpired Supabase token (signature checked against the project's
+    public JWKS, aud=authenticated), else None."""
+    if not AUTH_ENABLED or not token or token.count(".") != 2:
         return None
-    header_b64, payload_b64, sig_b64 = token.split(".")
+    client = _client()
+    if client is None:
+        return None
     try:
-        if json.loads(_b64url_decode(header_b64)).get("alg") != "HS256":
-            return None
-        expected = hmac.new(JWT_SECRET.encode(), f"{header_b64}.{payload_b64}".encode(),
-                            hashlib.sha256).digest()
-        if not hmac.compare_digest(expected, _b64url_decode(sig_b64)):
-            return None
-        claims = json.loads(_b64url_decode(payload_b64))
-    except (ValueError, KeyError, json.JSONDecodeError):
+        signing_key = client.get_signing_key_from_jwt(token)
+        return jwt.decode(token, signing_key.key, algorithms=_ALGORITHMS,
+                          audience=_AUDIENCE, options={"require": ["exp"]})
+    except Exception:  # noqa: BLE001 — any verification failure ⇒ not authenticated
         return None
-    exp = claims.get("exp")
-    if exp and time.time() > float(exp):
-        return None
-    return claims
 
 
 def user_from_request(request) -> dict | None:
@@ -60,26 +67,33 @@ def user_from_request(request) -> dict | None:
     return {"id": claims.get("sub"), "email": (claims.get("email") or "").strip().lower()}
 
 
-if __name__ == "__main__":  # self-test: mint a token the same way Supabase would, then verify
-    import os as _os
+if __name__ == "__main__":  # self-test: sign an ES256 token like Supabase would, verify via a fake JWKS
+    import time
+    import types
+    from cryptography.hazmat.primitives.asymmetric import ec
 
-    def _mint(secret, claims):
-        def seg(d):
-            return base64.urlsafe_b64encode(json.dumps(d).encode()).rstrip(b"=").decode()
-        head, pay = seg({"alg": "HS256", "typ": "JWT"}), seg(claims)
-        sig = base64.urlsafe_b64encode(
-            hmac.new(secret.encode(), f"{head}.{pay}".encode(), hashlib.sha256).digest()
-        ).rstrip(b"=").decode()
-        return f"{head}.{pay}.{sig}"
+    priv = ec.generate_private_key(ec.SECP256R1())
 
-    JWT_SECRET = "test-secret"
-    good = _mint("test-secret", {"sub": "u1", "email": "A@X.com", "exp": time.time() + 60})
+    def _mint(key, claims):
+        return jwt.encode(claims, key, algorithm="ES256", headers={"kid": "test"})
+
+    # Force auth on and point the verifier at our in-memory public key (no network).
+    AUTH_ENABLED = True
+    _jwk_client = types.SimpleNamespace(
+        get_signing_key_from_jwt=lambda tok: types.SimpleNamespace(key=priv.public_key()))
+
+    good = _mint(priv, {"sub": "u1", "email": "A@X.com", "aud": "authenticated", "exp": time.time() + 60})
     assert verify_token(good)["email"] == "A@X.com"
-    assert verify_token(_mint("WRONG", {"sub": "u1", "exp": time.time() + 60})) is None
-    assert verify_token(_mint("test-secret", {"sub": "u1", "exp": time.time() - 1})) is None
+    # wrong key → rejected
+    other = ec.generate_private_key(ec.SECP256R1())
+    assert verify_token(_mint(other, {"sub": "u1", "aud": "authenticated", "exp": time.time() + 60})) is None
+    # expired → rejected
+    assert verify_token(_mint(priv, {"sub": "u1", "aud": "authenticated", "exp": time.time() - 1})) is None
+    # wrong audience → rejected
+    assert verify_token(_mint(priv, {"sub": "u1", "aud": "anon", "exp": time.time() + 60})) is None
     assert verify_token("not.a.jwt") is None
 
     class _Req:
         headers = {"authorization": f"Bearer {good}"}
     assert user_from_request(_Req()) == {"id": "u1", "email": "a@x.com"}
-    print("auth.py self-test OK")
+    print("auth.py self-test OK (ES256/JWKS)")

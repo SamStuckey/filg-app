@@ -32,9 +32,10 @@ spend vs the budget.
 ## Auth + billing (real, degrade gracefully)
 Both are stdlib-only — no PyJWT/`cryptography`/`stripe` SDK — so the app keeps "running anywhere",
 and both are **off by default**: with their env unset the app is free-tier-only on the email typed in.
-- **Auth** (`auth.py`, Supabase): verifies the Supabase HS256 user JWT with `hmac`. Enable with
-  `SUPABASE_URL` + `SUPABASE_ANON_KEY` (frontend) + `SUPABASE_JWT_SECRET` (server verify). Free tier
-  needs only an email (no login); paid is always gated on a verified user.
+- **Auth** (`auth.py`, Supabase): verifies the Supabase user JWT against the project's public JWKS
+  (ES256/RS256, via PyJWT) — no shared secret on the server. Enable with `SUPABASE_URL` (also the
+  JWKS source) + `SUPABASE_PUBLISHABLE_KEY` (frontend). Free tier needs only an email (no login);
+  paid is always gated on a verified user.
 - **Billing** (`billing.py`, Stripe $39/mo): Checkout Sessions via the REST API (`urllib`), webhook
   signatures verified with `hmac`. Enable with `STRIPE_SECRET_KEY` + `STRIPE_PRICE_ID` +
   `STRIPE_WEBHOOK_SECRET` (+ `FILG_PUBLIC_URL`). `is_paid` is derived from the live subscription

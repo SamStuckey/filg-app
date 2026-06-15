@@ -17,7 +17,7 @@ Run:
   FILG_MOCK=1 uvicorn app.main:app --reload        # free, no API/auth/billing (dev/frontend)
   uvicorn app.main:app                              # real runs (~$0.40 each, metered)
 Env: FILG_MOCK, FILG_FREE_RUNS, FILG_DAILY_BUDGET, FILG_PAID_EMAILS (csv comp override),
-     SUPABASE_URL/SUPABASE_ANON_KEY/SUPABASE_JWT_SECRET, STRIPE_*/FILG_PUBLIC_URL.
+     SUPABASE_URL/SUPABASE_PUBLISHABLE_KEY (auth via JWKS), STRIPE_*/FILG_PUBLIC_URL.
 """
 
 from __future__ import annotations
@@ -385,7 +385,8 @@ async def api_plan_download(sid: str, request: Request):
 async def index():
     cfg = json.dumps({"authEnabled": auth.AUTH_ENABLED, "billingEnabled": billing.BILLING_ENABLED,
                       "supabaseUrl": os.environ.get("SUPABASE_URL", ""),
-                      "supabaseAnon": os.environ.get("SUPABASE_ANON_KEY", ""),
+                      "supabaseAnon": (os.environ.get("SUPABASE_PUBLISHABLE_KEY")
+                                       or os.environ.get("SUPABASE_ANON_KEY", "")),
                       "archetypes": personas.catalog(), "defaultBoard": personas.DEFAULT_BOARD})
     head = f"<script>window.FILG={cfg}</script>"
     if auth.AUTH_ENABLED:
