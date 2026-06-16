@@ -766,7 +766,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <div class=sec id=dtreesec style="display:none"><h3>Decision tree</h3>
 <p class=bhelp>Every branch you've explored. Click a node to hop back to it — the active branch is highlighted.</p>
 <div id=dtree></div></div>
-<div class="sec collap" id=expertsec><button type=button class=sechead aria-expanded=false onclick="toggleSec('expertsec')"><h3>Ask an expert</h3><span class=caret aria-hidden=true>▸</span></button>
+<div class="sec collap addons" id=expertsec><button type=button class=sechead aria-expanded=false onclick="toggleSec('expertsec')"><h3>Ask an expert</h3><span class=caret aria-hidden=true>▸</span></button>
 <div class=secbody><div class=ax id=addons></div>
 <div class=disc id=adisc></div></div></div>
 <div class="sec collap board" id=boardsec style="display:none"><button type=button class=sechead aria-expanded=false onclick="toggleSec('boardsec')"><h3>Board of Directors</h3><span class=caret aria-hidden=true>▸</span></button>
@@ -851,7 +851,7 @@ function renderBoardRound(s){
   const r=reviews[reviews.length-1];   // the board's take on the section just finalized
   const balloons=(r.directors||[]).map((d,i)=>{
     const id='bal_'+i;
-    return `<div class=balloon id=${id}><button type=button class=bh onclick="document.getElementById('${id}').classList.toggle('open')">💬 See what ${esc(d.name)} says<span class=caret>▸</span></button><div class="bb md">${mdToHtml(d.take)}</div></div>`;
+    return `<div class=balloon id=${id}><button type=button class=bh onclick="document.getElementById('${id}').classList.toggle('open')">💬 See what ${esc(d.first||d.name)}${d.first&&d.name?' ('+esc(d.name)+')':''} says<span class=caret>▸</span></button><div class="bb md">${mdToHtml(d.take)}</div></div>`;
   }).join('');
   const split=(r.conflicts&&r.conflicts.toLowerCase()!=='none')?`<span class=split>Where they split: ${esc(r.conflicts)}</span>`:'';
   el.innerHTML=`<div class=bround><h4>🗣️ Your board weighed in on “${esc(r.title)}”</h4>`+
@@ -956,7 +956,7 @@ function renderDecisionTree(s){
 function renderAddons(s){
   const box=document.getElementById('addons'); if(!box||box.dataset.done)return;
   const ax=CFG.archetypes||[]; if(!ax.length){box.closest('.sec').style.display='none';return;}
-  box.innerHTML=ax.map(a=>`<button type=button onclick="ask('${a.key}')">${esc(a.name)}<span class=bl>${esc(a.blurb)}</span></button>`).join('');
+  box.innerHTML=ax.map(a=>`<button type=button onclick="ask('${a.key}')">${esc(a.first||a.name)}<span class=bl>${esc(a.name)} · ${esc(a.blurb)}</span></button>`).join('');
   document.getElementById('adisc').textContent='AI composite advisors — not real people, not professional advice.';
   box.dataset.done='1';
 }
@@ -977,12 +977,12 @@ function renderVet(s){
 }
 // Board selection state (keys); seeded from the default board, editable in intake + sidebar.
 let BOARD=(CFG.defaultBoard||[]).slice();
-function personaName(key){const p=(CFG.archetypes||[]).find(a=>a.key===key);return p?p.name:key;}
+function personaName(key){const p=(CFG.archetypes||[]).find(a=>a.key===key);return p?(p.first||p.name):key;}
 function renderBoardPick(){
   const el=document.getElementById('boardpick'); if(!el)return;
   const ax=CFG.archetypes||[]; if(!ax.length){el.innerHTML='';return;}
   el.innerHTML=`<div class=lab id=boardpicklab>Pick your Board of Directors — they'll vet every step (optional):</div>`+
-    `<div class=opts role=group aria-labelledby=boardpicklab>`+ax.map(a=>`<button type=button class="bchip${BOARD.includes(a.key)?' on':''}" aria-pressed=${BOARD.includes(a.key)} onclick="toggleBoard('${a.key}',this)" title="${esc(a.blurb)}">${esc(a.name)}</button>`).join('')+`</div>`;
+    `<div class=opts role=group aria-labelledby=boardpicklab>`+ax.map(a=>`<button type=button class="bchip${BOARD.includes(a.key)?' on':''}" aria-pressed=${BOARD.includes(a.key)} onclick="toggleBoard('${a.key}',this)" title="${esc(a.name)} — ${esc(a.blurb)}">${esc(a.first||a.name)}</button>`).join('')+`</div>`;
 }
 function toggleBoard(key,btn){
   const i=BOARD.indexOf(key), on=i<0;
@@ -996,7 +996,7 @@ function renderBoard(s){
   // Chips reflect the active board; tap to add/drop a director for on-demand convening.
   if(SESSION_BOARD===null) SESSION_BOARD=(s.directors&&s.directors.length?s.directors.slice():BOARD.slice());
   document.getElementById('boarddirs').innerHTML=(CFG.archetypes||[]).map(a=>
-    `<button type=button class="bchip${SESSION_BOARD.includes(a.key)?' on':''}" aria-pressed=${SESSION_BOARD.includes(a.key)} onclick="toggleSessionBoard('${a.key}',this)" title="${esc(a.blurb)}">${esc(a.name)}</button>`).join('');
+    `<button type=button class="bchip${SESSION_BOARD.includes(a.key)?' on':''}" aria-pressed=${SESSION_BOARD.includes(a.key)} onclick="toggleSessionBoard('${a.key}',this)" title="${esc(a.name)} — ${esc(a.blurb)}">${esc(a.first||a.name)}</button>`).join('');
 }
 let SESSION_BOARD=null;
 function toggleSessionBoard(key,el){
@@ -1102,7 +1102,7 @@ async function submitDrawer(){
       const d=await r.json();go.disabled=false;
       if(!r.ok){out.innerHTML=esc(d.error||'Could not convene the board.');return;}
       const split=(d.conflicts&&d.conflicts.toLowerCase()!=='none')?`<span class=split>Where they split: ${esc(d.conflicts)}</span>`:'';
-      out.innerHTML=d.directors.map((x,i)=>`<div class=balloon id=dbal_${i}><button type=button class=bh onclick="document.getElementById('dbal_${i}').classList.toggle('open')">💬 See what ${esc(x.name)} says<span class=caret>▸</span></button><div class="bb md">${mdToHtml(x.take)}</div></div>`).join('')+
+      out.innerHTML=d.directors.map((x,i)=>`<div class=balloon id=dbal_${i}><button type=button class=bh onclick="document.getElementById('dbal_${i}').classList.toggle('open')">💬 See what ${esc(x.first||x.name)}${x.first&&x.name?' ('+esc(x.name)+')':''} says<span class=caret>▸</span></button><div class="bb md">${mdToHtml(x.take)}</div></div>`).join('')+
         `<div class=takeaway><div class=tl>Board takeaway</div>${esc(d.verdict)}${split}</div>`+
         `<div class=disc>${esc(d.disclaimer||'')}</div>`;
     }

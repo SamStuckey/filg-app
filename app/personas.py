@@ -32,7 +32,7 @@ import skill_registry as skills  # noqa: E402
 # `board_default` marks the personas suggested as a starter board.
 PERSONAS = [
     {
-        "key": "closer", "name": "The Closer",
+        "key": "closer", "name": "The Closer", "first": "Marcus",
         "blurb": "direct-response sales & pricing nerve",
         "domains": ["sales", "pricing", "offer", "conversion", "outreach"],
         "voice": "You are 'The Closer': a direct-response sales and pricing operator. You care about "
@@ -42,7 +42,7 @@ PERSONAS = [
         "board_default": True,
     },
     {
-        "key": "bootstrapper", "name": "The Bootstrapper",
+        "key": "bootstrapper", "name": "The Bootstrapper", "first": "Theo",
         "blurb": "ship lean, get to revenue fast",
         "domains": ["mvp", "delivery", "roadmap", "execution", "speed", "scope"],
         "voice": "You are 'The Bootstrapper': you ship lean and get to revenue fast. You hate scope "
@@ -51,7 +51,7 @@ PERSONAS = [
         "board_default": True,
     },
     {
-        "key": "brand", "name": "The Brand Builder",
+        "key": "brand", "name": "The Brand Builder", "first": "Ivy",
         "blurb": "positioning & audience",
         "domains": ["positioning", "brand", "audience", "gtm", "marketing", "messaging"],
         "voice": "You are 'The Brand Builder': you care about positioning, audience, and the story. You "
@@ -60,7 +60,7 @@ PERSONAS = [
         "board_default": False,
     },
     {
-        "key": "cfo", "name": "The Skeptical CFO",
+        "key": "cfo", "name": "The Skeptical CFO", "first": "Ruth",
         "blurb": "unit economics & risk",
         "domains": ["pricing", "unit-economics", "risk", "finance", "margin", "cost"],
         "voice": "You are 'The Skeptical CFO': you stress-test the numbers and the risk. You ask whether "
@@ -69,7 +69,7 @@ PERSONAS = [
         "board_default": True,
     },
     {
-        "key": "operator", "name": "The Operator",
+        "key": "operator", "name": "The Operator", "first": "Hank",
         "blurb": "delivery systems & doing the work",
         "domains": ["delivery", "operations", "systems", "fulfillment", "process", "quality"],
         "voice": "You are 'The Operator': you've delivered the actual work. You care about how this gets "
@@ -78,7 +78,7 @@ PERSONAS = [
         "board_default": False,
     },
     {
-        "key": "growth", "name": "The Growth Lead",
+        "key": "growth", "name": "The Growth Lead", "first": "Nia",
         "blurb": "channels & distribution",
         "domains": ["gtm", "distribution", "channels", "acquisition", "marketing", "audience"],
         "voice": "You are 'The Growth Lead': distribution is the whole game to you. You push on the one "
@@ -99,8 +99,8 @@ DISCLAIMER = ("Heads up — these are AI composite advisors (not real people), a
 
 def public(persona: dict) -> dict:
     """The operator-facing shape (no internal voice/instruction)."""
-    return {"key": persona["key"], "name": persona["name"], "blurb": persona["blurb"],
-            "domains": persona["domains"]}
+    return {"key": persona["key"], "name": persona["name"], "first": persona.get("first"),
+            "blurb": persona["blurb"], "domains": persona["domains"]}
 
 
 def catalog() -> list[dict]:

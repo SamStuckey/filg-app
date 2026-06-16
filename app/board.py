@@ -43,7 +43,8 @@ def _director_take(idea: str, plan_text: str, focus: str, key: str) -> tuple[dic
                        f"WHAT TO WEIGH IN ON:\n{focus}\n\n"
                        "Give your take in 2-4 punchy sentences from your persona's focus. Lead with the "
                        "one thing you'd change. If this is outside your lane, say so in one line."))
-    return {"key": key, "name": p["name"], "take": ans.strip()}, round(LEDGER.cost_slice(start), 4)
+    return {"key": key, "name": p["name"], "first": p.get("first"), "take": ans.strip()}, \
+        round(LEDGER.cost_slice(start), 4)
 
 
 def _synthesize(idea: str, focus: str, takes: list[dict]) -> tuple[dict, float]:
@@ -83,7 +84,7 @@ def convene(idea: str, plan_text: str, focus: str, director_keys: list[str] | No
     keys = [k for k in (director_keys or personas.DEFAULT_BOARD) if k in personas.KEYS] \
         or personas.DEFAULT_BOARD
     if mock:
-        directors = [{"key": k, "name": personas.get(k)["name"],
+        directors = [{"key": k, "name": personas.get(k)["name"], "first": personas.get(k).get("first"),
                       "take": _MOCK_BOARD.get(k, f"{personas.get(k)['name']} would push on the "
                                                   f"{personas.get(k)['domains'][0]} angle here.")}
                      for k in keys]
