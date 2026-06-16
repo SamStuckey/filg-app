@@ -50,7 +50,7 @@ import gibberish  # noqa: E402 — pre-LLM "is this even an idea?" gate (saves a
 import plan_pdf   # noqa: E402 — styled PDF generation (synthesis + fpdf2 render)
 import advisor    # noqa: E402 — "chat with your plan" (grounded advisory layer)
 
-from . import auth, billing, planner, store  # noqa: E402 — persistence, auth, billing, plan-builder
+from . import auth, billing, keys, planner, store  # noqa: E402 — persistence, auth, billing, BYOK keys
 
 MOCK = os.environ.get("FILG_MOCK") == "1"
 # FILG_PAID_EMAILS is now only a manual comp/override; real paid status comes from billing.is_paid.
@@ -137,6 +137,67 @@ async def api_checkout(request: Request):
     except billing.StripeError as e:
         return JSONResponse({"error": str(e)}, status_code=502)
     return {"url": url}
+
+
+def _validate_key(provider_name: str, api_key: str) -> tuple[bool, str]:
+    """One cheap call confirms a BYOK key works before we store it. Skipped in mock mode (no spend)."""
+    if provider_name not in keys.PROVIDERS:
+        return False, "Unsupported provider."
+    if len(api_key) < 8:
+        return False, "That doesn't look like an API key."
+    if MOCK:
+        return True, "ok (mock)"
+    try:
+        import provider as prov_mod
+        import pipeline
+        with prov_mod.use(prov_mod.openrouter_provider(api_key)):
+            out = pipeline.call("key_validate", pipeline.HAIKU, "Reply with: OK", max_tokens=5)
+        return (True, "ok") if out else (False, "The key didn't return a response.")
+    except Exception:  # noqa: BLE001 — never surface provider internals to the client
+        return False, "That key didn't work. Check it and try again."
+
+
+@app.get("/api/key")
+async def api_key_get(request: Request):
+    """BYOK status for the current user: whether the feature is on, plus any saved key (masked)."""
+    if not keys.enabled():
+        return {"enabled": False}
+    authed = auth.user_from_request(request)
+    if not authed or not authed["email"]:
+        return {"enabled": True, "signed_in": False, "key": None}
+    return {"enabled": True, "signed_in": True, "key": keys.key_meta(authed["email"]),
+            "providers": list(keys.PROVIDERS)}
+
+
+@app.post("/api/key")
+async def api_key_save(request: Request):
+    """Validate a user's API key with one cheap call, then store it ENCRYPTED. Requires sign-in."""
+    if not keys.enabled():
+        return JSONResponse({"error": "BYOK isn't configured yet."}, status_code=503)
+    authed = auth.user_from_request(request)
+    if not authed or not authed["email"]:
+        return JSONResponse({"error": "Sign in first."}, status_code=401)
+    body = await request.json()
+    provider_name = (body.get("provider") or "openrouter").strip()
+    api_key = (body.get("key") or "").strip()
+    ok, why = _validate_key(provider_name, api_key)
+    if not ok:
+        return JSONResponse({"error": why}, status_code=400)
+    try:
+        meta = keys.save_key(authed["email"], provider_name, api_key)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return {"ok": True, "key": meta}
+
+
+@app.post("/api/key/remove")
+async def api_key_remove(request: Request):
+    """Forget a user's stored key."""
+    authed = auth.user_from_request(request)
+    if not authed or not authed["email"]:
+        return JSONResponse({"error": "Sign in first."}, status_code=401)
+    keys.delete_key(authed["email"])
+    return {"ok": True}
 
 
 @app.post("/api/stripe/webhook")
