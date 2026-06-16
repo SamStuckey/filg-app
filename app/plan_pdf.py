@@ -292,12 +292,17 @@ def render(plan: dict, style: str = "filg") -> bytes:
     pdf.add_page()                                   # fresh contents page (so the ToC renders from top)
     pdf.insert_toc_placeholder(_render_toc, pages=1)  # ToC spans this page; breaks to the next for body
 
+    # Body flows continuously — page-break only when a section won't fit — so short sections don't
+    # each strand a near-empty page. Dense + well-presented reads more pro than padded whitespace.
     pdf.start_section("Executive summary")
     _section_head(pdf, "Overview", "Executive summary")
     _body_html(pdf, plan["exec_summary"])
 
     for s in plan["sections"]:
-        pdf.add_page()
+        if pdf.get_y() > pdf.h - pdf.b_margin - 55:   # not enough room for a header + a few lines
+            pdf.add_page()
+        else:
+            pdf.ln(11)
         pdf.start_section(s["title"])
         _section_head(pdf, f"Part {s['n']}", s["title"], s.get("sub", ""))
         _body_html(pdf, s["body"])
