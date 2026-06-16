@@ -1170,22 +1170,22 @@ async function poll(){
   const s=await r.json();
   renderTree(s);renderAddons(s);     // show the plan outline immediately, even while researching
   if(s.status==='researching'){
-    if(!ACT_RESEARCH){Activity.open();Activity.push('Spinning up your research');ACT_RESEARCH=true;ACT_PROG_N=0;}
+    if(!ACT_RESEARCH){ACT_ID=Activity.open();Activity.push(ACT_ID,'Spinning up your research');ACT_RESEARCH=true;ACT_PROG_N=0;}
     const prog=s.progress||[];                                   // real receipts from the engine, streamed
-    for(let i=ACT_PROG_N;i<prog.length;i++)Activity.push(prog[i]);
+    for(let i=ACT_PROG_N;i<prog.length;i++)Activity.push(ACT_ID,prog[i]);
     ACT_PROG_N=Math.max(ACT_PROG_N,prog.length);
     document.getElementById('node').innerHTML='<div class=node><span class=eyebrow>Working</span><h3>Researching + grading your market…</h3><p class=lead>Pulling sources and grading every number, so vendor spin gets labeled, not laundered. About 1 to 2 minutes. Watch the receipts spew in below.</p></div>';
     say('Researching and grading your market.');
     setTimeout(poll,1500);return;
   }
   if(ACT_RESEARCH){
-    const prog=s.progress||[]; for(let i=ACT_PROG_N;i<prog.length;i++)Activity.push(prog[i]);  // flush any final lines
-    Activity.done(s.status==='error'?'Hit a snag.':'Research graded. Building your plan.');ACT_RESEARCH=false;
+    const prog=s.progress||[]; for(let i=ACT_PROG_N;i<prog.length;i++)Activity.push(ACT_ID,prog[i]);  // flush any final lines
+    Activity.done(ACT_ID,s.status==='error'?'Hit a snag.':'Research graded. Building your plan.');ACT_RESEARCH=false;ACT_ID=null;
   }
   render(s);
   if(s.status!=='error')maybePromptKey();   // welcome plan is in → require a key to go further
 }
-let ACT_RESEARCH=false, ACT_PROG_N=0;
+let ACT_RESEARCH=false, ACT_PROG_N=0, ACT_ID=null;
 function render(s){
   if(s.status==='error'){
     document.getElementById('node').innerHTML='<div class=node><h3>Hit a snag</h3><p class=lead>'+esc(s.error)+'</p><button type=button onclick=newPlan()>Start over</button></div>';
@@ -1232,13 +1232,13 @@ async function sendChat(){
   CHAT_BUSY=true;btn.disabled=true;t.value='';if(st)st.innerHTML='';
   log.insertAdjacentHTML('beforeend',`<div class="cmsg user">${esc(msg)}</div><div class="cmsg bot md" id=chatthinking><span class=think>Thinking…</span></div>`);
   log.scrollTop=log.scrollHeight;
-  Activity.start(["Reading your plan","Checking the graded evidence","Thinking it through"],1200);
+  const aid=Activity.start(["Reading your plan","Checking the graded evidence","Thinking it through"],1200);
   try{
     const [r]=await Promise.all([fetch('/api/plan/'+SID+'/chat',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({message:msg})}),new Promise(res=>setTimeout(res,850))]);
     const d=await r.json();const th=document.getElementById('chatthinking');
-    if(!r.ok){Activity.stop(true);if(th){th.removeAttribute('id');th.innerHTML='<span class=think>'+esc(d.error||'Could not reach the advisor.')+'</span>';}}
-    else{Activity.done('Answered.');if(th){th.removeAttribute('id');th.innerHTML=mdToHtml(d.reply);}}
-  }catch(e){Activity.stop(true);const th=document.getElementById('chatthinking');if(th)th.innerHTML='<span class=think>Network error.</span>';}
+    if(!r.ok){Activity.stop(aid);if(th){th.removeAttribute('id');th.innerHTML='<span class=think>'+esc(d.error||'Could not reach the advisor.')+'</span>';}}
+    else{Activity.done(aid,'Answered.');if(th){th.removeAttribute('id');th.innerHTML=mdToHtml(d.reply);}}
+  }catch(e){Activity.stop(aid);const th=document.getElementById('chatthinking');if(th)th.innerHTML='<span class=think>Network error.</span>';}
   finally{CHAT_BUSY=false;btn.disabled=false;log.scrollTop=log.scrollHeight;}
 }
 function renderBoardRound(s){
@@ -1319,8 +1319,7 @@ function _navBusy(){const n=document.getElementById('node');if(n)n.querySelector
 function _navFree(){const n=document.getElementById('node');if(n)n.querySelectorAll('button').forEach(b=>b.disabled=false);}
 function fbErr(msg){const f=document.getElementById('ferr');if(f)f.textContent=msg;else document.getElementById('err2').textContent=msg;}
 // Min-dwell so the spew registers even on fast (mock) responses, without slowing real builds much.
-function _aiRun(url,body,steps){
-  Activity.start(steps,1200);
+function _aiRun(url,body){   // fetch + a min-show delay; the caller owns its Activity track
   return Promise.all([
     fetch(url,{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify(body)}),
     new Promise(res=>setTimeout(res,850))
@@ -1332,24 +1331,26 @@ async function nextStep(){
   _navBusy();
   const steps=[]; if(fb.trim())steps.push("Folding in your note");
   steps.push("Drafting the next part of your plan","Checking it against your graded research");
+  const aid=Activity.start(steps,1200);
   try{
-    const r=await _aiRun('/api/plan/'+SID+'/next',{feedback:fb},steps);
+    const r=await _aiRun('/api/plan/'+SID+'/next',{feedback:fb});
     const s=await r.json();
-    if(!r.ok){Activity.stop(true);fbErr(s.error||'Something went wrong.');_navFree();return;}
-    Activity.done('Next part ready.');render(s);
-  }catch(e){Activity.stop(true);fbErr('Network error.');_navFree();}
+    if(!r.ok){Activity.stop(aid);fbErr(s.error||'Something went wrong.');_navFree();return;}
+    Activity.done(aid,'Next part ready.');render(s);
+  }catch(e){Activity.stop(aid);fbErr('Network error.');_navFree();}
 }
 async function backStep(){
   if(!requireKey())return;
   const fb=((document.getElementById('feedback')||{}).value||'').trim();
   if(!fb){fbErr('Add a quick note on what to change, a note is required to go back a step.');const t=document.getElementById('feedback');if(t)t.focus();return;}
   _navBusy();
+  const aid=Activity.start(["Re-opening the previous part","Re-drafting it from your note"],1200);
   try{
-    const r=await _aiRun('/api/plan/'+SID+'/back',{feedback:fb},["Re-opening the previous part","Re-drafting it from your note"]);
+    const r=await _aiRun('/api/plan/'+SID+'/back',{feedback:fb});
     const s=await r.json();
-    if(!r.ok){Activity.stop(true);fbErr(s.error||'Something went wrong.');_navFree();return;}
-    Activity.done('New branch ready.');render(s);
-  }catch(e){Activity.stop(true);fbErr('Network error.');_navFree();}
+    if(!r.ok){Activity.stop(aid);fbErr(s.error||'Something went wrong.');_navFree();return;}
+    Activity.done(aid,'New branch ready.');render(s);
+  }catch(e){Activity.stop(aid);fbErr('Network error.');_navFree();}
 }
 async function gotoNode(id){
   document.getElementById('err2').textContent='';
@@ -1529,81 +1530,82 @@ async function submitDrawer(){
   out.style.display='block';
   out.innerHTML='<p class=lead>'+(DRAWER.mode==='board'?'Convening the board…':'Thinking…')+'</p>';
   go.disabled=true;
-  Activity.start(DRAWER.mode==='board'?["Briefing your board on the plan","Each director weighs in","Synthesizing their verdict"]:["Reading your plan","Thinking it through"],1300);
+  const aid=Activity.start(DRAWER.mode==='board'?["Briefing your board on the plan","Each director weighs in","Synthesizing their verdict"]:["Reading your plan","Thinking it through"],1300);
   try{
     if(DRAWER.mode==='expert'){
       const [r]=await Promise.all([fetch('/api/plan/'+SID+'/ask',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({archetype:DRAWER.key,question:q})}),new Promise(res=>setTimeout(res,850))]);
       const d=await r.json();go.disabled=false;
-      if(r.ok)Activity.done('Done.');else Activity.stop(true);
+      if(r.ok)Activity.done(aid,'Done.');else Activity.stop(aid);
       out.innerHTML=r.ok?mdToHtml(d.answer):esc(d.error||'Could not reach the advisor.');
     }else{
       const body={question:q}; if(SESSION_BOARD!==null)body.directors=SESSION_BOARD;
       const [r]=await Promise.all([fetch('/api/plan/'+SID+'/board',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify(body)}),new Promise(res=>setTimeout(res,850))]);
       const d=await r.json();go.disabled=false;
-      if(!r.ok){Activity.stop(true);out.innerHTML=esc(d.error||'Could not convene the board.');return;}
-      Activity.done('Your board weighed in.');
+      if(!r.ok){Activity.stop(aid);out.innerHTML=esc(d.error||'Could not convene the board.');return;}
+      Activity.done(aid,'Your board weighed in.');
       const split=(d.conflicts&&d.conflicts.toLowerCase()!=='none')?`<span class=split>Where they split: ${esc(d.conflicts)}</span>`:'';
       out.innerHTML=d.directors.map((x,i)=>`<div class=balloon id=dbal_${i}><button type=button class=bh onclick="document.getElementById('dbal_${i}').classList.toggle('open')">💬 See what ${esc(x.first||x.name)}${x.first&&x.name?' ('+esc(x.name)+')':''} says<span class=caret>▸</span></button><div class="bb md">${mdToHtml(x.take)}</div></div>`).join('')+
         `<div class=takeaway><div class=tl>Board takeaway</div>${esc(d.verdict)}${split}</div>`+
         `<div class=disc>${esc(d.disclaimer||'')}</div>`;
     }
-  }catch(e){go.disabled=false;Activity.stop(true);out.innerHTML='Network error.';}
+  }catch(e){go.disabled=false;Activity.stop(aid);out.innerHTML='Network error.';}
 }
 // ── Reusable AI-activity ticker (pinned footer; never covers content) ─────────
 // Any AI wait feeds it honest, real-stage lines: Activity.start([...]) → Activity.done('…') (or
 // Activity.stop() on error). It auto-advances through the steps and holds on the last until done.
+// Multi-track activity spew: each AI operation gets its own track id (start/open returns it; pass it
+// to push/done/stop). Concurrent ops share one scrolling log and no longer wipe each other — the
+// footer only hides once the LAST active track finishes. start() auto-cycles its steps; open() is
+// manual (real lines via push). N concurrent operations, N tracks.
 const Activity={
-  steps:[], i:0, timer:null, interval:1600,
-  start(steps,interval){
-    this.stop(true);
-    this.steps=(steps||[]).slice(); this.i=0; this.interval=interval||1600;
-    const a=document.getElementById('activity'); if(!a)return;
-    a.classList.remove('ok'); a.classList.add('show'); a.setAttribute('aria-hidden','false');
-    document.getElementById('activity-log').innerHTML='';
-    this._reveal();
-    this.timer=setInterval(()=>{ if(this.i<this.steps.length-1){this.i++;this._reveal();} else {clearInterval(this.timer);this.timer=null;} }, this.interval);
-  },
-  _reveal(){
-    const log=document.getElementById('activity-log'); if(!log)return;
-    const prev=log.querySelector('.aline.active'); if(prev){prev.classList.remove('active');prev.classList.add('done');}
-    const li=document.createElement('div'); li.className='aline active';
+  _seq:0, tracks:{}, n:0,
+  _el(){return document.getElementById('activity');},
+  _log(){return document.getElementById('activity-log');},
+  _show(){const a=this._el();if(a){a.classList.remove('ok');a.classList.add('show');a.setAttribute('aria-hidden','false');}},
+  _line(text,done){
+    const log=this._log(); if(!log)return null;
+    const li=document.createElement('div'); li.className='aline '+(done?'done':'active');
     li.innerHTML='<span class=aglyph aria-hidden=true></span><span class=atext></span>';
-    li.querySelector('.atext').textContent=this.steps[this.i]||'';
+    li.querySelector('.atext').textContent=text||'';
     log.appendChild(li);
     while(log.children.length>50)log.removeChild(log.firstChild);
-    log.scrollTop=log.scrollHeight;   // keep the newest line in view (fixed-height window scrolls)
+    log.scrollTop=log.scrollHeight;
+    return li;
   },
-  open(){   // manual-push mode (no auto-cycle): caller feeds real lines via push()
-    clearInterval(this.timer); this.timer=null; this.steps=[]; this.i=-1;
-    const a=document.getElementById('activity'); if(!a)return;
-    a.classList.remove('ok'); a.classList.add('show'); a.setAttribute('aria-hidden','false');
-    document.getElementById('activity-log').innerHTML='';
+  _advance(t,text){ if(t.line)t.line.classList.replace('active','done'); t.line=this._line(text,false); },
+  start(steps,interval){
+    const id=++this._seq; this.n++; this._show();
+    const s=(steps||[]).slice(); let i=0; const t={line:null,timer:null}; this.tracks[id]=t;
+    if(s.length)this._advance(t,s[0]);
+    t.timer=setInterval(()=>{ if(i<s.length-1){i++;this._advance(t,s[i]);} else {clearInterval(t.timer);t.timer=null;} }, interval||1600);
+    return id;
   },
-  push(line){ this.steps.push(line); this.i=this.steps.length-1; this._reveal(); },
-  done(msg){
-    clearInterval(this.timer); this.timer=null;
-    const a=document.getElementById('activity'),log=document.getElementById('activity-log'); if(!a)return;
-    a.classList.add('ok');
-    const prev=log&&log.querySelector('.aline.active'); if(prev){prev.classList.remove('active');prev.classList.add('done');}
-    if(msg&&log){const li=document.createElement('div');li.className='aline done';li.innerHTML='<span class=aglyph aria-hidden=true></span><span class=atext></span>';li.querySelector('.atext').textContent=msg;log.appendChild(li);while(log.children.length>50)log.removeChild(log.firstChild);log.scrollTop=log.scrollHeight;}
-    setTimeout(()=>this._hide(),1400);
+  open(){ const id=++this._seq; this.n++; this._show(); this.tracks[id]={line:null,timer:null}; return id; },
+  push(id,line){ const t=this.tracks[id]; if(t)this._advance(t,line); },
+  done(id,msg){ this._end(id,msg,false); },
+  stop(id){ this._end(id,null,true); },
+  _end(id,msg,immediate){
+    const t=this.tracks[id];
+    if(t){ if(t.timer)clearInterval(t.timer); if(t.line)t.line.classList.replace('active','done'); delete this.tracks[id]; this.n=Math.max(0,this.n-1); }
+    if(msg)this._line(msg,true);
+    if(this.n<=0){ const a=this._el(); if(a)a.classList.add('ok'); setTimeout(()=>{ if(this.n<=0)this._hide(); }, immediate?0:1400); }
   },
-  stop(immediate){ clearInterval(this.timer); this.timer=null; if(immediate)this._hide(); },
-  _hide(){ const a=document.getElementById('activity'); if(a){a.classList.remove('show');a.setAttribute('aria-hidden','true');const l=document.getElementById('activity-log');if(l)l.innerHTML='';} }
+  stopAll(){ for(const id in this.tracks){if(this.tracks[id].timer)clearInterval(this.tracks[id].timer);} this.tracks={}; this.n=0; this._hide(); },
+  _hide(){ const a=this._el(); if(a){a.classList.remove('show');a.setAttribute('aria-hidden','true');} const l=this._log(); if(l)l.innerHTML=''; }
 };
 const RESEARCH_STEPS=["Focusing your idea into one sharp thesis","Spinning up research across the web","Pulling sources on the market and competition","Grading every source for credibility","Flagging vendor-marketing spin","Re-sourcing the headline stats to primary sources","Scoring demand, market, and willingness to pay","Drafting your first offer"];
 const PDF_STEPS=["Applying your board's input","Pulling your graded evidence","Building the decision matrix","Laying out a modern, on-brand design","Typesetting your PDF"];
 async function download(){
   if(!requireKey())return;
-  Activity.start(PDF_STEPS);
+  const aid=Activity.start(PDF_STEPS);
   const minShow=new Promise(res=>setTimeout(res,2600));   // let the sequence breathe (covers fast mock runs)
   try{
     const [r]=await Promise.all([fetch('/api/plan/'+SID+'/plan.pdf',{headers:authHeaders()}),minShow]);
-    if(!r.ok){let d={};try{d=await r.json();}catch(e){} Activity.stop(true);toast(d.error||'Could not build the PDF.','err');return;}
+    if(!r.ok){let d={};try{d=await r.json();}catch(e){} Activity.stop(aid);toast(d.error||'Could not build the PDF.','err');return;}
     const blob=await r.blob();
-    Activity.done('Your PDF is ready.');
+    Activity.done(aid,'Your PDF is ready.');
     const u=URL.createObjectURL(blob),a=document.createElement('a');a.href=u;a.download='filg-business-plan.pdf';a.click();URL.revokeObjectURL(u);
-  }catch(e){Activity.stop(true);toast('Network error building the PDF.','err');}
+  }catch(e){Activity.stop(aid);toast('Network error building the PDF.','err');}
 }
 async function downloadZip(){   // power-user escape hatch: the raw source files
   try{
@@ -1753,7 +1755,7 @@ async function upgrade(){
   }catch(e){toast('Network error starting checkout.','err');}
 }
 function show(id){['intake','workspace','profile'].forEach(x=>{const e=document.getElementById(x);if(e)e.style.display=(x===id?(x==='workspace'?'grid':'block'):'none');});}
-function newPlan(){SIDEBAR_PHASE=null;ACT_RESEARCH=false;VET_OPEN=true;VET_STEPPED=false;DTREE_STEP=-99;Activity.stop(true);closeViewer();SID=null;if(location.pathname!=='/')history.pushState({},'','/');show('intake');renderBoardPick();gateIntake();}
+function newPlan(){SIDEBAR_PHASE=null;ACT_RESEARCH=false;VET_OPEN=true;VET_STEPPED=false;DTREE_STEP=-99;Activity.stopAll();closeViewer();SID=null;if(location.pathname!=='/')history.pushState({},'','/');show('intake');renderBoardPick();gateIntake();}
 async function showPlans(){
   let d; try{const r=await fetch('/api/plans',{headers:authHeaders()});if(!r.ok){toast('Sign in to see your plans.','err');return;}d=await r.json();}catch(e){toast('Network error.','err');return;}
   show('profile');renderPlans(d);
