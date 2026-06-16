@@ -42,12 +42,14 @@ def test_branching_next_back_goto(client):
     sid = client.post("/api/plan/start",
                       json={"idea": GRAB_BAG, "email": "tree@x.com"}).json()["id"]
     s = wait_status(client, sid)
-    assert s["proposal"]["section"] == "brief" and s["tree"] and not s["tree"]["show"]
+    # the tree shows from the first render (single 'setup' node) so the tool is there immediately
+    assert s["proposal"]["section"] == "brief" and s["tree"] and s["tree"]["show"]
+    assert len(s["tree"]["nodes"]) == 1
 
     # roll forward twice → two sections finalized, still a single (unbranched) line
     s = client.post(f"/api/plan/{sid}/next", json={"feedback": ""}).json()
     s = client.post(f"/api/plan/{sid}/next", json={"feedback": "go bolder"}).json()
-    assert s["step"] == 2 and len(s["files"]) == 2 and not s["tree"]["show"]
+    assert s["step"] == 2 and len(s["files"]) == 2
 
     # back without a note → form error (feedback is required to go back)
     r = client.post(f"/api/plan/{sid}/back", json={"feedback": ""})
@@ -66,6 +68,39 @@ def test_branching_next_back_goto(client):
     other = next(n["id"] for n in nodes if n["step"] == 1 and n["id"] != active)
     s = client.post(f"/api/plan/{sid}/goto", json={"node": other}).json()
     assert s["tree"]["active"] == other and s["step"] == 1
+
+
+def test_download_follows_active_branch_no_paywall(client):
+    # Build a plan to completion, then branch part 2 and finish again. The download must zip the
+    # ACTIVE branch's files (the final decision set) — and no paywall gates it.
+    sid = client.post("/api/plan/start", json={"idea": GRAB_BAG, "email": "dl@x.com"}).json()["id"]
+    s = wait_status(client, sid)
+    while not s["done"]:
+        s = client.post(f"/api/plan/{sid}/next", json={"feedback": ""}).json()
+    r = client.get(f"/api/plan/{sid}/download")
+    assert r.status_code == 200 and r.headers["content-type"] == "application/zip"  # no 402 paywall
+
+    # hop back to an earlier node, branch with a note, finish that branch → download reflects it
+    early = next(n["id"] for n in s["tree"]["nodes"] if n["step"] == 1)
+    client.post(f"/api/plan/{sid}/goto", json={"node": early})
+    s = client.post(f"/api/plan/{sid}/back", json={"feedback": "make the setup B2B only"}).json()
+    while not s["done"]:
+        s = client.post(f"/api/plan/{sid}/next", json={"feedback": ""}).json()
+    r = client.get(f"/api/plan/{sid}/download")
+    assert r.status_code == 200 and b"1-the-setup.md" in r.content
+
+
+def test_gibberish_idea_gets_roasted_for_free(client):
+    # Total nonsense → a pre-rolled roast, status 200, NO session created (no run, no LLM spend).
+    junk = "asdlfk asd fa lskdjf llaskjdflkajs dflk asdfasd lf lk asdlfk sladkf lkasdf"
+    r = client.post("/api/plan/start", json={"idea": junk, "email": "junk@x.com"})
+    assert r.status_code == 200
+    d = r.json()
+    assert d.get("gibberish") is True and d.get("title") and d.get("body") and "id" not in d
+    # a real (if rough) idea is never roasted
+    ok = client.post("/api/plan/start",
+                     json={"idea": "i wanna help dentists with there missed calls", "email": "ok@x.com"})
+    assert ok.status_code == 200 and "id" in ok.json()
 
 
 def test_goto_unknown_node_404(client):

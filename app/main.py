@@ -45,6 +45,7 @@ import teardown  # noqa: E402
 import usage     # noqa: E402
 import personas  # noqa: E402 — advisor/director registry (shared by ask-an-expert + the board)
 import board     # noqa: E402 — Board of Directors orchestration
+import gibberish  # noqa: E402 — pre-LLM "is this even an idea?" gate (saves a run, hands back a roast)
 
 from . import auth, billing, planner, store  # noqa: E402 — persistence, auth, billing, plan-builder
 
@@ -263,13 +264,11 @@ def _tree_view(tree: dict) -> dict:
     once a real branch exists (a node with 2+ children, or 2+ roots) — matching 'reveal the tree once
     they branch'."""
     nodes = tree.get("nodes") or {}
-    roots = sum(1 for n in nodes.values() if n.get("parent") is None)
-    branched = roots > 1 or any(len(n.get("children") or []) > 1 for n in nodes.values())
     return {"active": tree.get("active"),
             "nodes": [{"id": n["id"], "parent": n.get("parent"), "step": n["step"],
                        "title": n.get("title"), "feedback": n.get("feedback")}
                       for n in nodes.values()],
-            "show": branched}
+            "show": bool(nodes)}   # show from the first render (even a single 'setup' node) so the tool's there
 
 
 def _mirror(tree: dict) -> dict:
@@ -322,6 +321,8 @@ async def api_plan_start(request: Request):
     idea = (body.get("idea") or "").strip()
     if len(idea) < 12:
         return JSONResponse({"error": "Tell me a bit more about the idea."}, status_code=400)
+    if gibberish.looks_like_gibberish(idea):  # total nonsense → roast them for free (no run, no LLM)
+        return JSONResponse({"gibberish": True, **gibberish.roast(idea)})
     user, verified = _identity(request, body.get("email"))
     if "@" not in user:
         return JSONResponse({"error": "Enter an email so we can save your plan."}, status_code=400)
@@ -542,11 +543,8 @@ async def api_plan_download(sid: str, request: Request):
         return JSONResponse({"error": "unknown session"}, status_code=404)
     if s["status"] != "done":
         return JSONResponse({"error": "plan isn't finished yet"}, status_code=400)
-    user, verified = _identity(request)
-    if not _is_paid(user, verified):
-        return JSONResponse(
-            {"error": "Unlock the download to get your full plan.", "upgrade": True},
-            status_code=402)
+    # No paywall (monetization model in flux — own-your-docs is the wedge). `s["files"]` mirrors the
+    # ACTIVE decision-tree branch, so the download is exactly the final decision set the user landed on.
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("README.md", planner.bundle_markdown(s["idea"], s["files"]))
@@ -597,6 +595,10 @@ button:hover{filter:brightness(1.04)}button:active{transform:translateY(1px)}but
 .authbar .link{background:none;color:var(--sky);padding:0;font-weight:700;font-size:14px}
 .authbar .up{background:var(--sun);color:#3a2c00;padding:8px 14px;border-radius:10px;font-size:13px}
 .note-banner{background:var(--ok-bg);border:1px solid #cfe9d8;border-radius:14px;padding:12px 16px;font-size:14px;margin-bottom:16px;display:none}
+.jokecard{margin:16px 0 0;text-align:left;background:#fff;border:1.5px solid var(--sun);border-radius:16px;padding:18px 20px}
+.jokecard h3{margin:0 0 8px;font-size:18px;font-weight:800}
+.jokecard .jbody{font-size:14.5px;color:var(--ink)}.jokecard .jbody p{margin:0 0 8px}
+.jokecard button{margin-top:6px;background:var(--ink)}
 .workspace{display:grid;grid-template-columns:300px 1fr;gap:24px;align-items:start}
 .side{position:sticky;top:18px;display:flex;flex-direction:column;gap:16px}
 .sec{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:16px}
@@ -741,6 +743,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <input id=email type=email placeholder="you@email.com">
 <button id=go class=go onclick=start()>Build my plan →</button>
 <div class=err id=err></div>
+<div id=joke></div>
 <p class=brandfoot>“Fuck it. Let’s go.” <cite>— You, 30 seconds ago</cite></p>
 </div>
 <div id=profile style="display:none"></div>
@@ -764,7 +767,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <div class=sec><h3>Your plan</h3><ul class=tree id=tree></ul>
 <button id=dl class=dl onclick=download() style="display:none;margin-top:12px">⬇ Download plan (.zip)</button></div>
 <div class=sec id=dtreesec style="display:none"><h3>Decision tree</h3>
-<p class=bhelp>Every branch you've explored. Click a node to hop back to it — the active branch is highlighted.</p>
+<p class=bhelp>Each step is a node. Go <b>Back</b> to branch and try another direction; click any node to hop to it. The active branch is highlighted.</p>
 <div id=dtree></div></div>
 <div class="sec collap addons" id=expertsec><button type=button class=sechead aria-expanded=false onclick="toggleSec('expertsec')"><h3>Ask an expert</h3><span class=caret aria-hidden=true>▸</span></button>
 <div class=secbody><div class=ax id=addons></div>
@@ -793,7 +796,7 @@ let SID=null;
 async function start(){
   const idea=document.getElementById('idea').value.trim(), email=document.getElementById('email').value.trim();
   const go=document.getElementById('go'), err=document.getElementById('err');
-  err.textContent='';
+  err.textContent='';document.getElementById('joke').innerHTML='';
   if(CFG.authEnabled&&!session){gateIntake();return;}   // login required when auth is on
   const body={idea}; if(!session) body.email=email;   // signed in → identity from the token
   if(BOARD.length) body.directors=BOARD;               // optional Board of Directors → vets each step
@@ -801,6 +804,7 @@ async function start(){
   try{
     const r=await fetch('/api/plan/start',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify(body)});
     const d=await r.json();
+    if(d.gibberish){showJoke(d);go.disabled=false;go.textContent='Build my plan →';return;}  // nonsense → roast, no run
     if(!r.ok){err.textContent=d.error||'Something went wrong.';if(d.upgrade)err.innerHTML+=' <a href=# onclick="upgrade();return false">Upgrade →</a>';go.disabled=false;go.textContent='Build my plan →';return;}
     SID=d.id;
     document.getElementById('intake').style.display='none';
@@ -808,6 +812,14 @@ async function start(){
     poll();
   }catch(e){err.textContent='Network error.';go.disabled=false;go.textContent='Build my plan →';}
 }
+function showJoke(d){
+  const box=document.getElementById('joke');
+  box.innerHTML=`<div class=jokecard><h3>${esc(d.title||"That's... not an idea.")}</h3>`+
+    `<div class="md jbody">${mdToHtml(d.body||'')}</div>`+
+    `<button type=button onclick="dismissJoke()">Okay, for real this time →</button></div>`;
+  box.scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+function dismissJoke(){const i=document.getElementById('idea');i.value='';document.getElementById('joke').innerHTML='';i.focus();}
 function say(msg){const l=document.getElementById('live'); if(l)l.textContent=msg;}  // announce to screen readers
 async function poll(){
   const r=await fetch('/api/plan/'+SID,{headers:authHeaders()});
@@ -982,7 +994,7 @@ function renderBoardPick(){
   const el=document.getElementById('boardpick'); if(!el)return;
   const ax=CFG.archetypes||[]; if(!ax.length){el.innerHTML='';return;}
   el.innerHTML=`<div class=lab id=boardpicklab>Pick your Board of Directors — they'll vet every step (optional):</div>`+
-    `<div class=opts role=group aria-labelledby=boardpicklab>`+ax.map(a=>`<button type=button class="bchip${BOARD.includes(a.key)?' on':''}" aria-pressed=${BOARD.includes(a.key)} onclick="toggleBoard('${a.key}',this)" title="${esc(a.name)} — ${esc(a.blurb)}">${esc(a.first||a.name)}</button>`).join('')+`</div>`;
+    `<div class=opts role=group aria-labelledby=boardpicklab>`+ax.map(a=>`<button type=button class="bchip${BOARD.includes(a.key)?' on':''}" aria-pressed=${BOARD.includes(a.key)} onclick="toggleBoard('${a.key}',this)" title="${esc(a.first?a.first+' — ':'')}${esc(a.blurb)}">${esc(a.name)}</button>`).join('')+`</div>`;
 }
 function toggleBoard(key,btn){
   const i=BOARD.indexOf(key), on=i<0;
@@ -996,7 +1008,7 @@ function renderBoard(s){
   // Chips reflect the active board; tap to add/drop a director for on-demand convening.
   if(SESSION_BOARD===null) SESSION_BOARD=(s.directors&&s.directors.length?s.directors.slice():BOARD.slice());
   document.getElementById('boarddirs').innerHTML=(CFG.archetypes||[]).map(a=>
-    `<button type=button class="bchip${SESSION_BOARD.includes(a.key)?' on':''}" aria-pressed=${SESSION_BOARD.includes(a.key)} onclick="toggleSessionBoard('${a.key}',this)" title="${esc(a.name)} — ${esc(a.blurb)}">${esc(a.first||a.name)}</button>`).join('');
+    `<button type=button class="bchip${SESSION_BOARD.includes(a.key)?' on':''}" aria-pressed=${SESSION_BOARD.includes(a.key)} onclick="toggleSessionBoard('${a.key}',this)" title="${esc(a.first?a.first+' — ':'')}${esc(a.blurb)}">${esc(a.name)}</button>`).join('');
 }
 let SESSION_BOARD=null;
 function toggleSessionBoard(key,el){
