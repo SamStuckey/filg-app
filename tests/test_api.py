@@ -283,6 +283,18 @@ def test_kill_gate_blocks_until_resubstantiated(client):
     assert s2.get("step", 0) >= 1
 
 
+def test_session_usage_meter_fields(client):
+    # The live session usage meter reads cumulative cost/tokens off each response. Assert the wiring
+    # exposes them everywhere it ticks (values are 0 in mock mode; real mode fills from the ledger).
+    sid = client.post("/api/plan/start", json={"idea": GRAB_BAG, "email": "meter@x.com"}).json()["id"]
+    s = wait_status(client, sid)
+    assert "cost" in s and "tokens" in s                      # plan-state (poll + build ops)
+    nxt = client.post(f"/api/plan/{sid}/next", json={"feedback": ""}).json()
+    assert "cost" in nxt and "tokens" in nxt
+    chat = client.post(f"/api/plan/{sid}/chat", json={"message": "why would they buy from me?"}).json()
+    assert "cost" in chat and "tokens" in chat                # side op echoes cumulative for the meter
+
+
 def test_clean_plan_url_serves_spa(client):
     # History-API routing: /plan/{id} serves the SPA shell (not a 404), so deep-links/refresh work
     # and there's no '#' in the path. Distinct from /p/{id} (public share) and /r/{id} (teardown).

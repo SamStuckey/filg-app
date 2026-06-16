@@ -89,6 +89,17 @@ def _meter(user: str, cost: float) -> None:
         usage.record_spend(cost)
 
 
+def _fold_usage(sid: str, s: dict, cost: float, toks: int, **extra) -> tuple[float, int]:
+    """Fold one AI op's cost + token count into the session's running totals (persisting any `extra`
+    columns in the same write). The client reads the cumulative `cost`/`tokens` off the session and
+    ticks an in-memory, per-session usage meter (resets on reload; never tracked on the account).
+    Returns the new cumulative (cost, tokens) so side ops that don't return plan-state can echo them."""
+    new_cost = round((s.get("cost") or 0) + cost, 4)
+    new_tokens = (s.get("tokens") or 0) + int(toks or 0)
+    store.plan_save(sid, cost=new_cost, tokens=new_tokens, **extra)
+    return new_cost, new_tokens
+
+
 def _needs_key(user: str) -> bool:
     """BYOK model: when BYOK is on and this user has no saved key, they're behind the wall — every
     API action past the one free welcome plan requires their own key."""
@@ -415,6 +426,7 @@ def _plan_state(s: dict) -> dict:
         "tree": _tree_view(s["tree"]) if s.get("tree") else None,
         "chat": s.get("chat") or [], "chatStarters": advisor.STARTERS,
         "progress": s.get("progress") or [],
+        "cost": s.get("cost") or 0, "tokens": s.get("tokens") or 0,   # live session usage meter
     }
 
 
@@ -473,6 +485,7 @@ def _plan_research(session_id: str, idea: str, user: str) -> None:
         prov = _provider_for(user)   # BYOK: run the whole pre-build pass on the user's key if they have one
         with provider.use(prov), pipeline.run_ledger():
             prep = planner.prepare(idea, mock=MOCK, on_progress=on_progress)  # intake → research → vet → draft
+            toks = pipeline.LEDGER.tokens()   # the welcome run's token usage → seeds the session meter
         if prov is None:   # FILG's key → meter the free run; BYOK is the user's spend, not metered
             usage.record_run(user, prep["research_cost"])           # the metered free run + daily total
             usage.record_spend(prep["cost"] - prep["research_cost"])  # intake + vet + first draft → daily
@@ -480,7 +493,7 @@ def _plan_research(session_id: str, idea: str, user: str) -> None:
         tree = {"nodes": {root["id"]: root}, "active": root["id"]}
         store.plan_save(session_id, status="building", research=prep["research"], step=0,
                         proposal=prep["proposal"], shaped=prep["shaped"], vetting=prep["vetting"],
-                        cost=prep["cost"], tree=tree, progress=progress)
+                        cost=prep["cost"], tokens=toks, tree=tree, progress=progress)
     except Exception as e:  # noqa: BLE001
         traceback.print_exc()  # full trace → Render stdout logs (client only sees str(e))
         store.plan_save(session_id, status="error", error=str(e))
@@ -594,6 +607,7 @@ async def api_plan_next(sid: str, request: Request):
             child, cost = planner.forward(planner._working_idea(s), s["research"], active, feedback,
                                           directors=s.get("directors") or None,
                                           founder=planner._founder(s), mock=MOCK)
+            toks = pipeline.LEDGER.tokens()
     except BusyError as be:
         return _busy_response(be)
     except Exception as e:  # noqa: BLE001
@@ -603,7 +617,7 @@ async def api_plan_next(sid: str, request: Request):
     active.setdefault("children", []).append(node["id"])
     tree["active"] = node["id"]
     _meter(s.get("user"), cost)
-    store.plan_save(sid, tree=tree, cost=round((s.get("cost") or 0) + cost, 4), **_mirror(tree))
+    _fold_usage(sid, s, cost, toks, tree=tree, **_mirror(tree))
     return _plan_state(store.plan_get(sid))
 
 
@@ -630,6 +644,7 @@ async def api_plan_revet(sid: str, request: Request):
                 proposal, c2 = planner.first_proposal(
                     shaped["thesis"], s["research"], founder=shaped.get("founder_edge"), mock=MOCK)
                 cost = round(cost + c2, 4)
+            toks = pipeline.LEDGER.tokens()
     except BusyError as be:
         return _busy_response(be)
     except Exception as e:  # noqa: BLE001
@@ -640,7 +655,7 @@ async def api_plan_revet(sid: str, request: Request):
         tree = {"nodes": {root["id"]: root}, "active": root["id"]}
         updates.update({"proposal": proposal, "step": 0, "tree": tree, **_mirror(tree)})
     _meter(s.get("user"), cost)
-    store.plan_save(sid, cost=round((s.get("cost") or 0) + cost, 4), **updates)
+    _fold_usage(sid, s, cost, toks, **updates)
     return _plan_state(store.plan_get(sid))
 
 
@@ -670,6 +685,7 @@ async def api_plan_back(sid: str, request: Request):
         with _run_slot(s.get("user")):
             sib, cost = planner.rebranch(planner._working_idea(s), s["research"], prev, feedback,
                                          founder=planner._founder(s), mock=MOCK)
+            toks = pipeline.LEDGER.tokens()
     except BusyError as be:
         return _busy_response(be)
     except Exception as e:  # noqa: BLE001
@@ -680,7 +696,7 @@ async def api_plan_back(sid: str, request: Request):
         tree["nodes"][prev["parent"]].setdefault("children", []).append(node["id"])
     tree["active"] = node["id"]
     _meter(s.get("user"), cost)
-    store.plan_save(sid, tree=tree, cost=round((s.get("cost") or 0) + cost, 4), **_mirror(tree))
+    _fold_usage(sid, s, cost, toks, tree=tree, **_mirror(tree))
     return _plan_state(store.plan_get(sid))
 
 
@@ -717,12 +733,14 @@ async def api_plan_ask(sid: str, request: Request):
         with _run_slot(s.get("user")):
             res, cost = planner.ask_expert(s["idea"], s.get("files") or {}, archetype,
                                            body.get("question") or "", mock=MOCK)
+            toks = pipeline.LEDGER.tokens()
     except BusyError as be:
         return _busy_response(be)
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"error": str(e)}, status_code=500)
     _meter(s.get("user"), cost)
-    return res
+    nc, nt = _fold_usage(sid, s, cost, toks)
+    return {**res, "cost": nc, "tokens": nt}
 
 
 @app.post("/api/plan/{sid}/board")
@@ -747,14 +765,15 @@ async def api_plan_board(sid: str, request: Request):
     try:
         with _run_slot(s.get("user")):
             res, cost = board.convene(work_idea, plan_text, question, directors, mock=MOCK)
+            toks = pipeline.LEDGER.tokens()
     except BusyError as be:
         return _busy_response(be)
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"error": str(e)}, status_code=500)
     _meter(s.get("user"), cost)
-    if picked:  # persist a freshly chosen board so later steps are vetted by it
-        store.plan_save(sid, directors=directors)
-    return res
+    extra = {"directors": directors} if picked else {}   # persist a freshly chosen board for later steps
+    nc, nt = _fold_usage(sid, s, cost, toks, **extra)
+    return {**res, "cost": nc, "tokens": nt}
 
 
 @app.post("/api/plan/{sid}/chat")
@@ -778,6 +797,7 @@ async def api_plan_chat(sid: str, request: Request):
     try:
         with _run_slot(s.get("user")):
             reply, cost = advisor.chat_reply(s, message, history=history, mock=MOCK)
+            toks = pipeline.LEDGER.tokens()
     except BusyError as be:
         return _busy_response(be)
     except Exception as e:  # noqa: BLE001
@@ -785,8 +805,8 @@ async def api_plan_chat(sid: str, request: Request):
         return JSONResponse({"error": str(e)}, status_code=500)
     history += [{"role": "user", "content": message}, {"role": "assistant", "content": reply}]
     _meter(s.get("user"), cost)  # FILG-key chat counts toward the daily kill switch; BYOK is the user's spend
-    store.plan_save(sid, chat=history)
-    return {"reply": reply, "messages": history}
+    nc, nt = _fold_usage(sid, s, cost, toks, chat=history)
+    return {"reply": reply, "messages": history, "cost": nc, "tokens": nt}
 
 
 @app.post("/api/plan/{sid}/delete")
@@ -853,15 +873,18 @@ async def api_plan_pdf(sid: str, request: Request):
         with _run_slot(s.get("user")):
             plan, cost = plan_pdf.synthesize(s, mock=MOCK)
             data = plan_pdf.render(plan, style=(request.query_params.get("style") or "filg"))
+            toks = pipeline.LEDGER.tokens()
     except BusyError as be:
         return _busy_response(be)
     except Exception as e:  # noqa: BLE001
         traceback.print_exc()
         return JSONResponse({"error": f"Could not build the PDF: {e}"}, status_code=500)
     _meter(s.get("user"), cost)
+    nc, nt = _fold_usage(sid, s, cost, toks)   # binary response → echo usage via headers for the meter
     fn = f"{_slug(s.get('idea'))}-business-plan.pdf"
     return Response(data, media_type="application/pdf",
-                    headers={"Content-Disposition": f'attachment; filename="{fn}"'})
+                    headers={"Content-Disposition": f'attachment; filename="{fn}"',
+                             "X-FILG-Cost": str(nc), "X-FILG-Tokens": str(nt)})
 
 
 def _render_page() -> str:
@@ -901,6 +924,10 @@ __FILG_HEAD__
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 "Nunito",ui-rounded,"SF Pro Rounded","Segoe UI",system-ui,sans-serif}
 .page{max-width:1140px;margin:0 auto;padding:22px 22px 72px}
 .top{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+.topright{display:flex;align-items:center;gap:14px}
+.meter{display:inline-flex;align-items:center;gap:6px;background:var(--card);border:1.5px solid var(--line);color:var(--muted);font-size:12.5px;font-weight:700;padding:5px 11px;border-radius:999px;cursor:default;font-variant-numeric:tabular-nums}
+.meter .m-dot{width:7px;height:7px;border-radius:50%;background:var(--ok);flex:none}
+.meter b{color:var(--ink);font-weight:800}
 h1.logo{font-size:30px;font-weight:800;letter-spacing:-.02em;margin:0}.logo span{color:var(--coral)}
 .logobtn{display:inline-flex;align-items:center;gap:8px;background:none;border:0;padding:0;margin:0;font:inherit;color:inherit;letter-spacing:inherit;cursor:pointer}.logobtn:hover{opacity:.85}
 .logomark{width:1.05em;height:1.05em;flex:none}
@@ -1108,7 +1135,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 .tree button.f{width:100%;background:none;border:0;font:inherit;color:inherit;text-align:left;cursor:pointer;padding:0}
 .tree button.f:hover .nm{color:var(--sky)}
 </style></head><body><div class=page>
-<div class=top><h1 class=logo><button type=button class=logobtn onclick=newPlan() aria-label="FILG, start a new idea"><svg class=logomark viewBox="0 0 32 32" aria-hidden=true><rect width=32 height=32 rx=8 fill=#FF6B4A></rect><path d="M16 4c-3.2 2.8-4.3 7.4-4.3 11.8v3.2h8.6v-3.2C20.3 11.4 19.2 6.8 16 4z" fill=#fff></path><circle cx=16 cy=12 r=2.1 fill=#2E7CF6></circle><path d="M11.7 15.5 8.6 20.5l3.1-1.3z" fill=#fff></path><path d="M20.3 15.5 23.4 20.5l-3.1-1.3z" fill=#fff></path><path d="M13.6 19.5h4.8L16 25.5z" fill=#FFC23F></path></svg>FI<span>LG</span></button></h1><div class=authbar id=authbar></div></div>
+<div class=top><h1 class=logo><button type=button class=logobtn onclick=newPlan() aria-label="FILG, start a new idea"><svg class=logomark viewBox="0 0 32 32" aria-hidden=true><rect width=32 height=32 rx=8 fill=#FF6B4A></rect><path d="M16 4c-3.2 2.8-4.3 7.4-4.3 11.8v3.2h8.6v-3.2C20.3 11.4 19.2 6.8 16 4z" fill=#fff></path><circle cx=16 cy=12 r=2.1 fill=#2E7CF6></circle><path d="M11.7 15.5 8.6 20.5l3.1-1.3z" fill=#fff></path><path d="M20.3 15.5 23.4 20.5l-3.1-1.3z" fill=#fff></path><path d="M13.6 19.5h4.8L16 25.5z" fill=#FFC23F></path></svg>FI<span>LG</span></button></h1><div class=topright><button type=button class=meter id=meter hidden title="Token usage this session (resets when you reload)"></button><div class=authbar id=authbar></div></div></div>
 <div class=note-banner id=banner></div>
 <div class=intake id=intake>
 <h2>You've got a business in you. Let's find it. 🚀</h2>
@@ -1228,6 +1255,7 @@ function say(msg){const l=document.getElementById('live'); if(l)l.textContent=ms
 async function poll(){
   const r=await fetch('/api/plan/'+SID,{headers:authHeaders()});
   const s=await r.json();
+  meterTick(s);     // set the session-meter baseline early (cost 0 mid-research) so the welcome run counts
   renderTree(s);renderAddons(s);     // show the plan outline immediately, even while researching
   if(s.status==='researching'){
     if(!ACT_RESEARCH){ACT_ID=Activity.open();Activity.push(ACT_ID,'Spinning up your research');ACT_RESEARCH=true;ACT_PROG_N=0;}
@@ -1246,7 +1274,28 @@ async function poll(){
   if(s.status!=='error')maybePromptKey();   // welcome plan is in → require a key to go further
 }
 let ACT_RESEARCH=false, ACT_PROG_N=0, ACT_ID=null;
+// ── Session usage meter ─────────────────────────────────────────────────────
+// In-memory only: tokens + $ spent THIS browser session. Resets on reload, never tracked on the
+// account. Each plan's cumulative cost/tokens is observed per response; only positive deltas tick
+// the meter (first sight of a plan sets a baseline, so opening an existing plan doesn't backfill).
+let METER={tokens:0,cost:0}; const PLAN_BASE={};
+function meterTick(o){
+  if(!o||o.id==null||o.cost==null||o.tokens==null)return;
+  const c=+o.cost||0,t=+o.tokens||0,id=o.id;
+  if(!(id in PLAN_BASE)){PLAN_BASE[id]={c,t};renderMeter();return;}   // baseline; don't backfill
+  const dc=c-PLAN_BASE[id].c,dt=t-PLAN_BASE[id].t;
+  if(dc>0||dt>0){METER.cost+=Math.max(0,dc);METER.tokens+=Math.max(0,dt);PLAN_BASE[id]={c,t};renderMeter();}
+}
+function fmtTokens(n){n=Math.round(n);return n>=1000?(n/1000).toFixed(n>=10000?0:1).replace(/\\.0$/,'')+'k':String(n);}
+function renderMeter(){
+  const el=document.getElementById('meter');if(!el)return;
+  if(METER.tokens<=0){el.hidden=true;return;}
+  const d=METER.cost<1?(METER.cost<0.01?4:3):2;
+  el.hidden=false;
+  el.innerHTML=`<span class=m-dot></span><b>${fmtTokens(METER.tokens)}</b> tokens · <b>$${METER.cost.toFixed(d)}</b>`;
+}
 function render(s){
+  meterTick(s);   // tick the session usage meter off this plan's cumulative cost/tokens
   if(s.status==='error'){
     document.getElementById('node').innerHTML='<div class=node><h3>Hit a snag</h3><p class=lead>'+esc(s.error)+'</p><button type=button onclick=newPlan()>Start over</button></div>';
     say('Something went wrong: '+(s.error||'')); return;
@@ -1297,7 +1346,7 @@ async function sendChat(){
     const [r]=await Promise.all([fetch('/api/plan/'+SID+'/chat',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({message:msg})}),new Promise(res=>setTimeout(res,850))]);
     const d=await r.json();const th=document.getElementById('chatthinking');
     if(!r.ok){Activity.stop(aid);if(th){th.removeAttribute('id');th.innerHTML='<span class=think>'+esc(d.error||'Could not reach the advisor.')+'</span>';}}
-    else{Activity.done(aid,'Answered.');if(th){th.removeAttribute('id');th.innerHTML=mdToHtml(d.reply);}}
+    else{Activity.done(aid,'Answered.');meterTick({id:SID,cost:d.cost,tokens:d.tokens});if(th){th.removeAttribute('id');th.innerHTML=mdToHtml(d.reply);}}
   }catch(e){Activity.stop(aid);const th=document.getElementById('chatthinking');if(th)th.innerHTML='<span class=think>Network error.</span>';}
   finally{CHAT_BUSY=false;btn.disabled=false;log.scrollTop=log.scrollHeight;}
 }
@@ -1625,14 +1674,14 @@ async function submitDrawer(){
     if(DRAWER.mode==='expert'){
       const [r]=await Promise.all([fetch('/api/plan/'+SID+'/ask',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({archetype:DRAWER.key,question:q})}),new Promise(res=>setTimeout(res,850))]);
       const d=await r.json();go.disabled=false;
-      if(r.ok)Activity.done(aid,'Done.');else Activity.stop(aid);
+      if(r.ok){Activity.done(aid,'Done.');meterTick({id:SID,cost:d.cost,tokens:d.tokens});}else Activity.stop(aid);
       out.innerHTML=r.ok?mdToHtml(d.answer):esc(d.error||'Could not reach the advisor.');
     }else{
       const body={question:q}; if(SESSION_BOARD!==null)body.directors=SESSION_BOARD;
       const [r]=await Promise.all([fetch('/api/plan/'+SID+'/board',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify(body)}),new Promise(res=>setTimeout(res,850))]);
       const d=await r.json();go.disabled=false;
       if(!r.ok){Activity.stop(aid);out.innerHTML=esc(d.error||'Could not convene the board.');return;}
-      Activity.done(aid,'Your board weighed in.');
+      Activity.done(aid,'Your board weighed in.');meterTick({id:SID,cost:d.cost,tokens:d.tokens});
       const split=(d.conflicts&&d.conflicts.toLowerCase()!=='none')?`<span class=split>Where they split: ${esc(d.conflicts)}</span>`:'';
       out.innerHTML=d.directors.map((x,i)=>`<div class=balloon id=dbal_${i}><button type=button class=bh onclick="document.getElementById('dbal_${i}').classList.toggle('open')">💬 See what ${esc(x.first||x.name)}${x.first&&x.name?' ('+esc(x.name)+')':''} says<span class=caret>▸</span></button><div class="bb md">${mdToHtml(x.take)}</div></div>`).join('')+
         `<div class=takeaway><div class=tl>Board takeaway</div>${esc(d.verdict)}${split}</div>`+
@@ -1693,6 +1742,7 @@ async function download(){
     const [r]=await Promise.all([fetch('/api/plan/'+SID+'/plan.pdf',{headers:authHeaders()}),minShow]);
     if(!r.ok){let d={};try{d=await r.json();}catch(e){} Activity.stop(aid);toast(d.error||'Could not build the PDF.','err');return;}
     const blob=await r.blob();
+    meterTick({id:SID,cost:r.headers.get('X-FILG-Cost'),tokens:r.headers.get('X-FILG-Tokens')});
     Activity.done(aid,'Your PDF is ready.');
     const u=URL.createObjectURL(blob),a=document.createElement('a');a.href=u;a.download='filg-business-plan.pdf';a.click();URL.revokeObjectURL(u);
   }catch(e){Activity.stop(aid);toast('Network error building the PDF.','err');}

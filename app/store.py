@@ -96,6 +96,7 @@ def init() -> None:
                     "  progress TEXT,"              # JSON [str] — live research-spew lines (the receipts)
                     "  shared INTEGER NOT NULL DEFAULT 0,"  # 1 → readable at the public /p/{id} share link
                     "  cost REAL NOT NULL DEFAULT 0,"
+                    "  tokens INTEGER NOT NULL DEFAULT 0,"  # cumulative input+output tokens (usage meter)
                     "  error TEXT,"
                     "  created_at TEXT NOT NULL)")
                 # Migration for DBs created before later columns existed (SQLite has no ADD COLUMN IF
@@ -106,6 +107,8 @@ def init() -> None:
                         con.execute(f"ALTER TABLE plan_sessions ADD COLUMN {col} TEXT")
                 if "shared" not in have:
                     con.execute("ALTER TABLE plan_sessions ADD COLUMN shared INTEGER NOT NULL DEFAULT 0")
+                if "tokens" not in have:
+                    con.execute("ALTER TABLE plan_sessions ADD COLUMN tokens INTEGER NOT NULL DEFAULT 0")
         finally:
             con.close()
         _initialized = True

@@ -100,6 +100,10 @@ class Ledger:
     def searches(self) -> int:
         return sum(r[4] for r in self.rows)
 
+    def tokens(self) -> int:
+        """Total input+output tokens across all rows (for the live session usage meter)."""
+        return sum(r[2] + r[3] for r in self.rows)
+
 
 # Per-run ledger: a fresh Ledger is bound per request so concurrent operations don't interleave
 # their rows (cost_slice would otherwise mis-bill one run with another's tokens). Outside a bound
@@ -144,6 +148,9 @@ class _LedgerProxy:
 
     def searches(self):
         return _active_ledger().searches()
+
+    def tokens(self):
+        return _active_ledger().tokens()
 
 
 LEDGER = _LedgerProxy()
