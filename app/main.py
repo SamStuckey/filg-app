@@ -1099,12 +1099,25 @@ button:hover{filter:brightness(1.04)}button:active{transform:translateY(1px)}but
 .toasts{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);display:flex;flex-direction:column;gap:8px;z-index:60;align-items:center;pointer-events:none}
 .toast{background:var(--ink);color:#fff;padding:11px 18px;border-radius:12px;font-size:14px;font-weight:700;box-shadow:0 8px 24px rgba(20,17,14,.2);transition:opacity .3s,transform .3s;max-width:90vw}
 .toast.err{background:var(--coral-d)}.toast.out{opacity:0;transform:translateY(8px)}
-/* Reusable AI-activity ticker, a pinned, non-covering footer that spews work as a small terminal-ish
-   log (friendly, not technical). Used anywhere AI runs and the user waits (research, PDF, …). */
+/* Reusable AI-activity ticker, a pinned, non-covering footer. Each running task is its OWN collapsible
+   card (header = what it's doing + its spew underneath), so parallel ops stack and stay legible. A
+   card removes itself when its task finishes; the footer hides once the last one is gone. */
 .activity{position:fixed;left:0;right:0;bottom:0;z-index:80;transform:translateY(115%);transition:transform .28s cubic-bezier(.4,0,.2,1);background:var(--ink);color:#fff;box-shadow:0 -8px 30px rgba(20,17,14,.18)}
 .activity.show{transform:translateY(0)}
-.alog{max-width:1140px;margin:0 auto;padding:9px 22px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;line-height:1.55;height:72px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.3) transparent}
+.alog{max-width:1140px;margin:0 auto;padding:10px 22px;display:flex;flex-direction:column;gap:7px;max-height:42vh;overflow-y:auto;scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.3) transparent}
 .alog::-webkit-scrollbar{width:6px}.alog::-webkit-scrollbar-thumb{background:rgba(255,255,255,.25);border-radius:6px}
+.atask{border:1px solid rgba(255,255,255,.13);border-radius:11px;background:rgba(255,255,255,.04);overflow:hidden;transition:opacity .25s}
+.atask.done{opacity:.6}
+.ah{display:flex;align-items:center;gap:9px;width:100%;background:none;border:0;color:#fff;font:inherit;font-size:13px;font-weight:700;padding:8px 13px;cursor:pointer;text-align:left}
+.ah .astat{width:13px;flex:none;text-align:center;color:var(--sun)}
+.ah .astat::before{content:"\\25cf";font-size:10px;animation:blink 1s steps(1) infinite}
+.atask.done .ah .astat::before{content:"\\2713";color:#43d17f;font-size:13px;animation:none}
+.ah .alabel{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ah .caret{flex:none;font-size:11px;opacity:.6;transition:transform .2s}
+.atask.collapsed .ah .caret{transform:rotate(-90deg)}
+.atask.collapsed .abody{display:none}
+.abody{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.5;padding:0 13px 9px 13px;max-height:108px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.3) transparent}
+.abody::-webkit-scrollbar{width:5px}.abody::-webkit-scrollbar-thumb{background:rgba(255,255,255,.22);border-radius:6px}
 .aline{display:flex;align-items:center;gap:9px;padding:1px 0;background:none;color:rgba(255,255,255,.55)}
 .aline.done{color:rgba(255,255,255,.74)}
 .aline.active{color:#fff;font-weight:600}
@@ -1112,7 +1125,6 @@ button:hover{filter:brightness(1.04)}button:active{transform:translateY(1px)}but
 .aline.active .aglyph{animation:blink 1s steps(1) infinite}
 .aline.active .aglyph::before{content:"\\203A";font-weight:800}
 .aline.done .aglyph::before{content:"\\2713";color:#43d17f}
-.activity.ok .aline.active .aglyph{animation:none}
 .aline .atext{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 @keyframes blink{50%{opacity:.3}}
 .authgate{margin:6px 0 2px}.authgate button{width:100%;margin-bottom:8px}
@@ -1259,7 +1271,7 @@ async function poll(){
   meterTick(s);     // set the session-meter baseline early (cost 0 mid-research) so the welcome run counts
   renderTree(s);renderAddons(s);     // show the plan outline immediately, even while researching
   if(s.status==='researching'){
-    if(!ACT_RESEARCH){ACT_ID=Activity.open();Activity.push(ACT_ID,'Spinning up your research');ACT_RESEARCH=true;ACT_PROG_N=0;}
+    if(!ACT_RESEARCH){ACT_ID=Activity.open('Researching + grading your market');Activity.push(ACT_ID,'Spinning up your research');ACT_RESEARCH=true;ACT_PROG_N=0;}
     const prog=s.progress||[];                                   // real receipts from the engine, streamed
     for(let i=ACT_PROG_N;i<prog.length;i++)Activity.push(ACT_ID,prog[i]);
     ACT_PROG_N=Math.max(ACT_PROG_N,prog.length);
@@ -1342,7 +1354,7 @@ async function sendChat(){
   CHAT_BUSY=true;btn.disabled=true;t.value='';if(st)st.innerHTML='';
   log.insertAdjacentHTML('beforeend',`<div class="cmsg user">${esc(msg)}</div><div class="cmsg bot md" id=chatthinking><span class=think>Thinking…</span></div>`);
   log.scrollTop=log.scrollHeight;
-  const aid=Activity.start(["Reading your plan","Checking the graded evidence","Thinking it through"],1200);
+  const aid=Activity.start(["Reading your plan","Checking the graded evidence","Thinking it through"],1200,'Chat with your plan');
   try{
     const [r]=await Promise.all([fetch('/api/plan/'+SID+'/chat',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({message:msg})}),new Promise(res=>setTimeout(res,850))]);
     const d=await r.json();const th=document.getElementById('chatthinking');
@@ -1456,7 +1468,7 @@ async function nextStep(){
   _navBusy();
   const steps=[]; if(fb.trim())steps.push("Folding in your note");
   steps.push("Drafting the next part of your plan","Checking it against your graded research");
-  const aid=Activity.start(steps,1200);
+  const aid=Activity.start(steps,1200,'Building the next part');
   try{
     const r=await _aiRun('/api/plan/'+SID+'/next',{feedback:fb});
     const s=await r.json();
@@ -1469,7 +1481,7 @@ async function reCheck(){       // kill-gate rescue: re-vet with the substance t
   const more=((document.getElementById('substance')||{}).value||'').trim();
   if(more.length<8){fbErr('Add a real skill or asset, and who would pay for it.');const t=document.getElementById('substance');if(t)t.focus();return;}
   _navBusy();
-  const aid=Activity.start(["Re-reading your idea with the new detail","Re-grading it against the research","Re-running the kill gate"],1200);
+  const aid=Activity.start(["Re-reading your idea with the new detail","Re-grading it against the research","Re-running the kill gate"],1200,'Re-checking your idea');
   try{
     const r=await _aiRun('/api/plan/'+SID+'/revet',{more});
     const s=await r.json();
@@ -1484,7 +1496,7 @@ async function backStep(){
   const fb=((document.getElementById('feedback')||{}).value||'').trim();
   if(!fb){fbErr('Add a quick note on what to change, a note is required to go back a step.');const t=document.getElementById('feedback');if(t)t.focus();return;}
   _navBusy();
-  const aid=Activity.start(["Re-opening the previous part","Re-drafting it from your note"],1200);
+  const aid=Activity.start(["Re-opening the previous part","Re-drafting it from your note"],1200,'Going back a step');
   try{
     const r=await _aiRun('/api/plan/'+SID+'/back',{feedback:fb});
     const s=await r.json();
@@ -1670,7 +1682,7 @@ async function submitDrawer(){
   out.style.display='block';
   out.innerHTML='<p class=lead>'+(DRAWER.mode==='board'?'Convening the board…':'Thinking…')+'</p>';
   go.disabled=true;
-  const aid=Activity.start(DRAWER.mode==='board'?["Briefing your board on the plan","Each director weighs in","Synthesizing their verdict"]:["Reading your plan","Thinking it through"],1300);
+  const aid=Activity.start(DRAWER.mode==='board'?["Briefing your board on the plan","Each director weighs in","Synthesizing their verdict"]:["Reading your plan","Thinking it through"],1300,DRAWER.mode==='board'?'Convening your board':'Asking your advisor');
   try{
     if(DRAWER.mode==='expert'){
       const [r]=await Promise.all([fetch('/api/plan/'+SID+'/ask',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({archetype:DRAWER.key,question:q})}),new Promise(res=>setTimeout(res,850))]);
@@ -1691,45 +1703,59 @@ async function submitDrawer(){
   }catch(e){go.disabled=false;Activity.stop(aid);out.innerHTML='Network error.';}
 }
 // ── Reusable AI-activity ticker (pinned footer; never covers content) ─────────
-// Any AI wait feeds it honest, real-stage lines: Activity.start([...]) → Activity.done('…') (or
-// Activity.stop() on error). It auto-advances through the steps and holds on the last until done.
-// Multi-track activity spew: each AI operation gets its own track id (start/open returns it; pass it
-// to push/done/stop). Concurrent ops share one scrolling log and no longer wipe each other — the
-// footer only hides once the LAST active track finishes. start() auto-cycles its steps; open() is
-// manual (real lines via push). N concurrent operations, N tracks.
+// Each AI operation is its OWN collapsible task card: Activity.start([...steps],interval,label) (or
+// open(label) for manual push) returns a track id; feed it real lines via push(id,line); end with
+// done(id,'…') or stop(id) on error. Parallel ops STACK as separate labelled cards (the header says
+// what each is doing) so concurrent spew stays legible; a card removes itself when its task finishes,
+// and the footer hides once the last one is gone. start() auto-cycles its steps; open() is manual.
 const Activity={
   _seq:0, tracks:{}, n:0,
   _el(){return document.getElementById('activity');},
   _log(){return document.getElementById('activity-log');},
-  _show(){const a=this._el();if(a){a.classList.remove('ok');a.classList.add('show');a.setAttribute('aria-hidden','false');}},
-  _line(text,done){
+  _show(){const a=this._el();if(a){a.classList.add('show');a.setAttribute('aria-hidden','false');}},
+  _mkTask(label){
     const log=this._log(); if(!log)return null;
+    const wrap=document.createElement('div'); wrap.className='atask';
+    wrap.innerHTML='<button type=button class=ah><span class=astat aria-hidden=true></span><span class=alabel></span><span class=caret aria-hidden=true>\\u25be</span></button><div class=abody></div>';
+    wrap.querySelector('.alabel').textContent=label||'Working';
+    wrap.querySelector('.ah').onclick=()=>wrap.classList.toggle('collapsed');
+    log.appendChild(wrap); log.scrollTop=log.scrollHeight;
+    return wrap;
+  },
+  _line(body,text,done){
+    if(!body)return null;
     const li=document.createElement('div'); li.className='aline '+(done?'done':'active');
     li.innerHTML='<span class=aglyph aria-hidden=true></span><span class=atext></span>';
     li.querySelector('.atext').textContent=text||'';
-    log.appendChild(li);
-    while(log.children.length>50)log.removeChild(log.firstChild);
-    log.scrollTop=log.scrollHeight;
+    body.appendChild(li);
+    while(body.children.length>40)body.removeChild(body.firstChild);
+    body.scrollTop=body.scrollHeight;
     return li;
   },
-  _advance(t,text){ if(t.line)t.line.classList.replace('active','done'); t.line=this._line(text,false); },
-  start(steps,interval){
+  _advance(t,text){ if(t.line)t.line.classList.replace('active','done'); t.line=this._line(t.body,text,false); },
+  start(steps,interval,label){
     const id=++this._seq; this.n++; this._show();
-    const s=(steps||[]).slice(); let i=0; const t={line:null,timer:null}; this.tracks[id]=t;
+    const wrap=this._mkTask(label); const body=wrap?wrap.querySelector('.abody'):null;
+    const s=(steps||[]).slice(); let i=0; const t={wrap,body,line:null,timer:null}; this.tracks[id]=t;
     if(s.length)this._advance(t,s[0]);
     t.timer=setInterval(()=>{ if(i<s.length-1){i++;this._advance(t,s[i]);} else {clearInterval(t.timer);t.timer=null;} }, interval||1600);
     return id;
   },
-  open(){ const id=++this._seq; this.n++; this._show(); this.tracks[id]={line:null,timer:null}; return id; },
+  open(label){ const id=++this._seq; this.n++; this._show(); const wrap=this._mkTask(label); this.tracks[id]={wrap,body:wrap?wrap.querySelector('.abody'):null,line:null,timer:null}; return id; },
   push(id,line){ const t=this.tracks[id]; if(t)this._advance(t,line); },
   done(id,msg){ this._end(id,msg,false); },
   stop(id){ this._end(id,null,true); },
   _end(id,msg,immediate){
     const t=this.tracks[id];
-    if(t){ if(t.timer)clearInterval(t.timer); if(t.line)t.line.classList.replace('active','done'); delete this.tracks[id]; this.n=Math.max(0,this.n-1); }
-    if(msg)this._line(msg,true);
-    if(this.n<=0){ const a=this._el(); if(a)a.classList.add('ok'); setTimeout(()=>{ if(this.n<=0)this._hide(); }, immediate?0:1400); }
+    if(!t){ this._maybeHide(immediate); return; }
+    if(t.timer)clearInterval(t.timer);
+    if(t.line)t.line.classList.replace('active','done');
+    if(msg)this._line(t.body,msg,true);
+    if(t.wrap)t.wrap.classList.add('done');
+    delete this.tracks[id]; this.n=Math.max(0,this.n-1);
+    setTimeout(()=>{ if(t.wrap&&t.wrap.parentNode)t.wrap.parentNode.removeChild(t.wrap); this._maybeHide(false); }, immediate?250:1300);
   },
+  _maybeHide(immediate){ if(this.n>0)return; setTimeout(()=>{ if(this.n<=0)this._hide(); }, immediate?0:250); },
   stopAll(){ for(const id in this.tracks){if(this.tracks[id].timer)clearInterval(this.tracks[id].timer);} this.tracks={}; this.n=0; this._hide(); },
   _hide(){ const a=this._el(); if(a){a.classList.remove('show');a.setAttribute('aria-hidden','true');} const l=this._log(); if(l)l.innerHTML=''; }
 };
@@ -1737,7 +1763,7 @@ const RESEARCH_STEPS=["Focusing your idea into one sharp thesis","Spinning up re
 const PDF_STEPS=["Applying your board's input","Pulling your graded evidence","Building the decision matrix","Laying out a modern, on-brand design","Typesetting your PDF"];
 async function download(){
   if(!requireKey())return;
-  const aid=Activity.start(PDF_STEPS);
+  const aid=Activity.start(PDF_STEPS,1600,'Building your styled PDF');
   const minShow=new Promise(res=>setTimeout(res,2600));   // let the sequence breathe (covers fast mock runs)
   try{
     const [r]=await Promise.all([fetch('/api/plan/'+SID+'/plan.pdf',{headers:authHeaders()}),minShow]);
