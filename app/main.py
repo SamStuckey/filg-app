@@ -244,10 +244,60 @@ def _plan_state(s: dict) -> dict:
         "shaped": s.get("shaped"), "vetting": s.get("vetting"),
         "directors": s.get("directors") or [], "board": s.get("board") or [],
         "files": [{"path": p, "content": c} for p, c in (s.get("files") or {}).items()],
-        "sections": [{"file": x["file"], "title": x["title"]} for x in planner.SECTIONS],
+        "sections": [{"file": x["file"], "title": x["title"], "sub": x["sub"]}
+                     for x in planner.SECTIONS],
         "step": s.get("step", 0), "total": planner.N, "proposal": s.get("proposal"),
         "done": s["status"] == "done", "shared": bool(s.get("shared")),
+        "tree": _tree_view(s["tree"]) if s.get("tree") else None,
     }
+
+
+# ── Branching decision tree — node wiring around planner's pure tree functions ─
+def _new_node(content: dict, parent: str | None) -> dict:
+    """Wrap pure node content (from planner) with the tree bookkeeping main.py owns."""
+    return {"id": uuid.uuid4().hex[:8], "parent": parent, "children": [], **content}
+
+
+def _tree_view(tree: dict) -> dict:
+    """Trim the stored node tree to what the frontend needs to draw + navigate it. `show` flips on
+    once a real branch exists (a node with 2+ children, or 2+ roots) — matching 'reveal the tree once
+    they branch'."""
+    nodes = tree.get("nodes") or {}
+    roots = sum(1 for n in nodes.values() if n.get("parent") is None)
+    branched = roots > 1 or any(len(n.get("children") or []) > 1 for n in nodes.values())
+    return {"active": tree.get("active"),
+            "nodes": [{"id": n["id"], "parent": n.get("parent"), "step": n["step"],
+                       "title": n.get("title"), "feedback": n.get("feedback")}
+                      for n in nodes.values()],
+            "show": branched}
+
+
+def _mirror(tree: dict) -> dict:
+    """Flat session fields (step/files/proposal/history/board/status) for the active node, so the
+    existing _plan_state + frontend renders keep working off the active branch unchanged."""
+    a = tree["nodes"][tree["active"]]
+    done = a["step"] >= planner.N
+    return {"step": a["step"], "files": a["files"], "history": a["history"], "board": a["board"],
+            "proposal": (None if done else {"section": a["section"], "title": a["title"],
+                                            "draft": a["draft"]}),
+            "status": "done" if done else "building"}
+
+
+def _ensure_tree(s: dict) -> dict:
+    """Return the session's node tree, lazily seeding a single-node tree from legacy flat state for
+    plans created before branching existed (so resumed in-progress plans still go Next/Back)."""
+    t = s.get("tree")
+    if t and t.get("nodes"):
+        return t
+    p = s.get("proposal") or {}
+    step = s.get("step", 0) or 0
+    sec = next((x for x in planner.SECTIONS if x["key"] == p.get("section")), None)
+    node = _new_node({"step": step, "section": (sec or {}).get("key"),
+                      "title": (sec or {}).get("title", "Plan complete"),
+                      "sub": (sec or {}).get("sub", ""), "draft": p.get("draft"),
+                      "files": s.get("files") or {}, "history": s.get("history") or [],
+                      "board": s.get("board") or [], "feedback": None}, None)
+    return {"nodes": {node["id"]: node}, "active": node["id"]}
 
 
 def _plan_research(session_id: str, idea: str, user: str) -> None:
@@ -256,9 +306,11 @@ def _plan_research(session_id: str, idea: str, user: str) -> None:
             prep = planner.prepare(idea, mock=MOCK)   # intake → research(thesis) → vet → first draft
         usage.record_run(user, prep["research_cost"])           # the metered free run + daily total
         usage.record_spend(prep["cost"] - prep["research_cost"])  # intake + vet + first draft → daily
+        root = _new_node(planner.root_node(prep["proposal"]), None)  # seed the decision tree's root
+        tree = {"nodes": {root["id"]: root}, "active": root["id"]}
         store.plan_save(session_id, status="building", research=prep["research"], step=0,
                         proposal=prep["proposal"], shaped=prep["shaped"], vetting=prep["vetting"],
-                        cost=prep["cost"])
+                        cost=prep["cost"], tree=tree)
     except Exception as e:  # noqa: BLE001
         traceback.print_exc()  # full trace → Render stdout logs (client only sees str(e))
         store.plan_save(session_id, status="error", error=str(e))
@@ -326,6 +378,87 @@ async def api_plan_respond(sid: str, request: Request):
         return JSONResponse({"error": str(e)}, status_code=500)
     usage.record_spend(round((upd.get("cost", 0) or 0) - (s.get("cost") or 0), 4))  # draft + board review
     store.plan_save(sid, **upd)
+    return _plan_state(store.plan_get(sid))
+
+
+@app.post("/api/plan/{sid}/next")
+async def api_plan_next(sid: str, request: Request):
+    """Roll forward: finalize the active node's section (a note steers it) and draft the next one.
+    Going forward from a node that already has children naturally creates a new branch."""
+    s = store.plan_get(sid)
+    if not s or not _owns(request, s):
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    body = await request.json()
+    feedback = (body.get("feedback") or "").strip() or None
+    tree = _ensure_tree(s)
+    active = tree["nodes"][tree["active"]]
+    if active["step"] >= planner.N:
+        return JSONResponse({"error": "This plan is already complete."}, status_code=409)
+    try:
+        with RUN_LOCK:
+            child, cost = planner.forward(planner._working_idea(s), s["research"], active, feedback,
+                                          directors=s.get("directors") or None, mock=MOCK)
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": str(e)}, status_code=500)
+    node = _new_node(child, active["id"])
+    tree["nodes"][node["id"]] = node
+    active.setdefault("children", []).append(node["id"])
+    tree["active"] = node["id"]
+    usage.record_spend(cost)
+    store.plan_save(sid, tree=tree, cost=round((s.get("cost") or 0) + cost, 4), **_mirror(tree))
+    return _plan_state(store.plan_get(sid))
+
+
+@app.post("/api/plan/{sid}/back")
+async def api_plan_back(sid: str, request: Request):
+    """Roll back a step: re-draft the PREVIOUS section taking the (required) note as a redirect — a
+    new sibling branch from the node before this one. Feedback is required: backing up means you want
+    something changed, so an empty note is a form error."""
+    s = store.plan_get(sid)
+    if not s or not _owns(request, s):
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    body = await request.json()
+    feedback = (body.get("feedback") or "").strip()
+    if not feedback:
+        return JSONResponse(
+            {"error": "Add a quick note on what to change — feedback's required to go back a step."},
+            status_code=400)
+    tree = _ensure_tree(s)
+    active = tree["nodes"][tree["active"]]
+    if not active.get("parent"):
+        return JSONResponse({"error": "You're on the first part — nothing to go back to."},
+                            status_code=400)
+    prev = tree["nodes"][active["parent"]]   # the previous step's node — the one we re-draft
+    try:
+        with RUN_LOCK:
+            sib, cost = planner.rebranch(planner._working_idea(s), s["research"], prev, feedback,
+                                         mock=MOCK)
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": str(e)}, status_code=500)
+    node = _new_node(sib, prev.get("parent"))   # sibling of `prev` → branches from prev's parent
+    tree["nodes"][node["id"]] = node
+    if prev.get("parent"):
+        tree["nodes"][prev["parent"]].setdefault("children", []).append(node["id"])
+    tree["active"] = node["id"]
+    usage.record_spend(cost)
+    store.plan_save(sid, tree=tree, cost=round((s.get("cost") or 0) + cost, 4), **_mirror(tree))
+    return _plan_state(store.plan_get(sid))
+
+
+@app.post("/api/plan/{sid}/goto")
+async def api_plan_goto(sid: str, request: Request):
+    """Hop to an existing node in the decision tree (pure navigation — no new branch, no spend).
+    Rolling forward from there is what spawns a new branch."""
+    s = store.plan_get(sid)
+    if not s or not _owns(request, s):
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    body = await request.json()
+    node_id = body.get("node")
+    tree = _ensure_tree(s)
+    if node_id not in (tree.get("nodes") or {}):
+        return JSONResponse({"error": "unknown node"}, status_code=404)
+    tree["active"] = node_id
+    store.plan_save(sid, tree=tree, **_mirror(tree))
     return _plan_state(store.plan_get(sid))
 
 
@@ -469,6 +602,7 @@ button:hover{filter:brightness(1.04)}button:active{transform:translateY(1px)}but
 .sec{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:16px}
 .sec h3{font-size:12px;margin:0 0 12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:800}
 .ev{list-style:none;padding:0;margin:0}.ev li{padding:9px 0;border-top:1px dashed var(--line);font-size:13px}.ev li:first-child{border-top:0}
+#research .ev{max-height:46vh;overflow-y:auto;overflow-x:hidden;padding-right:6px;margin-right:-4px}
 .ev .note{color:var(--muted);font-size:12px}
 .badge{font-size:10px;font-weight:800;padding:1px 7px;border-radius:20px}.b-ok{background:var(--ok-bg);color:var(--ok)}.b-warn{background:var(--warn-bg);color:var(--warn)}
 .tree{list-style:none;padding:0;margin:0}.tree li{padding:10px 0;border-top:1px solid var(--line)}.tree li:first-child{border-top:0}
@@ -499,6 +633,20 @@ button:hover{filter:brightness(1.04)}button:active{transform:translateY(1px)}but
 .lead{font-size:14px;color:var(--muted);margin:0 0 12px}
 .branches{display:flex;gap:10px;flex-wrap:wrap}.branches button{flex:1;min-width:130px;font-size:15px;padding:13px 12px}
 .b-but{background:var(--sky)}.b-no{background:#fff;color:var(--ink);border:1.5px solid var(--line)}
+/* always-open feedback box + Next/Back navigation (replaces the 3 verdict buttons) */
+.fbk{margin-top:14px;border:1.5px solid var(--sky);border-radius:14px;padding:14px;background:#fff}
+.fbk textarea{margin-bottom:8px}
+.navrow{display:flex;gap:10px;margin-top:10px}
+.navrow button{flex:1}.navrow .b-next{background:var(--sky)}
+.navrow .b-back{background:#fff;color:var(--ink);border:1.5px solid var(--line);flex:0 0 auto;min-width:96px}
+.ferr{color:var(--coral-d);font-weight:700;font-size:13px;margin-top:8px;min-height:0}
+/* decision tree (branches you've explored) — hidden until a branch actually exists */
+#dtree{display:flex;flex-direction:column;gap:1px}
+.dnode{display:block;width:100%;text-align:left;background:none;border:0;font:inherit;color:var(--ink);font-size:12.5px;line-height:1.35;padding:6px 8px;border-radius:9px;cursor:pointer}
+.dnode:hover{background:var(--bg)}.dnode.path{font-weight:700}
+.dnode.on{background:#eef4ff;color:var(--sky);font-weight:800}
+.dnode .ds{display:block;font-size:11px;color:var(--muted);font-weight:500;margin-top:1px}
+.dnode.on .ds{color:var(--sky)}
 .compose{margin-top:14px;border:1.5px solid var(--sky);border-radius:14px;padding:14px;background:#fff}
 .compose .pl{font-weight:700;margin:0 0 8px}
 .chips{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0 0}
@@ -609,6 +757,9 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <aside class=side>
 <div class=sec><h3>Your plan</h3><ul class=tree id=tree></ul>
 <button id=dl class=dl onclick=download() style="display:none;margin-top:12px">⬇ Download plan (.zip)</button></div>
+<div class=sec id=dtreesec style="display:none"><h3>Decision tree</h3>
+<p class=bhelp>Every branch you've explored. Click a node to hop back to it — the active branch is highlighted.</p>
+<div id=dtree></div></div>
 <div class="sec addons"><h3>Ask an expert</h3><div class=ax id=addons></div>
 <div class=disc id=adisc></div></div>
 <div class="sec board" id=boardsec style="display:none"><h3>Board of Directors</h3>
@@ -666,7 +817,7 @@ function render(s){
     document.getElementById('node').innerHTML='<div class=node><h3>Hit a snag</h3><p class=lead>'+esc(s.error)+'</p><button type=button onclick=newPlan()>Start over</button></div>';
     say('Something went wrong: '+(s.error||'')); return;
   }
-  renderResearch(s);renderVet(s);renderAnswer(s);renderTree(s);renderNode(s);renderAddons(s);renderBoard(s);renderBoardRound(s);
+  renderResearch(s);renderVet(s);renderAnswer(s);renderTree(s);renderNode(s);renderAddons(s);renderBoard(s);renderBoardRound(s);renderDecisionTree(s);
   if(s.done)say('Your plan is complete — all '+s.total+' parts ready to download.');
   else if(s.vetting&&s.vetting.verdict)say('Research graded. Verdict: '+s.vetting.verdict+'. Ready to build part '+((s.step||0)+1)+'.');
 }
@@ -716,35 +867,69 @@ function renderNode(s){
   n.innerHTML=`<div class=node><span class=eyebrow>Your plan · part ${s.step+1} of ${s.total}</span><h3>${esc(p.title)}</h3><p class=h3sub>${esc(sec.sub||'')}</p>`+
     intro+
     `<div class="draft md">${mdToHtml(p.draft)}</div>`+
-    `<p class=lead>Here's a first swing — react and we'll shape it. Your call drives what gets written next.</p>`+
-    `<div class=branches><button class=b-yes onclick="branch('yes_and')">Yes, and…</button>`+
-    `<button class=b-but onclick="branch('okay_but')">Okay, but…</button>`+
-    `<button class=b-no onclick="branch('not_quite')">Not quite</button></div><div id=compose></div></div>`;
+    `<p class=lead>React below — your note steers what's written next. <b>Next</b> moves forward; <b>Back</b> revises the previous part (a note's required to go back).</p>`+
+    `<div class=fbk><label for=feedback class=sr-only>Your feedback on this part</label>`+
+    `<textarea id=feedback rows=2 placeholder="Optional to go forward · required to go back — what should change?"></textarea>`+
+    `<div class=chips>${FB_CHIPS.map(x=>`<button type=button class=chip onclick="addChip('${x}')">${esc(x)}</button>`).join('')}</div>`+
+    `<div class=navrow><button type=button class=b-back onclick=backStep()${s.step===0?' disabled title="You\\'re on the first part"':''}>← Back</button>`+
+    `<button type=button class=b-next onclick=nextStep()>Next →</button></div>`+
+    `<div class=ferr id=ferr></div></div>`;
 }
-const BRANCH={
-  yes_and:{pl:"Yes — and what should it add or push further?",chips:["go bolder","add a second audience","make it premium","add an upsell"],btn:"Add it →"},
-  okay_but:{pl:"Okay — but what should change?",chips:["cheaper entry","B2B only","faster timeline","narrower niche"],btn:"Change it →"},
-  not_quite:{pl:"Not quite — what would you rather see?",chips:["a different model","more specific","less risky","more ambitious"],btn:"Show me another →"}};
-function branch(choice){
-  const b=BRANCH[choice], c=document.getElementById('compose');
-  c.innerHTML=`<div class=compose><p class=pl>${esc(b.pl)}</p>`+
-    `<textarea id=note rows=2 placeholder="Optional — type a note, or just send."></textarea>`+
-    `<div class=chips>${b.chips.map(x=>`<button type=button class=chip onclick="addChip('${x.replace(/'/g,"")}')">${esc(x)}</button>`).join('')}</div>`+
-    `<div class=row><button onclick="respond('${choice}')">${esc(b.btn)}</button><button type=button class=ghost onclick="document.getElementById('compose').innerHTML=''">Cancel</button></div></div>`;
-  const t=document.getElementById('note'); if(t)t.focus();
-}
-function addChip(txt){const t=document.getElementById('note'); if(!t)return; t.value=(t.value?t.value.replace(/\\s*$/,'')+', ':'')+txt; t.focus();}
-async function respond(choice){
-  const noteEl=document.getElementById('note'); const note=noteEl?noteEl.value:'';
-  const node=document.getElementById('node'); node.querySelectorAll('button').forEach(b=>b.disabled=true);
-  const err=document.getElementById('err2'); err.textContent='';
-  const comp=document.getElementById('compose'); if(comp)comp.innerHTML='<p class=lead>Writing…</p>';
+const FB_CHIPS=["go bolder","narrower niche","cheaper entry","B2B only","more specific","add an upsell"];
+function addChip(txt){const t=document.getElementById('feedback'); if(!t)return; t.value=(t.value?t.value.replace(/\\s*$/,'')+', ':'')+txt; t.focus();}
+function _navBusy(){const n=document.getElementById('node');if(n)n.querySelectorAll('button').forEach(b=>b.disabled=true);const f=document.getElementById('ferr');if(f)f.textContent='';document.getElementById('err2').textContent='';}
+function _navFree(){const n=document.getElementById('node');if(n)n.querySelectorAll('button').forEach(b=>b.disabled=false);}
+function fbErr(msg){const f=document.getElementById('ferr');if(f)f.textContent=msg;else document.getElementById('err2').textContent=msg;}
+async function nextStep(){
+  const fb=(document.getElementById('feedback')||{}).value||'';
+  _navBusy();
   try{
-    const r=await fetch('/api/plan/'+SID+'/respond',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({choice,note})});
+    const r=await fetch('/api/plan/'+SID+'/next',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({feedback:fb})});
     const s=await r.json();
-    if(!r.ok){err.textContent=s.error||'Something went wrong.';node.querySelectorAll('button').forEach(b=>b.disabled=false);return;}
+    if(!r.ok){fbErr(s.error||'Something went wrong.');_navFree();return;}
     render(s);
-  }catch(e){err.textContent='Network error.';node.querySelectorAll('button').forEach(b=>b.disabled=false);}
+  }catch(e){fbErr('Network error.');_navFree();}
+}
+async function backStep(){
+  const fb=((document.getElementById('feedback')||{}).value||'').trim();
+  if(!fb){fbErr('Add a quick note on what to change — feedback’s required to go back a step.');const t=document.getElementById('feedback');if(t)t.focus();return;}
+  _navBusy();
+  try{
+    const r=await fetch('/api/plan/'+SID+'/back',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({feedback:fb})});
+    const s=await r.json();
+    if(!r.ok){fbErr(s.error||'Something went wrong.');_navFree();return;}
+    render(s);
+  }catch(e){fbErr('Network error.');_navFree();}
+}
+async function gotoNode(id){
+  document.getElementById('err2').textContent='';
+  try{
+    const r=await fetch('/api/plan/'+SID+'/goto',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({node:id})});
+    const s=await r.json();
+    if(!r.ok){document.getElementById('err2').textContent=s.error||'Could not jump there.';return;}
+    render(s);
+  }catch(e){document.getElementById('err2').textContent='Network error.';}
+}
+function renderDecisionTree(s){
+  const sec=document.getElementById('dtreesec'),box=document.getElementById('dtree');
+  if(!sec||!box)return;
+  const t=s.tree;
+  if(!t||!t.show){sec.style.display='none';return;}
+  sec.style.display='';
+  const nodes=t.nodes||[],byId={},kids={};
+  nodes.forEach(n=>{byId[n.id]=n;kids[n.id]=[];});
+  nodes.forEach(n=>{if(n.parent!=null&&kids[n.parent])kids[n.parent].push(n.id);});
+  const path={}; let cur=t.active; while(cur!=null&&byId[cur]){path[cur]=1;cur=byId[cur].parent;}
+  const roots=nodes.filter(n=>n.parent==null).map(n=>n.id);
+  function row(id,depth){
+    const n=byId[id];
+    const cls='dnode'+(id===t.active?' on':'')+(path[id]?' path':'');
+    const tag=n.feedback?`<span class=ds>↳ ${esc(n.feedback.slice(0,46))}</span>`:'';
+    let h=`<button type=button class="${cls}" style="padding-left:${8+depth*14}px" onclick="gotoNode('${id}')" aria-current="${id===t.active?'true':'false'}">${esc(n.title||('Part '+(n.step+1)))}${tag}</button>`;
+    (kids[id]||[]).forEach(c=>{h+=row(c,depth+1);});
+    return h;
+  }
+  box.innerHTML=roots.map(r=>row(r,0)).join('');
 }
 function renderAddons(s){
   const box=document.getElementById('addons'); if(!box||box.dataset.done)return;

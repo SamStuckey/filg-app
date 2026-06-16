@@ -38,6 +38,43 @@ def test_full_plan_flow_with_board(client):
     assert "composite" in a["answer"].lower()
 
 
+def test_branching_next_back_goto(client):
+    sid = client.post("/api/plan/start",
+                      json={"idea": GRAB_BAG, "email": "tree@x.com"}).json()["id"]
+    s = wait_status(client, sid)
+    assert s["proposal"]["section"] == "brief" and s["tree"] and not s["tree"]["show"]
+
+    # roll forward twice → two sections finalized, still a single (unbranched) line
+    s = client.post(f"/api/plan/{sid}/next", json={"feedback": ""}).json()
+    s = client.post(f"/api/plan/{sid}/next", json={"feedback": "go bolder"}).json()
+    assert s["step"] == 2 and len(s["files"]) == 2 and not s["tree"]["show"]
+
+    # back without a note → form error (feedback is required to go back)
+    r = client.post(f"/api/plan/{sid}/back", json={"feedback": ""})
+    assert r.status_code == 400
+
+    # back WITH a note → re-drafts the previous part as a new branch; the tree now reveals itself
+    s = client.post(f"/api/plan/{sid}/back", json={"feedback": "narrower niche"}).json()
+    assert s["step"] == 1 and len(s["files"]) == 1          # backed up a step, that section reopened
+    assert s["tree"]["show"]                                 # a real branch exists now
+    assert "revised" in s["proposal"]["draft"]              # the note steered the re-draft
+    nodes = s["tree"]["nodes"]
+    assert sum(1 for n in nodes if n["step"] == 1) == 2     # two sibling branches at part 2
+
+    # hop back to the original branch's node via the tree, then forward again → another branch
+    active = s["tree"]["active"]
+    other = next(n["id"] for n in nodes if n["step"] == 1 and n["id"] != active)
+    s = client.post(f"/api/plan/{sid}/goto", json={"node": other}).json()
+    assert s["tree"]["active"] == other and s["step"] == 1
+
+
+def test_goto_unknown_node_404(client):
+    sid = client.post("/api/plan/start",
+                      json={"idea": GRAB_BAG, "email": "g@x.com"}).json()["id"]
+    wait_status(client, sid)
+    assert client.post(f"/api/plan/{sid}/goto", json={"node": "nope"}).status_code == 404
+
+
 def test_short_idea_rejected(client):
     r = client.post("/api/plan/start", json={"idea": "hi", "email": "x@x.com"})
     assert r.status_code == 400

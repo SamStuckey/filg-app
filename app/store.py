@@ -84,6 +84,7 @@ def init() -> None:
                     "  vetting TEXT,"               # JSON vet result {verdict, scores, first_test...}
                     "  directors TEXT,"             # JSON [persona_key] — the chosen Board of Directors
                     "  board TEXT,"                 # JSON [{section, ...review}] — per-step board reviews
+                    "  tree TEXT,"                  # JSON {nodes:{id:node}, active} — branching decision tree
                     "  shared INTEGER NOT NULL DEFAULT 0,"  # 1 → readable at the public /p/{id} share link
                     "  cost REAL NOT NULL DEFAULT 0,"
                     "  error TEXT,"
@@ -91,7 +92,7 @@ def init() -> None:
                 # Migration for DBs created before later columns existed (SQLite has no ADD COLUMN IF
                 # NOT EXISTS) — add any missing ones, ignore if already present.
                 have = {r["name"] for r in con.execute("PRAGMA table_info(plan_sessions)")}
-                for col in ("shaped", "vetting", "directors", "board"):
+                for col in ("shaped", "vetting", "directors", "board", "tree"):
                     if col not in have:
                         con.execute(f"ALTER TABLE plan_sessions ADD COLUMN {col} TEXT")
                 if "shared" not in have:
@@ -207,7 +208,7 @@ def is_paid(email: str) -> bool:
 
 # ── Plan-builder sessions ────────────────────────────────────────────────────
 _PLAN_JSON = ("research", "files", "proposal", "history",  # columns stored as JSON
-              "shaped", "vetting", "directors", "board")
+              "shaped", "vetting", "directors", "board", "tree")
 
 
 def plan_create(session_id: str, user: str, idea: str, directors: list | None = None) -> None:
@@ -331,6 +332,8 @@ if __name__ == "__main__":  # quick self-test (no API)
     assert s["files"]["01_brief.md"] == "# Brief" and s["proposal"]["section"] == "offer"
     assert s["shaped"]["thesis"] == "focused idea" and s["vetting"]["verdict"] == "pursue"
     assert s["board"][0]["section"] == "01_brief.md"
+    plan_save("pl1", tree={"nodes": {"n1": {"id": "n1", "parent": None, "step": 0}}, "active": "n1"})
+    assert plan_get("pl1")["tree"]["active"] == "n1"   # branching tree round-trips through JSON
     assert plan_get("nope") is None
     mine = plan_list("u@x.com")
     assert len(mine) == 1 and mine[0]["id"] == "pl1" and plan_list("nobody@x.com") == []

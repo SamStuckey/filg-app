@@ -225,6 +225,73 @@ def advance(session: dict, choice: str, note: str | None, mock: bool = False,
     return upd
 
 
+# ── Branching decision tree (Next / Back / navigate between branches) ─────────
+# The builder is a *tree* of section-proposals, not one straight line. Each node is a proposal for a
+# single section, carrying the files its ancestors finalized. Going forward (Next) finalizes this
+# node's section and drafts the next one as a child; going back (Back) re-drafts the PREVIOUS section
+# as a new sibling branch. These functions are pure — node content in, node content out — so the tree
+# wiring (ids, parent/child links, the active pointer) lives in app/main.py and stays testable here.
+
+def root_node(proposal: dict) -> dict:
+    """The tree's first node — the section-0 proposal, nothing finalized upstream yet."""
+    s0 = SECTIONS[0]
+    return {"step": 0, "section": s0["key"], "title": s0["title"], "sub": s0["sub"],
+            "draft": proposal["draft"], "files": {}, "history": [], "board": [], "feedback": None}
+
+
+def forward(idea: str, research_data: dict, node: dict, feedback: str | None,
+            directors: list | None = None, mock: bool = False) -> tuple[dict, float]:
+    """Finalize `node`'s section (re-synthesizing if `feedback` steers it), optionally let the board
+    review it, then draft the next section. Returns (child_node_content, cost). When the section just
+    finalized is the last one, the child is a terminal 'done' node (no draft)."""
+    step = node["step"]
+    section = SECTIONS[step]
+    files = dict(node["files"])
+    reviews = list(node["board"])
+    fb = (feedback or "").strip() or None
+    history = list(node["history"]) + [{"section": section["key"], "choice": "next", "note": fb}]
+    cost = 0.0
+    if fb:  # a forward note adds/extends — re-synthesize this section honoring it, then finalize
+        final, c = propose(idea, section["key"], research_data, history,
+                           steer=_steer("yes_and", fb), board_notes=_board_notes(node["board"]),
+                           mock=mock)
+        cost += c
+    else:
+        final = node["draft"]
+    files[section["file"]] = final
+    if directors:
+        review, bc = board.review_section(idea, section["title"], final,
+                                          bundle_markdown(idea, files), directors, mock=mock)
+        reviews = reviews + [{"section": section["file"], "title": section["title"], **review}]
+        cost += bc
+    if step + 1 < N:
+        nxt = SECTIONS[step + 1]
+        draft, c = propose(idea, nxt["key"], research_data, history,
+                           board_notes=_board_notes(reviews), mock=mock)
+        cost += c
+        child = {"step": step + 1, "section": nxt["key"], "title": nxt["title"], "sub": nxt["sub"],
+                 "draft": draft, "files": files, "history": history, "board": reviews, "feedback": fb}
+    else:
+        child = {"step": N, "section": None, "title": "Plan complete", "sub": "", "draft": None,
+                 "files": files, "history": history, "board": reviews, "feedback": fb}
+    return child, round(cost, 4)
+
+
+def rebranch(idea: str, research_data: dict, node: dict, feedback: str,
+             mock: bool = False) -> tuple[dict, float]:
+    """Re-draft `node`'s section taking `feedback` as a redirect — a fresh sibling branch of `node`.
+    Used by Back: the operator revises a previous step, spawning a new branch from that point. The
+    section isn't finalized (it becomes the live proposal again), so no board review runs here."""
+    section = SECTIONS[node["step"]]
+    draft, c = propose(idea, section["key"], research_data, node["history"],
+                       steer=_steer("not_quite", feedback), board_notes=_board_notes(node["board"]),
+                       mock=mock)
+    sib = {"step": node["step"], "section": section["key"], "title": section["title"],
+           "sub": section["sub"], "draft": draft, "files": dict(node["files"]),
+           "history": list(node["history"]), "board": list(node["board"]), "feedback": feedback}
+    return sib, round(c, 4)
+
+
 def first_proposal(idea: str, research_data: dict, mock: bool = False) -> tuple[dict, float]:
     """Draft section 0's proposal right after research completes."""
     s0 = SECTIONS[0]
@@ -302,5 +369,20 @@ if __name__ == "__main__":  # self-test (mock, no API)
     assert upd["board"][0]["verdict"]                                          # synthesized takeaway
     assert "board-guided" in upd["proposal"]["draft"]                          # takeaway steered next
     assert _board_notes(upd["board"]).startswith("- on")
+    # branching tree: root → forward (finalize + next) → rebranch (re-draft previous as a sibling)
+    r3 = research("guitar coaching", mock=True)
+    prop3, _ = first_proposal("guitar coaching", r3, mock=True)
+    root = root_node(prop3)
+    assert root["step"] == 0 and root["files"] == {}
+    child, _ = forward("guitar coaching", r3, root, "go bolder", mock=True)
+    assert child["step"] == 1 and len(child["files"]) == 1            # section 0 finalized
+    assert "revised" in child["files"]["1-the-setup.md"]             # forward note steered it
+    sib, _ = rebranch("guitar coaching", r3, root, "narrower niche", mock=True)
+    assert sib["step"] == 0 and "revised" in sib["draft"] and sib["files"] == {}  # re-draft, no finalize
+    # forward to the end → terminal node
+    node = child
+    while node["step"] < N:
+        node, _ = forward("guitar coaching", r3, node, None, mock=True)
+    assert node["step"] == N and node["draft"] is None and len(node["files"]) == N
     print("planner.py self-test OK —", N, "sections,", len(sess["files"]),
-          "files, expert ok, prepare ok, board ok")
+          "files, expert ok, prepare ok, board ok, tree ok")
