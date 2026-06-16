@@ -256,3 +256,13 @@ def test_accessibility_essentials_present(client):
         assert lbl in html                            # inputs are labeled
     assert "aria-pressed" in html                     # toggle chips expose state
     assert "DRAWER_TRIGGER" in html                   # focus restored on drawer close
+
+
+def test_clean_plan_url_serves_spa(client):
+    # History-API routing: /plan/{id} serves the SPA shell (not a 404), so deep-links/refresh work
+    # and there's no '#' in the path. Distinct from /p/{id} (public share) and /r/{id} (teardown).
+    r = client.get("/plan/abc123def")
+    assert r.status_code == 200 and "window.FILG" in r.text
+    home = client.get("/").text
+    assert "routeFromPath" in home and "popstate" in home   # path router + back/fwd wired
+    assert "location.hash" not in home                       # hash routing fully removed

@@ -750,8 +750,9 @@ async def api_plan_pdf(sid: str, request: Request):
                     headers={"Content-Disposition": f'attachment; filename="{fn}"'})
 
 
-@app.get("/", response_class=HTMLResponse)
-async def index():
+def _render_page() -> str:
+    """The single-page app shell. Served at `/` and at clean deep-link paths like `/plan/{id}` so the
+    frontend can use real History-API URLs (no `#`) and direct-load / refresh still works."""
     cfg = json.dumps({"authEnabled": auth.AUTH_ENABLED, "billingEnabled": billing.BILLING_ENABLED,
                       "byokEnabled": keys.enabled(),
                       "supabaseUrl": os.environ.get("SUPABASE_URL", ""),
@@ -762,6 +763,18 @@ async def index():
     if auth.AUTH_ENABLED:
         head += '<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>'
     return PAGE.replace("__FILG_HEAD__", head)
+
+
+@app.get("/", response_class=HTMLResponse)
+async def index():
+    return _render_page()
+
+
+@app.get("/plan/{sid}", response_class=HTMLResponse)
+async def plan_page(sid: str):
+    """Serve the SPA shell for a deep-linked plan; the frontend reads the id from the path and loads
+    it. (Distinct from `/p/{id}` — the server-rendered public share — and `/r/{id}` teardowns.)"""
+    return _render_page()
 
 
 # ── Single-page plan-builder frontend (brand-aligned; no build step) ─────────
@@ -1119,7 +1132,7 @@ function render(s){
     say('Something went wrong: '+(s.error||'')); return;
   }
   renderResearch(s);renderVet(s);renderAnswer(s);renderTree(s);renderNode(s);renderAddons(s);renderBoard(s);renderBoardRound(s);renderDecisionTree(s);renderChat(s);syncSidebar(s);
-  if(s.done&&SID)location.hash='#/plan/'+SID;   // the finished plan lives at a route (revisit + bookmark)
+  if(s.done&&SID&&location.pathname!=='/plan/'+SID)history.pushState({plan:SID},'','/plan/'+SID);   // finished plan gets a clean URL (revisit + bookmark)
   if(s.done)say('Your plan is complete, all '+s.total+' parts ready to download.');
   else if(s.vetting&&s.vetting.verdict)say('Research graded. Verdict: '+s.vetting.verdict+'. Ready to build part '+((s.step||0)+1)+'.');
 }
@@ -1680,7 +1693,7 @@ async function upgrade(){
   }catch(e){toast('Network error starting checkout.','err');}
 }
 function show(id){['intake','workspace','profile'].forEach(x=>{const e=document.getElementById(x);if(e)e.style.display=(x===id?(x==='workspace'?'grid':'block'):'none');});}
-function newPlan(){SIDEBAR_PHASE=null;ACT_RESEARCH=false;VET_OPEN=true;VET_STEPPED=false;DTREE_STEP=-99;Activity.stop(true);closeViewer();show('intake');renderBoardPick();gateIntake();}
+function newPlan(){SIDEBAR_PHASE=null;ACT_RESEARCH=false;VET_OPEN=true;VET_STEPPED=false;DTREE_STEP=-99;Activity.stop(true);closeViewer();SID=null;if(location.pathname!=='/')history.pushState({},'','/');show('intake');renderBoardPick();gateIntake();}
 async function showPlans(){
   let d; try{const r=await fetch('/api/plans',{headers:authHeaders()});if(!r.ok){toast('Sign in to see your plans.','err');return;}d=await r.json();}catch(e){toast('Network error.','err');return;}
   show('profile');renderPlans(d);
@@ -1699,7 +1712,8 @@ function renderPlans(d){
     `<div style="margin:10px 0 16px"><button onclick=newPlan()>+ New plan</button></div>`+rows+integ+`</div>`;
 }
 async function resume(id){
-  SID=id;show('workspace');SESSION_BOARD=null;SIDEBAR_PHASE=null;VET_OPEN=true;VET_STEPPED=false;DTREE_STEP=-99;
+  SID=id;if(location.pathname!=='/plan/'+id)history.pushState({plan:id},'','/plan/'+id);   // clean URL for any entry point
+  show('workspace');SESSION_BOARD=null;SIDEBAR_PHASE=null;VET_OPEN=true;VET_STEPPED=false;DTREE_STEP=-99;
   const ab=document.getElementById('addons');if(ab)delete ab.dataset.done;
   closeDrawer();closeViewer();
   try{const r=await fetch('/api/plan/'+SID,{headers:authHeaders()});const s=await r.json();render(s);if(s.status==='researching')poll();}catch(e){document.getElementById('err2').textContent='Could not load that plan.';}
@@ -1729,15 +1743,17 @@ async function initAuth(){
   if(q.get('upgraded'))banner('🎉 You\\'re on Operator. Your plans + integrations are unlocked.');
   if(q.get('canceled'))banner('Checkout canceled, no charge. You\\'re still on the free tier.');
   restoreIdea();renderBoardPick();
-  if(!CFG.authEnabled||!window.supabase){renderAuth();routeFromHash();return;}
+  if(!CFG.authEnabled||!window.supabase){renderAuth();routeFromPath();return;}
   sb=window.supabase.createClient(CFG.supabaseUrl,CFG.supabaseAnon);
   sb.auth.onAuthStateChange(async (_e,s)=>{session=s;await loadMe();renderAuth();});
-  const {data}=await sb.auth.getSession();session=data.session;await loadMe();renderAuth();routeFromHash();
+  const {data}=await sb.auth.getSession();session=data.session;await loadMe();renderAuth();routeFromPath();
 }
-function routeFromHash(){   // a finished plan lives at #/plan/{id}, deep-link / bookmark / revisit
-  const m=(location.hash||'').match(/^#\\/plan\\/([a-z0-9]+)/i);
+function routeFromPath(){   // a finished plan lives at /plan/{id} — deep-link / bookmark / revisit / back-fwd
+  const m=(location.pathname||'').match(/^\\/plan\\/([a-z0-9]+)/i);
   if(m&&m[1])resume(m[1]);
+  else if(SID){SID=null;show('intake');renderBoardPick();gateIntake();}   // navigated back to home
 }
+window.addEventListener('popstate',routeFromPath);   // browser back/forward drives the SPA
 document.addEventListener('keydown',function(e){
   const drawer=document.getElementById('drawer'), modal=document.getElementById('modal');
   const dOpen=drawer&&drawer.classList.contains('open'), mOpen=modal&&modal.classList.contains('open');
