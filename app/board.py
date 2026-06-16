@@ -70,7 +70,7 @@ def _synthesize(idea: str, focus: str, takes: list[dict]) -> tuple[dict, float]:
 _MOCK_BOARD = {
     "closer": "Price it higher and lead with the outcome, not the hours. You're leaving money on the "
               "table with a flat low fee.",
-    "bootstrapper": "Sell it before you build any of it — get one paying client this week, then make "
+    "bootstrapper": "Sell it before you build any of it. Get one paying client this week, then make "
                     "the delivery repeatable.",
     "cfo": "The margin only works if you can deliver in under ~5 hours a client. Model that before you "
            "promise a flat price.",
@@ -92,7 +92,7 @@ def convene(idea: str, plan_text: str, focus: str, director_keys: list[str] | No
                   "consensus": "Charge more, sell before building, and prove you can deliver fast.",
                   "conflicts": "The Closer wants premium pricing; the CFO wants the delivery math "
                                "proven first.",
-                  "verdict": "Pursue — but land one paying client at a higher price this week and "
+                  "verdict": "Pursue, but land one paying client at a higher price this week and "
                              "track your hours-to-deliver.",
                   "disclaimer": personas.DISCLAIMER}
         return result, 0.0

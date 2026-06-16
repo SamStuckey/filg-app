@@ -18,6 +18,7 @@ each section on Sonnet over ONLY the gate-graded research (label-don't-chase), s
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -43,7 +44,7 @@ SECTIONS = [
               "exactly what the buyer is paying for."},
     {"key": "why",      "file": "3-why-you-win.md",          "title": "Why you win",           "sub": "alternatives & your edge",
      "guide": "Name the REAL alternatives the buyer weighs — including doing nothing / DIY and the "
-              "obvious competitor or substitute — then make the honest, specific case for why THIS "
+              "obvious competitor or substitute, then make the specific, defensible case for why THIS "
               "operator wins anyway, led by their unfair advantage (founder edge). No 'we care more'; "
               "give a defensible reason a buyer picks them over the named alternatives."},
     {"key": "pricing",  "file": "4-what-you-charge.md",      "title": "What you charge",       "sub": "packaging & price"},
@@ -71,13 +72,13 @@ _MOCK_DRAFT = {
               "visible and unmet."),
     "offer": ("## Offer\n\nA productized service: you build and run one named outcome for the client "
               "(done-for-you), fixed scope, flat price, short timeline. The buyer pays for the outcome, "
-              "not your hours — not a tool they self-serve, not a custom one-off."),
+              "not your hours, not a tool they self-serve, not a custom one-off."),
     "why": ("## Why you win\n\nThe alternatives are doing nothing, a DIY tool, or a generalist "
-            "competitor. You win on a specific unfair advantage — name it and make it the wedge, not a "
+            "competitor. You win on a specific unfair advantage, name it and make it the wedge, not a "
             "vague claim of caring more."),
     "pricing": ("## Packaging & pricing\n\nOne tier to start: a flat setup fee + a small monthly. "
                 "Anchor on the outcome's value, not your hours. (Vendor 'leak/ROI' figures are "
-                "*unverified* — model per client.)"),
+                "*unverified*, model per client.)"),
     "gtm": ("## Go-to-market\n\nPost one specific offer in three communities your buyer already "
             "lives in this week. Take the first paying customer before building anything."),
     "delivery": ("## Delivery playbook\n\nDiscovery → build → test → go-live → a monthly "
@@ -104,15 +105,37 @@ def _founder(session: dict) -> str | None:
     return (session.get("shaped") or {}).get("founder_edge")
 
 
-def prepare(idea: str, mock: bool = False) -> dict:
+def _host(url: str) -> str:
+    m = re.search(r"https?://([^/]+)", url or "")
+    return (m.group(1).replace("www.", "") if m else (url or "")).strip() or "a source"
+
+
+def prepare(idea: str, mock: bool = False, on_progress=None) -> dict:
     """Full pre-build pass for a new session: intake (shape the grab-bag into one thesis) → research
     the thesis → vet it (kill-gate) → draft section 0. Returns everything the session needs to start
     building, plus a `cost` total. The raw `idea` is kept by the caller for display; everything
-    downstream runs on the focused `shaped['thesis']`."""
+    downstream runs on the focused `shaped['thesis']`. `on_progress(line)` (optional) is called at each
+    real milestone, including a receipt per graded source, so the UI can spew live progress."""
+    def emit(line: str) -> None:
+        if on_progress:
+            try:
+                on_progress(line)
+            except Exception:  # noqa: BLE001 — progress is best-effort, never break the run
+                pass
+
+    emit("Focusing your idea into one sharp thesis")
     shaped, c_shape = intake.shape(idea, mock=mock)
     thesis = shaped["thesis"]
+    emit("Researching the market and competition")
     research_data = research(thesis, mock=mock)
+    rows = research_data.get("rows") or []
+    for r in rows:                                   # the receipts — the gate's verdict per source
+        emit((f"✓ cited {_host(r.get('url',''))}" if r.get("mark") == "ok"
+              else f"⚠ flagged {_host(r.get('url',''))} (vendor)"))
+    emit(f"Graded {len(rows)} source" + ("" if len(rows) == 1 else "s"))
     vetting, c_vet = intake.vet(idea, shaped, research_data, mock=mock)
+    emit(f"Verdict: {vetting.get('verdict', 'pursue')}")
+    emit("Drafting your first offer")
     proposal, c_prop = first_proposal(thesis, research_data, founder=shaped.get("founder_edge"),
                                       mock=mock)
     return {"shaped": shaped, "research": research_data, "vetting": vetting, "proposal": proposal,
@@ -138,7 +161,7 @@ def propose(idea: str, section_key: str, research_data: dict, history: list,
     if mock:
         draft = _MOCK_DRAFT[section_key]
         if steer:
-            draft += f"\n\n*(revised — {steer})*"
+            draft += f"\n\n*(revised, {steer})*"
         if board_notes:
             draft += "\n\n*(board-guided)*"
         return draft, 0.0
@@ -376,8 +399,8 @@ def ask_expert(idea: str, files: dict, archetype_key: str, question: str,
 
 def bundle_markdown(idea: str, files: dict) -> str:
     """Combine the file tree into one README-style markdown (used for the .md inside the zip)."""
-    L = [f"# Business plan — {idea.strip()[:80]}", "",
-         "*Built with FILG. Every number is graded by a source-credibility gate — vendor-marketing "
+    L = [f"# Business plan: {idea.strip()[:80]}", "",
+         "*Built with FILG. Every number is graded by a source-credibility gate, vendor-marketing "
          "stats are labeled, not laundered.*", ""]
     for s in SECTIONS:
         if s["file"] in files:

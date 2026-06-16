@@ -254,6 +254,7 @@ def _plan_state(s: dict) -> dict:
         "done": s["status"] == "done", "shared": bool(s.get("shared")),
         "tree": _tree_view(s["tree"]) if s.get("tree") else None,
         "chat": s.get("chat") or [], "chatStarters": advisor.STARTERS,
+        "progress": s.get("progress") or [],
     }
 
 
@@ -305,15 +306,19 @@ def _ensure_tree(s: dict) -> dict:
 
 def _plan_research(session_id: str, idea: str, user: str) -> None:
     try:
+        progress: list[str] = []
+        def on_progress(line: str) -> None:  # write each real milestone/receipt so the UI can spew it live
+            progress.append(line)
+            store.plan_save(session_id, progress=list(progress))
         with RUN_LOCK:
-            prep = planner.prepare(idea, mock=MOCK)   # intake → research(thesis) → vet → first draft
+            prep = planner.prepare(idea, mock=MOCK, on_progress=on_progress)  # intake → research → vet → draft
         usage.record_run(user, prep["research_cost"])           # the metered free run + daily total
         usage.record_spend(prep["cost"] - prep["research_cost"])  # intake + vet + first draft → daily
         root = _new_node(planner.root_node(prep["proposal"]), None)  # seed the decision tree's root
         tree = {"nodes": {root["id"]: root}, "active": root["id"]}
         store.plan_save(session_id, status="building", research=prep["research"], step=0,
                         proposal=prep["proposal"], shaped=prep["shaped"], vetting=prep["vetting"],
-                        cost=prep["cost"], tree=tree)
+                        cost=prep["cost"], tree=tree, progress=progress)
     except Exception as e:  # noqa: BLE001
         traceback.print_exc()  # full trace → Render stdout logs (client only sees str(e))
         store.plan_save(session_id, status="error", error=str(e))
@@ -630,7 +635,7 @@ async def index():
 
 # ── Single-page plan-builder frontend (brand-aligned; no build step) ─────────
 PAGE = """<!doctype html><html lang=en><head><meta charset=utf-8>
-<meta name=viewport content="width=device-width,initial-scale=1"><title>FILG — build your business plan, with receipts</title>
+<meta name=viewport content="width=device-width,initial-scale=1"><title>FILG, build your business plan, with receipts</title>
 <link rel="icon" href='data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"%3E%3Crect width="32" height="32" rx="8" fill="%23FF6B4A"/%3E%3Cpath d="M16 4c-3.2 2.8-4.3 7.4-4.3 11.8v3.2h8.6v-3.2C20.3 11.4 19.2 6.8 16 4z" fill="%23fff"/%3E%3Ccircle cx="16" cy="12" r="2.1" fill="%232E7CF6"/%3E%3Cpath d="M11.7 15.5 8.6 20.5l3.1-1.3z" fill="%23fff"/%3E%3Cpath d="M20.3 15.5 23.4 20.5l-3.1-1.3z" fill="%23fff"/%3E%3Cpath d="M13.6 19.5h4.8L16 25.5z" fill="%23FFC23F"/%3E%3C/svg%3E'>
 __FILG_HEAD__
 <style>
@@ -665,7 +670,7 @@ button:hover{filter:brightness(1.04)}button:active{transform:translateY(1px)}but
 .sec{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:16px}
 .sec h3{font-size:12px;margin:0 0 12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:800}
 .ev{list-style:none;padding:0;margin:0}.ev li{padding:9px 0;border-top:1px dashed var(--line);font-size:13px}.ev li:first-child{border-top:0}
-/* collapsible sidebar sections (accordion) — header toggles, body shows when .open */
+/* collapsible sidebar sections (accordion), header toggles, body shows when .open */
 .sec.collap .sechead{display:flex;align-items:center;gap:8px;width:100%;background:none;border:0;padding:0;margin:0;cursor:pointer;text-align:left;font:inherit}
 .sec.collap .sechead h3{margin:0;flex:1}
 .sec.collap .sechead .caret{color:var(--muted);font-size:12px;transition:transform .15s}
@@ -729,7 +734,7 @@ button:hover{filter:brightness(1.04)}button:active{transform:translateY(1px)}but
 .navrow button{flex:1}.navrow .b-next{background:var(--sky)}
 .navrow .b-back{background:#fff;color:var(--ink);border:1.5px solid var(--line);flex:0 0 auto;min-width:96px}
 .ferr{color:var(--coral-d);font-weight:700;font-size:13px;margin-top:8px;min-height:0}
-/* decision tree (branches you've explored) — hidden until a branch actually exists */
+/* decision tree (branches you've explored), hidden until a branch actually exists */
 #dtree{display:flex;flex-direction:column;gap:1px}
 .dnode{display:block;width:100%;text-align:left;background:none;border:0;font:inherit;color:var(--ink);font-size:12.5px;line-height:1.35;padding:6px 8px;border-radius:9px;cursor:pointer}
 .dnode:hover{background:var(--bg)}.dnode.path{font-weight:700}
@@ -801,7 +806,7 @@ button:hover{filter:brightness(1.04)}button:active{transform:translateY(1px)}but
 .toasts{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);display:flex;flex-direction:column;gap:8px;z-index:60;align-items:center;pointer-events:none}
 .toast{background:var(--ink);color:#fff;padding:11px 18px;border-radius:12px;font-size:14px;font-weight:700;box-shadow:0 8px 24px rgba(20,17,14,.2);transition:opacity .3s,transform .3s;max-width:90vw}
 .toast.err{background:var(--coral-d)}.toast.out{opacity:0;transform:translateY(8px)}
-/* Reusable AI-activity ticker — a pinned, non-covering footer that spews work as a small terminal-ish
+/* Reusable AI-activity ticker, a pinned, non-covering footer that spews work as a small terminal-ish
    log (friendly, not technical). Used anywhere AI runs and the user waits (research, PDF, …). */
 .activity{position:fixed;left:0;right:0;bottom:0;z-index:80;transform:translateY(115%);transition:transform .28s cubic-bezier(.4,0,.2,1);background:var(--ink);color:#fff;box-shadow:0 -8px 30px rgba(20,17,14,.18)}
 .activity.show{transform:translateY(0)}
@@ -834,13 +839,13 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 .tree button.f{width:100%;background:none;border:0;font:inherit;color:inherit;text-align:left;cursor:pointer;padding:0}
 .tree button.f:hover .nm{color:var(--sky)}
 </style></head><body><div class=page>
-<div class=top><h1 class=logo><button type=button class=logobtn onclick=newPlan() aria-label="FILG — start a new idea"><svg class=logomark viewBox="0 0 32 32" aria-hidden=true><rect width=32 height=32 rx=8 fill=#FF6B4A></rect><path d="M16 4c-3.2 2.8-4.3 7.4-4.3 11.8v3.2h8.6v-3.2C20.3 11.4 19.2 6.8 16 4z" fill=#fff></path><circle cx=16 cy=12 r=2.1 fill=#2E7CF6></circle><path d="M11.7 15.5 8.6 20.5l3.1-1.3z" fill=#fff></path><path d="M20.3 15.5 23.4 20.5l-3.1-1.3z" fill=#fff></path><path d="M13.6 19.5h4.8L16 25.5z" fill=#FFC23F></path></svg>FI<span>LG</span></button></h1><div class=authbar id=authbar></div></div>
+<div class=top><h1 class=logo><button type=button class=logobtn onclick=newPlan() aria-label="FILG, start a new idea"><svg class=logomark viewBox="0 0 32 32" aria-hidden=true><rect width=32 height=32 rx=8 fill=#FF6B4A></rect><path d="M16 4c-3.2 2.8-4.3 7.4-4.3 11.8v3.2h8.6v-3.2C20.3 11.4 19.2 6.8 16 4z" fill=#fff></path><circle cx=16 cy=12 r=2.1 fill=#2E7CF6></circle><path d="M11.7 15.5 8.6 20.5l3.1-1.3z" fill=#fff></path><path d="M20.3 15.5 23.4 20.5l-3.1-1.3z" fill=#fff></path><path d="M13.6 19.5h4.8L16 25.5z" fill=#FFC23F></path></svg>FI<span>LG</span></button></h1><div class=authbar id=authbar></div></div>
 <div class=note-banner id=banner></div>
 <div class=intake id=intake>
 <h2>You've got a business in you. Let's find it. 🚀</h2>
-<p class=sub>Drop in your idea. You'll get the offer + the research graded — then we build the whole plan together, your call at every step.</p>
+<p class=sub>Drop in your idea. You'll get the offer + the research graded, then we build the whole plan together, your call at every step.</p>
 <label for=idea class=sr-only>Your business idea</label>
-<textarea id=idea placeholder="e.g. I know automation and feel like I could help scale small dental businesses… OR I like doggies, the color purple, and live in a bunker with my 12 brothers — either way, let's find the business."></textarea>
+<textarea id=idea placeholder="e.g. I know automation and feel like I could help scale small dental businesses… OR I like doggies, the color purple, and live in a bunker with my 12 brothers, either way, let's find the business."></textarea>
 <div class=boardpick id=boardpick></div>
 <div id=authgate></div>
 <label for=email class=sr-only>Your email</label>
@@ -857,7 +862,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <div class=dr-body>
 <p class=dr-sub id=drawer-sub></p>
 <label for=drawerq class=sr-only>Your question for the advisor</label>
-<textarea id=drawerq rows=3 placeholder="Ask a question — or leave blank for their honest take."></textarea>
+<textarea id=drawerq rows=3 placeholder="Ask a question, or leave blank for their straight take."></textarea>
 <button type=button class=dr-go id=drawer-go onclick=submitDrawer()>Ask →</button>
 <div class="dr-out md" id=drawer-out></div>
 </div></aside>
@@ -872,9 +877,9 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <div class=sec><h3>Your plan</h3><ul class=tree id=tree></ul>
 <button id=dl class=dl onclick=download() style="display:none;margin-top:12px">⬇ Download plan (PDF)</button>
 </div>
-<div class=sec id=dtreesec style="display:none"><h3>Decision tree</h3>
-<p class=bhelp>Each step is a node. Go <b>Back</b> to branch and try another direction; click any node to hop to it. The active branch is highlighted.</p>
-<div id=dtree></div></div>
+<div class="sec collap" id=dtreesec style="display:none"><button type=button class=sechead aria-expanded=false onclick="toggleSec('dtreesec')"><h3>Decision tree</h3><span class=caret aria-hidden=true>▸</span></button>
+<div class=secbody><p class=bhelp>Each step is a node. Go <b>Back</b> to branch and try another direction; click any node to hop to it. The active branch is highlighted.</p>
+<div id=dtree></div></div></div>
 <div class="sec collap" id=chatsec style="display:none"><button type=button class=sechead aria-expanded=false onclick="toggleSec('chatsec')"><h3>Chat with your plan</h3><span class=caret aria-hidden=true>▸</span></button>
 <div class=secbody>
 <div class=chatlog id=chatlog></div>
@@ -882,7 +887,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <label for=chatinput class=sr-only>Ask the planner about your plan</label>
 <textarea id=chatinput rows=2 placeholder="Ask anything about your plan…"></textarea>
 <button type=button class=chatsend id=chatsend onclick=sendChat()>Ask the planner →</button>
-<div class=disc>AI advisor grounded in your plan + graded research — not professional advice.</div></div></div>
+<div class=disc>AI advisor grounded in your plan + graded research, not professional advice.</div></div></div>
 <div class="sec collap addons" id=expertsec><button type=button class=sechead aria-expanded=false onclick="toggleSec('expertsec')"><h3>Ask an expert</h3><span class=caret aria-hidden=true>▸</span></button>
 <div class=secbody><div class=ax id=addons></div>
 <div class=disc id=adisc></div></div></div>
@@ -890,8 +895,8 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <div class=secbody><p class=bhelp>Tap to add or drop a director, then convene them on your plan.</p>
 <div class=bdirs id=boarddirs></div>
 <button type=button class=convene id=convene onclick=convene()>Convene the board</button>
-<div class=disc>AI composite directors — not real people, not professional advice.</div></div></div>
-<div class="sec collap open" id=researchsec><button type=button class=sechead aria-expanded=true onclick="toggleSec('researchsec')"><h3>Research — graded</h3><span class=caret aria-hidden=true>▸</span></button>
+<div class=disc>AI composite directors, not real people, not professional advice.</div></div></div>
+<div class="sec collap open" id=researchsec><button type=button class=sechead aria-expanded=true onclick="toggleSec('researchsec')"><h3>Research, graded</h3><span class=caret aria-hidden=true>▸</span></button>
 <div class=secbody><div id=research></div></div></div>
 </aside>
 <main class=main>
@@ -941,15 +946,21 @@ async function poll(){
   const s=await r.json();
   renderTree(s);renderAddons(s);     // show the plan outline immediately, even while researching
   if(s.status==='researching'){
-    if(!ACT_RESEARCH){Activity.start(RESEARCH_STEPS,2300);ACT_RESEARCH=true;}   // spew the wait in the footer
-    document.getElementById('node').innerHTML='<div class=node><span class=eyebrow>Working</span><h3>Researching + grading your market…</h3><p class=lead>Pulling sources and grading every number, so vendor spin gets labeled, not laundered. About 1 to 2 minutes. Watch your plan fill in on the left.</p></div>';
+    if(!ACT_RESEARCH){Activity.open();Activity.push('Spinning up your research');ACT_RESEARCH=true;ACT_PROG_N=0;}
+    const prog=s.progress||[];                                   // real receipts from the engine, streamed
+    for(let i=ACT_PROG_N;i<prog.length;i++)Activity.push(prog[i]);
+    ACT_PROG_N=Math.max(ACT_PROG_N,prog.length);
+    document.getElementById('node').innerHTML='<div class=node><span class=eyebrow>Working</span><h3>Researching + grading your market…</h3><p class=lead>Pulling sources and grading every number, so vendor spin gets labeled, not laundered. About 1 to 2 minutes. Watch the receipts spew in below.</p></div>';
     say('Researching and grading your market.');
-    setTimeout(poll,2500);return;
+    setTimeout(poll,1500);return;
   }
-  if(ACT_RESEARCH){Activity.done(s.status==='error'?'Hit a snag.':'Research graded. Building your plan.');ACT_RESEARCH=false;}
+  if(ACT_RESEARCH){
+    const prog=s.progress||[]; for(let i=ACT_PROG_N;i<prog.length;i++)Activity.push(prog[i]);  // flush any final lines
+    Activity.done(s.status==='error'?'Hit a snag.':'Research graded. Building your plan.');ACT_RESEARCH=false;
+  }
   render(s);
 }
-let ACT_RESEARCH=false;
+let ACT_RESEARCH=false, ACT_PROG_N=0;
 function render(s){
   if(s.status==='error'){
     document.getElementById('node').innerHTML='<div class=node><h3>Hit a snag</h3><p class=lead>'+esc(s.error)+'</p><button type=button onclick=newPlan()>Start over</button></div>';
@@ -957,7 +968,7 @@ function render(s){
   }
   renderResearch(s);renderVet(s);renderAnswer(s);renderTree(s);renderNode(s);renderAddons(s);renderBoard(s);renderBoardRound(s);renderDecisionTree(s);renderChat(s);syncSidebar(s);
   if(s.done&&SID)location.hash='#/plan/'+SID;   // the finished plan lives at a route (revisit + bookmark)
-  if(s.done)say('Your plan is complete — all '+s.total+' parts ready to download.');
+  if(s.done)say('Your plan is complete, all '+s.total+' parts ready to download.');
   else if(s.vetting&&s.vetting.verdict)say('Research graded. Verdict: '+s.vetting.verdict+'. Ready to build part '+((s.step||0)+1)+'.');
 }
 // Collapsible sidebar sections. On the first page (the offer + graded research) Research is open and
@@ -969,7 +980,7 @@ function setOpen(id,open){const el=document.getElementById(id);if(!el)return;el.
 function toggleSec(id){const el=document.getElementById(id);if(!el)return;const open=el.classList.toggle('open');const h=el.querySelector('.sechead');if(h)h.setAttribute('aria-expanded',String(open));}
 function syncSidebar(s){
   const phase = s.done ? 'plan' : (s.step>=1 ? 'build' : 'intro');
-  if(phase===SIDEBAR_PHASE)return;   // only auto-apply on a phase change — respect manual toggles after
+  if(phase===SIDEBAR_PHASE)return;   // only auto-apply on a phase change, respect manual toggles after
   SIDEBAR_PHASE=phase;
   setOpen('chatsec',phase==='plan');         // chat auto-opens on the finished plan page
   setOpen('researchsec',phase==='intro');
@@ -995,12 +1006,13 @@ async function sendChat(){
   CHAT_BUSY=true;btn.disabled=true;t.value='';if(st)st.innerHTML='';
   log.insertAdjacentHTML('beforeend',`<div class="cmsg user">${esc(msg)}</div><div class="cmsg bot md" id=chatthinking><span class=think>Thinking…</span></div>`);
   log.scrollTop=log.scrollHeight;
+  Activity.start(["Reading your plan","Checking the graded evidence","Thinking it through"],1200);
   try{
-    const r=await fetch('/api/plan/'+SID+'/chat',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({message:msg})});
+    const [r]=await Promise.all([fetch('/api/plan/'+SID+'/chat',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({message:msg})}),new Promise(res=>setTimeout(res,850))]);
     const d=await r.json();const th=document.getElementById('chatthinking');
-    if(!r.ok){if(th){th.removeAttribute('id');th.innerHTML='<span class=think>'+esc(d.error||'Could not reach the advisor.')+'</span>';}}
-    else if(th){th.removeAttribute('id');th.innerHTML=mdToHtml(d.reply);}
-  }catch(e){const th=document.getElementById('chatthinking');if(th)th.innerHTML='<span class=think>Network error.</span>';}
+    if(!r.ok){Activity.stop(true);if(th){th.removeAttribute('id');th.innerHTML='<span class=think>'+esc(d.error||'Could not reach the advisor.')+'</span>';}}
+    else{Activity.done('Answered.');if(th){th.removeAttribute('id');th.innerHTML=mdToHtml(d.reply);}}
+  }catch(e){Activity.stop(true);const th=document.getElementById('chatthinking');if(th)th.innerHTML='<span class=think>Network error.</span>';}
   finally{CHAT_BUSY=false;btn.disabled=false;log.scrollTop=log.scrollHeight;}
 }
 function renderBoardRound(s){
@@ -1020,11 +1032,11 @@ function renderBoardRound(s){
 function renderResearch(s){
   const rows=(s.research&&s.research.rows)||[];
   if(!rows.length){document.getElementById('research').innerHTML='<p style="color:var(--muted);font-size:13px;margin:0">Grading sources…</p>';return;}
-  document.getElementById('research').innerHTML='<ul class=ev>'+rows.map(x=>`<li>${x.mark==='ok'?'✅':'⚠️'} ${esc(x.text)} <span class="badge ${x.mark==='ok'?'b-ok':'b-warn'}">${x.mark==='ok'?'cited':'vendor'}</span><br><span class=note>${esc(host(x.url))} — ${esc(x.note)}</span></li>`).join('')+'</ul>';
+  document.getElementById('research').innerHTML='<ul class=ev>'+rows.map(x=>`<li>${x.mark==='ok'?'✅':'⚠️'} ${esc(x.text)} <span class="badge ${x.mark==='ok'?'b-ok':'b-warn'}">${x.mark==='ok'?'cited':'vendor'}</span><br><span class=note>${esc(host(x.url))}, ${esc(x.note)}</span></li>`).join('')+'</ul>';
 }
 function renderAnswer(s){
   const p=s.research&&s.research.prose; if(!p)return;
-  document.getElementById('answer').innerHTML=`<h2>${esc(p.title)}</h2><p class=tag>Your offer, with the research graded — vendor spin labeled, not laundered.</p><p><b>What you'd sell:</b> ${esc(p.offer)}</p><p><b>How you'd sell it:</b> ${esc(p.gtm)}</p>`;
+  document.getElementById('answer').innerHTML=`<h2>${esc(p.title)}</h2><p class=tag>Your offer, with the research graded, vendor spin labeled, not laundered.</p><p><b>What you'd sell:</b> ${esc(p.offer)}</p><p><b>How you'd sell it:</b> ${esc(p.gtm)}</p>`;
 }
 let BUILT={}, SECMETA={}, VIEWING=null;
 function renderTree(s){
@@ -1059,7 +1071,7 @@ function closeViewer(){VIEWING=null;const v=document.getElementById('viewer');if
 function renderNode(s){
   const n=document.getElementById('node');
   if(s.status==='researching')return;
-  if(s.done){n.innerHTML='<div class=node><div class=done>🎉 <b>Your plan is ready</b> — all '+s.total+' parts. This is your plan\\'s home: <b>download the PDF</b> on the left, <b>chat with your plan</b> in the sidebar to pressure-test it, or share it.</div>'+
+  if(s.done){n.innerHTML='<div class=node><div class=done>🎉 <b>Your plan is ready</b>, all '+s.total+' parts. This is your plan\\'s home: <b>download the PDF</b> on the left, <b>chat with your plan</b> in the sidebar to pressure-test it, or share it.</div>'+
     '<div class=planacts><button type=button onclick=download()>⬇ Download (PDF)</button><button type=button class=ghost onclick="sharePlan(SID)">🔗 Share</button></div></div>';return;}
   const p=s.proposal; if(!p){n.innerHTML='';return;}
   const sec=(s.sections||[]).find(x=>x.title===p.title)||{};
@@ -1080,26 +1092,36 @@ function addChip(txt){const t=document.getElementById('feedback'); if(!t)return;
 function _navBusy(){const n=document.getElementById('node');if(n)n.querySelectorAll('button').forEach(b=>b.disabled=true);const f=document.getElementById('ferr');if(f)f.textContent='';document.getElementById('err2').textContent='';}
 function _navFree(){const n=document.getElementById('node');if(n)n.querySelectorAll('button').forEach(b=>b.disabled=false);}
 function fbErr(msg){const f=document.getElementById('ferr');if(f)f.textContent=msg;else document.getElementById('err2').textContent=msg;}
+// Min-dwell so the spew registers even on fast (mock) responses, without slowing real builds much.
+function _aiRun(url,body,steps){
+  Activity.start(steps,1200);
+  return Promise.all([
+    fetch(url,{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify(body)}),
+    new Promise(res=>setTimeout(res,850))
+  ]).then(([r])=>r);
+}
 async function nextStep(){
   const fb=(document.getElementById('feedback')||{}).value||'';
   _navBusy();
+  const steps=[]; if(fb.trim())steps.push("Folding in your note");
+  steps.push("Drafting the next part of your plan","Checking it against your graded research");
   try{
-    const r=await fetch('/api/plan/'+SID+'/next',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({feedback:fb})});
+    const r=await _aiRun('/api/plan/'+SID+'/next',{feedback:fb},steps);
     const s=await r.json();
-    if(!r.ok){fbErr(s.error||'Something went wrong.');_navFree();return;}
-    render(s);
-  }catch(e){fbErr('Network error.');_navFree();}
+    if(!r.ok){Activity.stop(true);fbErr(s.error||'Something went wrong.');_navFree();return;}
+    Activity.done('Next part ready.');render(s);
+  }catch(e){Activity.stop(true);fbErr('Network error.');_navFree();}
 }
 async function backStep(){
   const fb=((document.getElementById('feedback')||{}).value||'').trim();
-  if(!fb){fbErr('Add a quick note on what to change — feedback’s required to go back a step.');const t=document.getElementById('feedback');if(t)t.focus();return;}
+  if(!fb){fbErr('Add a quick note on what to change, a note is required to go back a step.');const t=document.getElementById('feedback');if(t)t.focus();return;}
   _navBusy();
   try{
-    const r=await fetch('/api/plan/'+SID+'/back',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({feedback:fb})});
+    const r=await _aiRun('/api/plan/'+SID+'/back',{feedback:fb},["Re-opening the previous part","Re-drafting it from your note"]);
     const s=await r.json();
-    if(!r.ok){fbErr(s.error||'Something went wrong.');_navFree();return;}
-    render(s);
-  }catch(e){fbErr('Network error.');_navFree();}
+    if(!r.ok){Activity.stop(true);fbErr(s.error||'Something went wrong.');_navFree();return;}
+    Activity.done('New branch ready.');render(s);
+  }catch(e){Activity.stop(true);fbErr('Network error.');_navFree();}
 }
 async function gotoNode(id){
   document.getElementById('err2').textContent='';
@@ -1110,12 +1132,15 @@ async function gotoNode(id){
     render(s);
   }catch(e){document.getElementById('err2').textContent='Network error.';}
 }
+let DTREE_STEP=-99;
 function renderDecisionTree(s){
   const sec=document.getElementById('dtreesec'),box=document.getElementById('dtree');
   if(!sec||!box)return;
   const t=s.tree;
   if(!t||!t.show){sec.style.display='none';return;}
   sec.style.display='';
+  const dstep=s.done?9999:(s.step==null?-1:s.step);   // auto-open the tree on each new step
+  if(dstep!==DTREE_STEP){DTREE_STEP=dstep;setOpen('dtreesec',true);}
   const nodes=t.nodes||[],byId={},kids={};
   nodes.forEach(n=>{byId[n.id]=n;kids[n.id]=[];});
   nodes.forEach(n=>{if(n.parent!=null&&kids[n.parent])kids[n.parent].push(n.id);});
@@ -1135,7 +1160,7 @@ function renderAddons(s){
   const box=document.getElementById('addons'); if(!box||box.dataset.done)return;
   const ax=CFG.archetypes||[]; if(!ax.length){box.closest('.sec').style.display='none';return;}
   box.innerHTML=ax.map(a=>`<button type=button onclick="ask('${a.key}')">${esc(a.first||a.name)}<span class=bl>${esc(a.name)} · ${esc(a.blurb)}</span></button>`).join('');
-  document.getElementById('adisc').textContent='AI composite advisors — not real people, not professional advice.';
+  document.getElementById('adisc').textContent='AI composite advisors, not real people, not professional advice.';
   box.dataset.done='1';
 }
 let VET_OPEN=true, VET_STEPPED=false;
@@ -1156,7 +1181,7 @@ function renderVet(s){
   const risk=v&&v.biggest_risk?`<p class=vrow><b>Biggest risk:</b> ${esc(v.biggest_risk)}</p>`:'';
   const test=v&&v.first_test?`<p class=vrow><b>Cheapest first test:</b> ${esc(v.first_test)}</p>`:'';
   const cq=(sh&&sh.clarifying_question)?`<p class=vrow>🤔 ${esc(sh.clarifying_question)}</p>`:'';
-  el.innerHTML=`<div class="vet${VET_OPEN?' open':''}" id=vetcard><button type=button class=vethead onclick=toggleVet() aria-expanded="${VET_OPEN}">${head}<span class=vtitle>Before we build: the honest read</span><span class=vcaret aria-hidden=true>▸</span></button>`+
+  el.innerHTML=`<div class="vet${VET_OPEN?' open':''}" id=vetcard><button type=button class=vethead onclick=toggleVet() aria-expanded="${VET_OPEN}">${head}<span class=vtitle>Before we build: the straight read</span><span class=vcaret aria-hidden=true>▸</span></button>`+
     `<div class=vetbody>${react}${thesis}${edge}${alts}${reason}${risk}${test}${cq}</div></div>`;
 }
 // Board selection state (keys); seeded from the default board, editable in intake + sidebar.
@@ -1165,8 +1190,8 @@ function personaName(key){const p=(CFG.archetypes||[]).find(a=>a.key===key);retu
 function renderBoardPick(){
   const el=document.getElementById('boardpick'); if(!el)return;
   const ax=CFG.archetypes||[]; if(!ax.length){el.innerHTML='';return;}
-  el.innerHTML=`<div class=lab id=boardpicklab>Pick your Board of Directors — they'll vet every step (optional):</div>`+
-    `<div class=opts role=group aria-labelledby=boardpicklab>`+ax.map(a=>`<button type=button class="bchip${BOARD.includes(a.key)?' on':''}" aria-pressed=${BOARD.includes(a.key)} onclick="toggleBoard('${a.key}',this)" title="${esc(a.first?a.first+' — ':'')}${esc(a.blurb)}">${esc(a.name)}</button>`).join('')+`</div>`;
+  el.innerHTML=`<div class=lab id=boardpicklab>Pick your Board of Directors, they'll vet every step (optional):</div>`+
+    `<div class=opts role=group aria-labelledby=boardpicklab>`+ax.map(a=>`<button type=button class="bchip${BOARD.includes(a.key)?' on':''}" aria-pressed=${BOARD.includes(a.key)} onclick="toggleBoard('${a.key}',this)" title="${esc(a.first?a.first+', ':'')}${esc(a.blurb)}">${esc(a.name)}</button>`).join('')+`</div>`;
 }
 function toggleBoard(key,btn){
   const i=BOARD.indexOf(key), on=i<0;
@@ -1180,7 +1205,7 @@ function renderBoard(s){
   // Chips reflect the active board; tap to add/drop a director for on-demand convening.
   if(SESSION_BOARD===null) SESSION_BOARD=(s.directors&&s.directors.length?s.directors.slice():BOARD.slice());
   document.getElementById('boarddirs').innerHTML=(CFG.archetypes||[]).map(a=>
-    `<button type=button class="bchip${SESSION_BOARD.includes(a.key)?' on':''}" aria-pressed=${SESSION_BOARD.includes(a.key)} onclick="toggleSessionBoard('${a.key}',this)" title="${esc(a.first?a.first+' — ':'')}${esc(a.blurb)}">${esc(a.name)}</button>`).join('');
+    `<button type=button class="bchip${SESSION_BOARD.includes(a.key)?' on':''}" aria-pressed=${SESSION_BOARD.includes(a.key)} onclick="toggleSessionBoard('${a.key}',this)" title="${esc(a.first?a.first+', ':'')}${esc(a.blurb)}">${esc(a.name)}</button>`).join('');
 }
 let SESSION_BOARD=null;
 function toggleSessionBoard(key,el){
@@ -1203,12 +1228,12 @@ function openDrawer(mode,key){
   if(mode==='expert'){
     const p=(CFG.archetypes||[]).find(a=>a.key===key)||{};
     title.textContent=p.name||'Ask an expert';
-    sub.textContent=(p.blurb?('Composite advisor · '+p.blurb):'AI composite advisor')+' — not professional advice.';
+    sub.textContent=(p.blurb?('Composite advisor · '+p.blurb):'AI composite advisor')+', not professional advice.';
     go.textContent='Ask '+(p.name||'the advisor')+' →';
   }else{
     const chosen=(SESSION_BOARD&&SESSION_BOARD.length?SESSION_BOARD:(CFG.defaultBoard||[]));
     title.textContent='Your Board of Directors';
-    sub.textContent=(chosen.length?('Convening: '+chosen.map(personaName).join(', ')):'Your full board')+' — AI composite directors, not professional advice.';
+    sub.textContent=(chosen.length?('Convening: '+chosen.map(personaName).join(', ')):'Your full board')+', AI composite directors, not professional advice.';
     go.textContent='Convene the board →';
   }
   const d=document.getElementById('drawer');
@@ -1275,22 +1300,25 @@ async function submitDrawer(){
   out.style.display='block';
   out.innerHTML='<p class=lead>'+(DRAWER.mode==='board'?'Convening the board…':'Thinking…')+'</p>';
   go.disabled=true;
+  Activity.start(DRAWER.mode==='board'?["Briefing your board on the plan","Each director weighs in","Synthesizing their verdict"]:["Reading your plan","Thinking it through"],1300);
   try{
     if(DRAWER.mode==='expert'){
-      const r=await fetch('/api/plan/'+SID+'/ask',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({archetype:DRAWER.key,question:q})});
+      const [r]=await Promise.all([fetch('/api/plan/'+SID+'/ask',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({archetype:DRAWER.key,question:q})}),new Promise(res=>setTimeout(res,850))]);
       const d=await r.json();go.disabled=false;
+      if(r.ok)Activity.done('Done.');else Activity.stop(true);
       out.innerHTML=r.ok?mdToHtml(d.answer):esc(d.error||'Could not reach the advisor.');
     }else{
       const body={question:q}; if(SESSION_BOARD!==null)body.directors=SESSION_BOARD;
-      const r=await fetch('/api/plan/'+SID+'/board',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify(body)});
+      const [r]=await Promise.all([fetch('/api/plan/'+SID+'/board',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify(body)}),new Promise(res=>setTimeout(res,850))]);
       const d=await r.json();go.disabled=false;
-      if(!r.ok){out.innerHTML=esc(d.error||'Could not convene the board.');return;}
+      if(!r.ok){Activity.stop(true);out.innerHTML=esc(d.error||'Could not convene the board.');return;}
+      Activity.done('Your board weighed in.');
       const split=(d.conflicts&&d.conflicts.toLowerCase()!=='none')?`<span class=split>Where they split: ${esc(d.conflicts)}</span>`:'';
       out.innerHTML=d.directors.map((x,i)=>`<div class=balloon id=dbal_${i}><button type=button class=bh onclick="document.getElementById('dbal_${i}').classList.toggle('open')">💬 See what ${esc(x.first||x.name)}${x.first&&x.name?' ('+esc(x.name)+')':''} says<span class=caret>▸</span></button><div class="bb md">${mdToHtml(x.take)}</div></div>`).join('')+
         `<div class=takeaway><div class=tl>Board takeaway</div>${esc(d.verdict)}${split}</div>`+
         `<div class=disc>${esc(d.disclaimer||'')}</div>`;
     }
-  }catch(e){go.disabled=false;out.innerHTML='Network error.';}
+  }catch(e){go.disabled=false;Activity.stop(true);out.innerHTML='Network error.';}
 }
 // ── Reusable AI-activity ticker (pinned footer; never covers content) ─────────
 // Any AI wait feeds it honest, real-stage lines: Activity.start([...]) → Activity.done('…') (or
@@ -1314,6 +1342,12 @@ const Activity={
     li.querySelector('.atext').textContent=this.steps[this.i]||'';
     log.appendChild(li);
     while(log.children.length>5)log.removeChild(log.firstChild);
+  },
+  open(){   // manual-push mode (no auto-cycle): caller feeds real lines via push()
+    clearInterval(this.timer); this.timer=null; this.steps=[]; this.i=-1;
+    const a=document.getElementById('activity'); if(!a)return;
+    a.classList.remove('ok'); a.classList.add('show'); a.setAttribute('aria-hidden','false');
+    document.getElementById('activity-log').innerHTML='';
   },
   push(line){ this.steps.push(line); this.i=this.steps.length-1; this._reveal(); },
   done(msg){
@@ -1388,7 +1422,7 @@ function renderAuth(){
     const paid=me&&me.paid; bar.style.display='';
     bar.innerHTML=`<button class=link onclick=showPlans()>My plans</button>`+
       `<span class=who>${esc(session.user.email)}${paid?' · <b>Operator</b>':''}</span>`+
-      (!paid&&CFG.billingEnabled?`<button class="link up" onclick=upgrade()>Upgrade — $39/mo</button>`:'')+
+      (!paid&&CFG.billingEnabled?`<button class="link up" onclick=upgrade()>Upgrade, $39/mo</button>`:'')+
       `<button class=link onclick=signout()>Sign out</button>`;
   }else if(sb){bar.style.display='';bar.innerHTML=`<button class=link onclick=signinEmail()>Sign in</button>`;}
   else{bar.style.display='none';}
@@ -1402,7 +1436,7 @@ function gateIntake(){
     gate.innerHTML=`<div class=authgate>`+
       (CFG.supabaseUrl?`<button class=gbtn onclick=signinGoogle()><svg class=gicon viewBox="0 0 18 18" aria-hidden=true><path fill="#4285F4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.92c1.71-1.57 2.68-3.89 2.68-6.62z"></path><path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.92-2.26c-.81.54-1.84.86-3.04.86-2.34 0-4.32-1.58-5.03-3.7H.96v2.33A9 9 0 0 0 9 18z"></path><path fill="#FBBC05" d="M3.97 10.72a5.4 5.4 0 0 1 0-3.44V4.95H.96a9 9 0 0 0 0 8.1l3.01-2.33z"></path><path fill="#EA4335" d="M9 3.58c1.32 0 2.5.45 3.44 1.35l2.58-2.58C13.46.9 11.43 0 9 0A9 9 0 0 0 .96 4.95l3.01 2.33C4.68 5.16 6.66 3.58 9 3.58z"></path></svg>Continue with Google</button>`:'')+
       `<button class=gbtn onclick=signinEmail()>✉️ Email me a sign-in link</button>`+
-      `<p class=or>Free to start — sign in so your plans save to your profile.</p></div>`;
+      `<p class=or>Free to start, sign in so your plans save to your profile.</p></div>`;
   }else{gate.innerHTML='';go.style.display='';email.style.display=CFG.authEnabled?'none':'';}
 }
 function saveIdea(){try{const v=document.getElementById('idea').value;if(v)localStorage.setItem('filg_idea',v);}catch(e){}}
@@ -1428,7 +1462,7 @@ async function upgrade(){
   }catch(e){toast('Network error starting checkout.','err');}
 }
 function show(id){['intake','workspace','profile'].forEach(x=>{const e=document.getElementById(x);if(e)e.style.display=(x===id?(x==='workspace'?'grid':'block'):'none');});}
-function newPlan(){SIDEBAR_PHASE=null;ACT_RESEARCH=false;VET_OPEN=true;VET_STEPPED=false;Activity.stop(true);closeViewer();show('intake');renderBoardPick();gateIntake();}
+function newPlan(){SIDEBAR_PHASE=null;ACT_RESEARCH=false;VET_OPEN=true;VET_STEPPED=false;DTREE_STEP=-99;Activity.stop(true);closeViewer();show('intake');renderBoardPick();gateIntake();}
 async function showPlans(){
   let d; try{const r=await fetch('/api/plans',{headers:authHeaders()});if(!r.ok){toast('Sign in to see your plans.','err');return;}d=await r.json();}catch(e){toast('Network error.','err');return;}
   show('profile');renderPlans(d);
@@ -1441,13 +1475,13 @@ function renderPlans(d){
       `<button class=gbtn onclick="sharePlan('${p.id}')">${p.shared?'🔗 Shared':'Share'}</button>`+
       `<button class=gbtn onclick="deletePlan('${p.id}')" aria-label="Delete plan">Delete</button>`;
     return `<div class=pcard><div><div class=idea>${esc((p.idea||'Untitled').slice(0,90))}</div><div class=meta>${meta} · ${esc(new Date(p.created_at).toLocaleDateString())}</div></div><div class=act><span class="pill ${p.done?'done':''}">${p.done?'done':'WIP'}</span>${acts}</div></div>`;
-  }).join(''):`<p class=empty>No plans yet — build your first one.</p>`;
-  const integ=d.paid?`<div class=integrations><b>Operator integrations</b> — CRM kickstarts &amp; more, coming soon.</div>`:`<div class=integrations>Upgrade to Operator for integrations (CRM kickstarts &amp; more) — coming soon.</div>`;
+  }).join(''):`<p class=empty>No plans yet, build your first one.</p>`;
+  const integ=d.paid?`<div class=integrations><b>Operator integrations</b>, CRM kickstarts &amp; more, coming soon.</div>`:`<div class=integrations>Upgrade to Operator for integrations (CRM kickstarts &amp; more), coming soon.</div>`;
   document.getElementById('profile').innerHTML=`<div class=plans><h2>Your plans</h2><p class=sub>${esc(d.email)} · ${d.paid?'Operator':'Free'}</p>`+
     `<div style="margin:10px 0 16px"><button onclick=newPlan()>+ New plan</button></div>`+rows+integ+`</div>`;
 }
 async function resume(id){
-  SID=id;show('workspace');SESSION_BOARD=null;SIDEBAR_PHASE=null;VET_OPEN=true;VET_STEPPED=false;
+  SID=id;show('workspace');SESSION_BOARD=null;SIDEBAR_PHASE=null;VET_OPEN=true;VET_STEPPED=false;DTREE_STEP=-99;
   const ab=document.getElementById('addons');if(ab)delete ab.dataset.done;
   closeDrawer();closeViewer();
   try{const r=await fetch('/api/plan/'+SID,{headers:authHeaders()});const s=await r.json();render(s);if(s.status==='researching')poll();}catch(e){document.getElementById('err2').textContent='Could not load that plan.';}
@@ -1475,14 +1509,14 @@ function banner(msg){const b=document.getElementById('banner');b.textContent=msg
 async function initAuth(){
   const q=new URLSearchParams(location.search);
   if(q.get('upgraded'))banner('🎉 You\\'re on Operator. Your plans + integrations are unlocked.');
-  if(q.get('canceled'))banner('Checkout canceled — no charge. You\\'re still on the free tier.');
+  if(q.get('canceled'))banner('Checkout canceled, no charge. You\\'re still on the free tier.');
   restoreIdea();renderBoardPick();
   if(!CFG.authEnabled||!window.supabase){renderAuth();routeFromHash();return;}
   sb=window.supabase.createClient(CFG.supabaseUrl,CFG.supabaseAnon);
   sb.auth.onAuthStateChange(async (_e,s)=>{session=s;await loadMe();renderAuth();});
   const {data}=await sb.auth.getSession();session=data.session;await loadMe();renderAuth();routeFromHash();
 }
-function routeFromHash(){   // a finished plan lives at #/plan/{id} — deep-link / bookmark / revisit
+function routeFromHash(){   // a finished plan lives at #/plan/{id}, deep-link / bookmark / revisit
   const m=(location.hash||'').match(/^#\\/plan\\/([a-z0-9]+)/i);
   if(m&&m[1])resume(m[1]);
 }

@@ -13,7 +13,8 @@ Shares one DB file with the app's job store (`FILG_DB`, default `app/filg.db`); 
 persistent disk in production. Production proper: Postgres + Stripe entitlement.
 
 Env overrides:
-  FILG_FREE_RUNS     free plans (runs) per user    (default 3)
+  FILG_FREE_RUNS     free plans (runs) per user    (default 3; set 0 to DISABLE the per-user cap —
+                     dev only; the daily kill switch still applies)
   FILG_DAILY_BUDGET  global $/day kill switch       (default 20)
   FILG_DB            path to the shared sqlite db   (FILG_USAGE_DB still honored as a fallback)
 """
@@ -74,8 +75,8 @@ def can_run(user_id: str, is_paid: bool = False) -> tuple[bool, str]:
             drow = con.execute("SELECT spend FROM usage_daily WHERE day=?", (today,)).fetchone()
             if (drow["spend"] if drow else 0.0) >= DAILY_BUDGET:
                 return False, f"daily budget (${DAILY_BUDGET:.0f}) reached — kill switch tripped"
-            if is_paid:
-                return True, "ok (paid)"
+            if is_paid or FREE_RUNS <= 0:   # FREE_RUNS<=0 → per-user cap disabled (dev); kill switch still applies
+                return True, "ok (paid)" if is_paid else "ok (uncapped)"
             urow = con.execute("SELECT runs FROM usage_users WHERE user_id=?", (user_id,)).fetchone()
             if (urow["runs"] if urow else 0) >= FREE_RUNS:
                 plural = "s" if FREE_RUNS != 1 else ""

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Weekly "Cited Offer Teardown" generator — the lead-magnet engine (FILG).
+Weekly "Cited Offer Teardown" generator, the lead-magnet engine (FILG).
 
 Runs the same stage chain as `pipeline.py` in **label-don't-chase** mode (re-source only the
 top 2–3 headline stats; label the rest), then emits a publishable issue in three forms:
-  ../teardowns/issue_NN_<slug>.md            — markdown source / archive
-  ../teardowns/issue_NN_<slug>.rows.json     — structured rows (for rebuilds)
-  ../landing/teardowns/issue-NN-<slug>.html  — deploy-ready BRANDED page (filg.ai/teardowns/...)
+  ../teardowns/issue_NN_<slug>.md           , markdown source / archive
+  ../teardowns/issue_NN_<slug>.rows.json    , structured rows (for rebuilds)
+  ../landing/teardowns/issue-NN-<slug>.html , deploy-ready BRANDED page (filg.ai/teardowns/...)
 and rebuilds ../landing/teardowns/index.html (the archive) from a manifest.
 
 The labeling IS the marketing: showing the source-credibility gate flag a vendor stat live is the
@@ -100,19 +100,19 @@ def page_shell(title: str, desc: str, body: str) -> str:
     d = html.escape(desc[:180])
     return (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width,initial-scale=1">'
-            f'<title>{t} — FILG</title><meta name="description" content="{d}">'
+            f'<title>{t}, FILG</title><meta name="description" content="{d}">'
             f'<meta property="og:title" content="{t}"><meta property="og:description" content="{d}">'
             f'<meta property="og:type" content="article"><meta name="twitter:card" content="summary_large_image">'
             f'{HEAD}<style>{BRAND_CSS}</style></head><body><div class="wrap">'
             f'<nav><a class="logo" href="/">FI<span>LG</span></a>'
             f'<a class="btn btn-ghost" href="/#magnet">Get these weekly</a></nav>'
             f'{body}'
-            f'<footer>FILG — fuck it, let\'s go. Every number above is graded by a source-credibility '
+            f'<footer>FILG, fuck it, let\'s go. Every number above is graded by a source-credibility '
             f'gate. <a href="/teardowns/">More teardowns</a> · <a href="/">filg.ai</a></footer>'
             f'</div></body></html>')
 
 
-# ─── Evidence assembly (deterministic — the gate's labels are authoritative) ──
+# ─── Evidence assembly (deterministic, the gate's labels are authoritative) ──
 def build_evidence(idea: str, headlines: int):
     from pipeline import plan, research_lane, gate_claims, research_primary  # lazy: --rebuild needs no API
     lanes = plan(idea)
@@ -135,7 +135,7 @@ def build_evidence(idea: str, headlines: int):
     rows = []
     for v in cleared:
         rows.append({"mark": "ok", "text": v.claim.text, "url": v.claim.source_url,
-                     "note": f"{v.tier.lower()} source — passed the gate"})
+                     "note": f"{v.tier.lower()} source, passed the gate"})
     for r in rescues:
         if r.rescued and r.new_url:
             rows.append({"mark": "ok", "text": r.original.claim.text, "url": r.new_url,
@@ -143,10 +143,10 @@ def build_evidence(idea: str, headlines: int):
         else:
             v = r.original
             rows.append({"mark": "warn", "text": v.claim.text, "url": v.claim.source_url,
-                         "note": "no neutral source found — treat as a vendor marketing claim"})
+                         "note": "no neutral source found, treat as a vendor marketing claim"})
     for v in to_label:
         rows.append({"mark": "warn", "text": v.claim.text, "url": v.claim.source_url,
-                     "note": "flagged self-interested/vendor source — unverified"})
+                     "note": "flagged self-interested/vendor source, unverified"})
 
     n_clean = sum(1 for r in rows if r["mark"] == "ok")
     stats = {"checked": len(rows), "cleared": n_clean, "flagged": len(rows) - n_clean}
@@ -162,7 +162,7 @@ def write_prose(idea: str, rows) -> dict:
         '{"title": "<=8-word hook", "idea_line": "one sentence restating the idea", '
         '"offer": "2-3 sentences: the specific productized thing they would SELL", '
         '"gtm": "one sentence: the sharpest first go-to-market move"}\n\n'
-        "Be concrete and specific. Do NOT invent statistics — only the evidence section carries numbers.\n\n"
+        "Be concrete and specific. Do NOT invent statistics, only the evidence section carries numbers.\n\n"
         f"IDEA:\n{idea}\n\nGATE-CLEARED EVIDENCE (context only):\n{cleared_block}"
     ))
     data = extract_json(out)
@@ -179,17 +179,17 @@ MOCK_RESULT = {
         "title": "AI Front Desk for Home-Service Pros",
         "idea_line": "A done-for-you AI receptionist that answers every call and texts back every "
                      "missed lead so contractors stop losing jobs to whoever answers first.",
-        "offer": "A fully installed AI front desk — answers 24/7, texts back missed calls in seconds, "
-                 "books jobs to the calendar — live in 5 days, flat monthly retainer, no per-lead fees.",
+        "offer": "A fully installed AI front desk, answers 24/7, texts back missed calls in seconds, "
+                 "books jobs to the calendar, live in 5 days, flat monthly retainer, no per-lead fees.",
         "gtm": "Cold-call 50 owner-operators in one trade + metro; demo by calling their own after-hours "
                "line, letting it ring out, then showing the AI handle the same call.",
     },
     "rows": [
         {"mark": "ok", "text": "~2.5M home-service businesses operate in the US", "url":
-            "https://www.census.gov/", "note": "primary source — passed the gate"},
+            "https://www.census.gov/", "note": "primary source, passed the gate"},
         {"mark": "warn", "text": "62% of calls to small businesses go unanswered", "url":
             "https://www.getaira.io/blog/missed-business-calls-statistics", "note":
-            "flagged self-interested/vendor source — unverified"},
+            "flagged self-interested/vendor source, unverified"},
     ],
     "stats": {"checked": 2, "cleared": 1, "flagged": 1},
     "cost": 0.0,
@@ -198,7 +198,7 @@ MOCK_RESULT = {
 
 def generate(idea: str, headlines: int = HEADLINES_TO_RESEARCH, mock: bool = False) -> dict:
     """Run one teardown and return {prose, rows, stats, cost}. `mock=True` returns canned data with
-    no API calls — for local/frontend dev and for testing the metering without spend."""
+    no API calls, for local/frontend dev and for testing the metering without spend."""
     if mock:
         return {**MOCK_RESULT, "prose": dict(MOCK_RESULT["prose"])}
     from pipeline import LEDGER
@@ -215,7 +215,7 @@ MOCK_FULL = {
         "answers first; ~2.5M US home-service businesses ([census.gov](https://www.census.gov/)).\n\n"
         "## 2. Offer\nDone-for-you AI receptionist + missed-call text-back, live in 5 days, flat "
         "retainer.\n\n## 3. Pricing\n$1,500 setup + $500/mo. (Leak figures from vendor blogs are "
-        "*(unverified vendor claim)* — model per client.)\n\n## 4. Go-to-market\nCold-call one trade "
+        "*(unverified vendor claim)*, model per client.)\n\n## 4. Go-to-market\nCold-call one trade "
         "+ metro; after-hours-call demo.\n\n## 5. Delivery playbook\nDiscovery → build → test → go "
         "live → monthly 'jobs recovered' report.\n\n## 6. 30-day roadmap\nWk1 reference build · Wk2 "
         "list 50 + outreach · Wk3 demos + pilots · Wk4 convert + referral."),
@@ -256,8 +256,8 @@ def evidence_li(rows) -> str:
         out.append(
             f'<li><span class="ico {"ok" if ok else "warn"}">{"✅" if ok else "⚠️"}</span>'
             f'<span>{html.escape(r["text"])} '
-            f'<span class="badge {"ok" if ok else "warn"}">{"cited" if ok else "vendor — unverified"}</span>'
-            f'<br><span class="note"><a href="{html.escape(r["url"])}">{html.escape(host(r["url"]))}</a> — '
+            f'<span class="badge {"ok" if ok else "warn"}">{"cited" if ok else "vendor, unverified"}</span>'
+            f'<br><span class="note"><a href="{html.escape(r["url"])}">{html.escape(host(r["url"]))}</a>, '
             f'{html.escape(r["note"])}</span></span></li>')
     return "\n".join(out)
 
@@ -267,12 +267,12 @@ def render_page(n: int, prose: dict, rows, stats, cost: float) -> str:
         f'<article>'
         f'<span class="eyebrow">Cited Offer Teardown · Issue {n:02d}</span>'
         f'<h1>{html.escape(prose["title"])}</h1>'
-        f'<p class="tag">Generated unattended for ~${cost:.2f}. Every number graded — '
+        f'<p class="tag">Generated unattended for ~${cost:.2f}. Every number graded, '
         f'vendor stats labeled, not laundered.</p>'
         f'<p><strong>The idea:</strong> {html.escape(prose["idea_line"])}</p>'
         f'<h2>The offer</h2><p>{html.escape(prose["offer"])}</p>'
         f'<h2>How you\'d sell it</h2><p>{html.escape(prose["gtm"])}</p>'
-        f'<h2>The evidence — graded</h2><ul class="ev">{evidence_li(rows)}</ul>'
+        f'<h2>The evidence, graded</h2><ul class="ev">{evidence_li(rows)}</ul>'
         f'<div class="recpt"><strong>The credibility receipt:</strong> {stats["checked"]} quantitative '
         f'claims checked · <strong>{stats["cleared"]} cleared to a primary/neutral source</strong> · '
         f'{stats["flagged"]} flagged as vendor marketing and labeled. A naive tool prints all '
@@ -283,15 +283,15 @@ def render_page(n: int, prose: dict, rows, stats, cost: float) -> str:
 
 
 def render_md(prose, rows, stats, cost) -> str:
-    L = [f"# Cited Offer Teardown — {prose['title']}", "",
-         "*Generated by FILG. Every number is graded by a source-credibility gate — vendor-marketing "
+    L = [f"# Cited Offer Teardown, {prose['title']}", "",
+         "*Generated by FILG. Every number is graded by a source-credibility gate, vendor-marketing "
          "stats are **labeled, not laundered**.*", "",
          f"**The idea:** {prose['idea_line']}", "",
          "## The offer (what you'd sell)", prose["offer"], "",
-         "## How you'd sell it", prose["gtm"], "", "## The evidence — graded", ""]
+         "## How you'd sell it", prose["gtm"], "", "## The evidence, graded", ""]
     for r in rows:
         icon = "✅" if r["mark"] == "ok" else "⚠️"
-        L.append(f"- {icon} {r['text']} — [{host(r['url'])}]({r['url']}) *( {r['note']} )*")
+        L.append(f"- {icon} {r['text']}, [{host(r['url'])}]({r['url']}) *( {r['note']} )*")
     L += ["", "## The credibility receipt",
           f"- **{stats['checked']}** checked · **{stats['cleared']}** cleared to a primary/neutral "
           f"source · **{stats['flagged']}** flagged as vendor marketing and labeled.",
@@ -312,7 +312,7 @@ def build_index(manifest) -> None:
     body = (f'<article><span class="eyebrow">The Cited Offer Teardown</span>'
             f'<h1>Every week: one idea, run through the engine.</h1>'
             f'<p class="tag">The offer, the go-to-market, and the research with the vendor spin called '
-            f'out — every number graded, nothing laundered.</p>'
+            f'out, every number graded, nothing laundered.</p>'
             f'<div class="cta"><a class="btn btn-primary" href="/#magnet">Get it weekly →</a></div>'
             f'{cards}</article>')
     with open(os.path.join(SITE_DIR, "index.html"), "w") as f:

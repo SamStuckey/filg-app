@@ -68,7 +68,7 @@ def chat_reply(session: dict, message: str, history: list | None = None,
     plan_text = planner.bundle_markdown(idea, session.get("files") or {})
 
     if mock:
-        return (f"On “{message.strip()[:80]}”: grounded in your plan for {idea}, the honest read is to "
+        return (f"On “{message.strip()[:80]}”: grounded in your plan for {idea}, the straight read is to "
                 f"lead with your edge ({edge}) and pressure-test the riskiest assumption "
                 f"({vet.get('biggest_risk') or 'your main assumption'}) before scaling. "
                 f"Next step: {vet.get('first_test') or 'run one cheap test this week'}. (mock)"), 0.0

@@ -26,7 +26,7 @@ import skill_registry as skills  # noqa: E402
 _MOCK_SHAPED = {
     "coherent": True,
     "thesis": "A done-for-you sales service for local businesses that are good at their craft but "
-              "bad at following up on leads — you run the outreach and closing they won't.",
+              "bad at following up on leads, you run the outreach and closing they won't.",
     "founder_edge": "You're good at sales — that's the transferable advantage, not the hobbies.",
     "wedges_considered": ["sales-as-a-service for local businesses",
                           "coaching others to sell", "a sales-focused newsletter"],

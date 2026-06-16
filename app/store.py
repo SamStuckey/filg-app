@@ -86,6 +86,7 @@ def init() -> None:
                     "  board TEXT,"                 # JSON [{section, ...review}] — per-step board reviews
                     "  tree TEXT,"                  # JSON {nodes:{id:node}, active} — branching decision tree
                     "  chat TEXT,"                  # JSON [{role, content}] — "chat with your plan" thread
+                    "  progress TEXT,"              # JSON [str] — live research-spew lines (the receipts)
                     "  shared INTEGER NOT NULL DEFAULT 0,"  # 1 → readable at the public /p/{id} share link
                     "  cost REAL NOT NULL DEFAULT 0,"
                     "  error TEXT,"
@@ -93,7 +94,7 @@ def init() -> None:
                 # Migration for DBs created before later columns existed (SQLite has no ADD COLUMN IF
                 # NOT EXISTS) — add any missing ones, ignore if already present.
                 have = {r["name"] for r in con.execute("PRAGMA table_info(plan_sessions)")}
-                for col in ("shaped", "vetting", "directors", "board", "tree", "chat"):
+                for col in ("shaped", "vetting", "directors", "board", "tree", "chat", "progress"):
                     if col not in have:
                         con.execute(f"ALTER TABLE plan_sessions ADD COLUMN {col} TEXT")
                 if "shared" not in have:
@@ -209,7 +210,7 @@ def is_paid(email: str) -> bool:
 
 # ── Plan-builder sessions ────────────────────────────────────────────────────
 _PLAN_JSON = ("research", "files", "proposal", "history",  # columns stored as JSON
-              "shaped", "vetting", "directors", "board", "tree", "chat")
+              "shaped", "vetting", "directors", "board", "tree", "chat", "progress")
 
 
 def plan_create(session_id: str, user: str, idea: str, directors: list | None = None) -> None:
