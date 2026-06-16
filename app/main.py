@@ -693,8 +693,15 @@ button:hover{filter:brightness(1.04)}button:active{transform:translateY(1px)}but
 .tree .done .ic{background:var(--ok-bg);color:var(--ok)}.tree .active .ic{background:#e6efff;color:var(--sky);animation:pulse 1.1s infinite}
 .tree .pending .ic{border:1.5px solid var(--line);color:var(--muted)}
 .tree .nm .s{display:block;font-size:11px;color:var(--muted);font-weight:500}
-.tree .body{margin:8px 0 2px 30px;padding:12px 14px;background:var(--bg);border:1px solid var(--line);border-radius:12px;font-size:13px;display:none}
+.tree li.built button.f{padding:4px 6px;border-radius:9px}
+.tree li.viewing button.f{background:#eef4ff}.tree li.viewing .nm{color:var(--sky)}
+.tree li.justdone{border-radius:9px;box-shadow:0 0 0 1.5px rgba(46,124,246,.28);animation:readypulse 1.5s ease-in-out infinite}
+@keyframes readypulse{0%,100%{box-shadow:0 0 0 1.5px rgba(46,124,246,.22)}50%{box-shadow:0 0 0 3px rgba(46,124,246,.4)}}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+/* viewer: a built section opened in the main column (not squeezed into the sidebar) */
+#viewer .node{position:relative}
+.viewer-x{position:absolute;top:16px;right:18px;background:none;color:var(--muted);font-size:24px;line-height:1;padding:0 6px;font-weight:400}
+.viewer-x:hover{color:var(--ink)}
 .dl{width:100%;background:var(--sun);color:#3a2c00}
 .main{min-width:0}
 .answer{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:24px;margin-bottom:20px}
@@ -855,7 +862,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <aside class=side>
 <div class=sec><h3>Your plan</h3><ul class=tree id=tree></ul>
 <button id=dl class=dl onclick=download() style="display:none;margin-top:12px">⬇ Download plan (PDF)</button>
-<button id=dlzip class=link onclick=downloadZip() style="display:none;margin-top:6px;font-size:12px">or source files (.zip)</button></div>
+</div>
 <div class=sec id=dtreesec style="display:none"><h3>Decision tree</h3>
 <p class=bhelp>Each step is a node. Go <b>Back</b> to branch and try another direction; click any node to hop to it. The active branch is highlighted.</p>
 <div id=dtree></div></div>
@@ -879,6 +886,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <div class=secbody><div id=research></div></div></div>
 </aside>
 <main class=main>
+<div id=viewer style="display:none"></div>
 <div id=vet></div>
 <div id=answer></div>
 <div id=node></div>
@@ -1009,20 +1017,36 @@ function renderAnswer(s){
   const p=s.research&&s.research.prose; if(!p)return;
   document.getElementById('answer').innerHTML=`<h2>${esc(p.title)}</h2><p class=tag>Your offer, with the research graded — vendor spin labeled, not laundered.</p><p><b>What you'd sell:</b> ${esc(p.offer)}</p><p><b>How you'd sell it:</b> ${esc(p.gtm)}</p>`;
 }
+let BUILT={}, SECMETA={}, VIEWING=null;
 function renderTree(s){
-  const built={}; (s.files||[]).forEach(f=>built[f.path]=f.content);
+  BUILT={}; SECMETA={}; (s.files||[]).forEach(f=>BUILT[f.path]=f.content);
+  (s.sections||[]).forEach(sec=>SECMETA[sec.file]={title:sec.title,sub:sec.sub});
   const step=s.step==null?-1:s.step;
+  let lastBuilt=-1; (s.sections||[]).forEach((sec,i)=>{if(BUILT[sec.file]!=null)lastBuilt=i;});
   document.getElementById('tree').innerHTML=(s.sections||[]).map((sec,i)=>{
     const nm=`<span class=nm>${esc(sec.title)}<span class=s>${esc(sec.sub||'')}</span></span>`;
-    if(built[sec.file]!=null){
-      return `<li class="done built"><button type=button class=f aria-expanded=false onclick="var b=this.parentNode.querySelector('.body');var o=b.style.display==='block';b.style.display=o?'none':'block';this.setAttribute('aria-expanded',String(!o))"><span class=ic aria-hidden=true>✓</span>${nm}</button><div class="body md">${mdToHtml(built[sec.file])}</div></li>`;
+    if(BUILT[sec.file]!=null){
+      // most-recently-finished step pulses while building, signalling the next is ready
+      const cls='done built'+(VIEWING===sec.file?' viewing':'')+((!s.done&&i===lastBuilt)?' justdone':'');
+      return `<li class="${cls}" data-file="${esc(sec.file)}"><button type=button class=f aria-label="Open ${esc(sec.title)} in the main panel" onclick="viewSection('${esc(sec.file)}')"><span class=ic aria-hidden=true>✓</span>${nm}</button></li>`;
     }
     if(!s.done&&i===step){return `<li class=active><div class=f><span class=ic aria-hidden=true>✍︎</span>${nm}</div></li>`;}
     return `<li class=pending><div class=f><span class=ic aria-hidden=true>○</span>${nm}</div></li>`;
   }).join('');
   const dl=document.getElementById('dl'); if(dl)dl.style.display=s.done?'block':'none';
-  const dz=document.getElementById('dlzip'); if(dz)dz.style.display=s.done?'block':'none';
 }
+function viewSection(file){
+  VIEWING=file;
+  const v=document.getElementById('viewer'); if(!v)return;
+  const meta=SECMETA[file]||{}, content=BUILT[file]||'';
+  v.innerHTML=`<div class=node><button type=button class=viewer-x onclick=closeViewer() aria-label="Close">×</button>`+
+    `<span class=eyebrow>From your plan</span><h3>${esc(meta.title||'Section')}</h3><p class=h3sub>${esc(meta.sub||'')}</p>`+
+    `<div class="draft md">${mdToHtml(content)}</div></div>`;
+  v.style.display='block';
+  document.querySelectorAll('#tree li[data-file]').forEach(li=>li.classList.toggle('viewing',li.getAttribute('data-file')===file));
+  v.scrollIntoView({behavior:'smooth',block:'start'});
+}
+function closeViewer(){VIEWING=null;const v=document.getElementById('viewer');if(v){v.style.display='none';v.innerHTML='';}document.querySelectorAll('#tree li.viewing').forEach(li=>li.classList.remove('viewing'));}
 function renderNode(s){
   const n=document.getElementById('node');
   if(s.status==='researching')return;
@@ -1383,7 +1407,7 @@ async function upgrade(){
   }catch(e){toast('Network error starting checkout.','err');}
 }
 function show(id){['intake','workspace','profile'].forEach(x=>{const e=document.getElementById(x);if(e)e.style.display=(x===id?(x==='workspace'?'grid':'block'):'none');});}
-function newPlan(){SIDEBAR_PHASE=null;ACT_RESEARCH=false;Activity.stop(true);show('intake');renderBoardPick();gateIntake();}
+function newPlan(){SIDEBAR_PHASE=null;ACT_RESEARCH=false;Activity.stop(true);closeViewer();show('intake');renderBoardPick();gateIntake();}
 async function showPlans(){
   let d; try{const r=await fetch('/api/plans',{headers:authHeaders()});if(!r.ok){toast('Sign in to see your plans.','err');return;}d=await r.json();}catch(e){toast('Network error.','err');return;}
   show('profile');renderPlans(d);
@@ -1404,7 +1428,7 @@ function renderPlans(d){
 async function resume(id){
   SID=id;show('workspace');SESSION_BOARD=null;SIDEBAR_PHASE=null;
   const ab=document.getElementById('addons');if(ab)delete ab.dataset.done;
-  closeDrawer();
+  closeDrawer();closeViewer();
   try{const r=await fetch('/api/plan/'+SID,{headers:authHeaders()});const s=await r.json();render(s);if(s.status==='researching')poll();}catch(e){document.getElementById('err2').textContent='Could not load that plan.';}
 }
 function resumeDownload(id){SID=id;download();}
