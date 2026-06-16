@@ -479,9 +479,10 @@ def _ensure_tree(s: dict) -> dict:
 def _plan_research(session_id: str, idea: str, user: str) -> None:
     try:
         progress: list[str] = []
-        def on_progress(line: str) -> None:  # write each real milestone/receipt so the UI can spew it live
-            progress.append(line)
-            store.plan_save(session_id, progress=list(progress))
+        def on_progress(line: str) -> None:  # write each real milestone/receipt + the running usage so
+            progress.append(line)            # the UI spews it live AND the session meter ticks during research
+            store.plan_save(session_id, progress=list(progress),
+                            tokens=pipeline.LEDGER.tokens(), cost=round(pipeline.LEDGER.cost(), 4))
         prov = _provider_for(user)   # BYOK: run the whole pre-build pass on the user's key if they have one
         with provider.use(prov), pipeline.run_ledger():
             prep = planner.prepare(idea, mock=MOCK, on_progress=on_progress)  # intake → research → vet → draft
@@ -927,7 +928,9 @@ __FILG_HEAD__
 .topright{display:flex;align-items:center;gap:14px}
 .meter{display:inline-flex;align-items:center;gap:6px;background:var(--card);border:1.5px solid var(--line);color:var(--muted);font-size:12.5px;font-weight:700;padding:5px 11px;border-radius:999px;cursor:default;font-variant-numeric:tabular-nums}
 .meter[hidden]{display:none}   /* the author .meter rule would otherwise override the UA [hidden]=display:none, leaking an empty pill */
-.meter .m-dot{width:7px;height:7px;border-radius:50%;background:var(--ok);flex:none}
+.meter .m-dot{width:7px;height:7px;border-radius:50%;background:var(--muted);flex:none;transition:background .3s}
+.meter.live .m-dot{background:var(--ok);animation:mpulse 1.1s ease-in-out infinite}
+@keyframes mpulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.45;transform:scale(.78)}}
 .meter b{color:var(--ink);font-weight:800}
 h1.logo{font-size:30px;font-weight:800;letter-spacing:-.02em;margin:0}.logo span{color:var(--coral)}
 .logobtn{display:inline-flex;align-items:center;gap:8px;background:none;border:0;padding:0;margin:0;font:inherit;color:inherit;letter-spacing:inherit;cursor:pointer}.logobtn:hover{opacity:.85}
@@ -1250,7 +1253,7 @@ async function start(){
     const d=await r.json();
     if(d.gibberish){showJoke(d);go.disabled=false;go.textContent='Build my plan →';return;}  // nonsense → roast, no run
     if(!r.ok){err.textContent=d.error||'Something went wrong.';if(d.needKey)err.innerHTML+=' <a href=# onclick="keyModal();return false">Add your key →</a>';else if(d.upgrade)err.innerHTML+=' <a href=# onclick="upgrade();return false">Upgrade →</a>';go.disabled=false;go.textContent='Build my plan →';return;}
-    SID=d.id;
+    SID=d.id;meterBaseline(d.id);   // baseline at 0 so this run's tokens fully count as research streams in
     document.getElementById('intake').style.display='none';
     document.getElementById('workspace').style.display='grid';
     poll();
@@ -1289,23 +1292,40 @@ async function poll(){
 let ACT_RESEARCH=false, ACT_PROG_N=0, ACT_ID=null;
 // ── Session usage meter ─────────────────────────────────────────────────────
 // In-memory only: tokens + $ spent THIS browser session. Resets on reload, never tracked on the
-// account. Each plan's cumulative cost/tokens is observed per response; only positive deltas tick
-// the meter (first sight of a plan sets a baseline, so opening an existing plan doesn't backfill).
+// account. Always visible (starts at 0). Each plan's cumulative cost/tokens is observed per response
+// (and streamed during research); only positive deltas tick the meter. A plan created this session is
+// baselined at 0 (meterBaseline) so all its usage counts; a plan merely OPENED is baselined at its
+// current total so we don't backfill. The shown numbers ease toward the real totals → reads like a live ticker.
 let METER={tokens:0,cost:0}; const PLAN_BASE={};
+let _mShown={tokens:0,cost:0}, _mRAF=null;
+function meterBaseline(id){if(id!=null)PLAN_BASE[id]={c:0,t:0};}   // a fresh plan → count all of its usage
 function meterTick(o){
   if(!o||o.id==null||o.cost==null||o.tokens==null)return;
   const c=+o.cost||0,t=+o.tokens||0,id=o.id;
-  if(!(id in PLAN_BASE)){PLAN_BASE[id]={c,t};renderMeter();return;}   // baseline; don't backfill
+  if(!(id in PLAN_BASE)){PLAN_BASE[id]={c,t};animateMeter();return;}   // first sight of an opened plan → baseline
   const dc=c-PLAN_BASE[id].c,dt=t-PLAN_BASE[id].t;
-  if(dc>0||dt>0){METER.cost+=Math.max(0,dc);METER.tokens+=Math.max(0,dt);PLAN_BASE[id]={c,t};renderMeter();}
+  if(dc>0||dt>0){METER.cost+=Math.max(0,dc);METER.tokens+=Math.max(0,dt);PLAN_BASE[id]={c,t};}
+  animateMeter();
 }
 function fmtTokens(n){n=Math.round(n);return n>=1000?(n/1000).toFixed(n>=10000?0:1).replace(/\\.0$/,'')+'k':String(n);}
-function renderMeter(){
+function animateMeter(){   // ease the displayed numbers toward the real totals so the meter reads live
+  if(_mRAF)cancelAnimationFrame(_mRAF);
+  const from={tokens:_mShown.tokens,cost:_mShown.cost}, t0=performance.now(), dur=650;
+  const step=(now)=>{
+    const k=Math.min(1,(now-t0)/dur), e=1-Math.pow(1-k,3);
+    _mShown.tokens=from.tokens+(METER.tokens-from.tokens)*e;
+    _mShown.cost=from.cost+(METER.cost-from.cost)*e;
+    paintMeter();
+    if(k<1){_mRAF=requestAnimationFrame(step);}else{_mShown={tokens:METER.tokens,cost:METER.cost};paintMeter();_mRAF=null;}
+  };
+  _mRAF=requestAnimationFrame(step);
+}
+function paintMeter(){
   const el=document.getElementById('meter');if(!el)return;
-  if(METER.tokens<=0){el.hidden=true;return;}
-  const d=METER.cost<1?(METER.cost<0.01?4:3):2;
+  const cost=_mShown.cost, tok=_mShown.tokens, d=cost<1?(cost<0.01?4:3):2;
   el.hidden=false;
-  el.innerHTML=`<span class=m-dot></span><b>${fmtTokens(METER.tokens)}</b> tokens · <b>$${METER.cost.toFixed(d)}</b>`;
+  el.className=(typeof Activity!=='undefined'&&Activity.n>0)?'meter live':'meter';
+  el.innerHTML=`<span class=m-dot></span><b>${fmtTokens(tok)}</b> tokens · <b>$${cost.toFixed(d)}</b>`;
 }
 function render(s){
   meterTick(s);   // tick the session usage meter off this plan's cumulative cost/tokens
@@ -1971,7 +1991,7 @@ async function initAuth(){
   const q=new URLSearchParams(location.search);
   if(q.get('upgraded'))banner('🎉 You\\'re on Operator. Your plans + integrations are unlocked.');
   if(q.get('canceled'))banner('Checkout canceled, no charge. You\\'re still on the free tier.');
-  restoreIdea();renderBoardPick();
+  restoreIdea();renderBoardPick();paintMeter();   // show the session meter at 0 from first paint
   if(!CFG.authEnabled||!window.supabase){renderAuth();routeFromPath();return;}
   sb=window.supabase.createClient(CFG.supabaseUrl,CFG.supabaseAnon);
   sb.auth.onAuthStateChange(async (_e,s)=>{session=s;await loadMe();renderAuth();});
