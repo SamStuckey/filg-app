@@ -49,6 +49,7 @@ import board     # noqa: E402 — Board of Directors orchestration
 import gibberish  # noqa: E402 — pre-LLM "is this even an idea?" gate (saves a run, hands back a roast)
 import plan_pdf   # noqa: E402 — styled PDF generation (synthesis + fpdf2 render)
 import advisor    # noqa: E402 — "chat with your plan" (grounded advisory layer)
+import provider   # noqa: E402 — BYOK: per-run LLM provider (FILG's key vs a user's OpenRouter key)
 
 from . import auth, billing, keys, planner, store  # noqa: E402 — persistence, auth, billing, BYOK keys
 
@@ -61,6 +62,28 @@ def _is_paid(email: str, verified: bool) -> bool:
     """Paid = a verified user with a live subscription, OR an allowlisted comp. An unverified
     (free-tier, email-only) caller can't be billed-paid, but the comp allowlist still applies."""
     return (verified and billing.is_paid(email)) or (email in PAID)
+
+
+def _is_byok(user: str) -> bool:
+    """True iff this user runs on their own key (BYOK configured + a key saved)."""
+    return bool(user and keys.enabled() and keys.has_key(user))
+
+
+def _provider_for(user: str):
+    """The provider a session should run on: the user's saved OpenRouter key, else None (FILG's key).
+    provider.use(None) is a no-op, so callers can wrap unconditionally — with BYOK off this is inert."""
+    if not (user and keys.enabled()):
+        return None
+    key = keys.get_key(user)
+    return provider.openrouter_provider(key) if key else None
+
+
+def _meter(user: str, cost: float) -> None:
+    """Record spend against FILG's daily budget — but ONLY for non-BYOK runs. A BYOK run is the
+    user's spend (and resolves to ~$0 on FILG's ledger anyway), so it never touches the kill switch."""
+    if not _is_byok(user):
+        usage.record_spend(cost)
+
 
 app = FastAPI(title="FILG")
 RUN_LOCK = threading.Lock()         # serialize runs so per-run cost metering stays accurate
@@ -371,10 +394,12 @@ def _plan_research(session_id: str, idea: str, user: str) -> None:
         def on_progress(line: str) -> None:  # write each real milestone/receipt so the UI can spew it live
             progress.append(line)
             store.plan_save(session_id, progress=list(progress))
-        with RUN_LOCK:
+        prov = _provider_for(user)   # BYOK: run the whole pre-build pass on the user's key if they have one
+        with RUN_LOCK, provider.use(prov):
             prep = planner.prepare(idea, mock=MOCK, on_progress=on_progress)  # intake → research → vet → draft
-        usage.record_run(user, prep["research_cost"])           # the metered free run + daily total
-        usage.record_spend(prep["cost"] - prep["research_cost"])  # intake + vet + first draft → daily
+        if prov is None:   # FILG's key → meter the free run; BYOK is the user's spend, not metered
+            usage.record_run(user, prep["research_cost"])           # the metered free run + daily total
+            usage.record_spend(prep["cost"] - prep["research_cost"])  # intake + vet + first draft → daily
         root = _new_node(planner.root_node(prep["proposal"]), None)  # seed the decision tree's root
         tree = {"nodes": {root["id"]: root}, "active": root["id"]}
         store.plan_save(session_id, status="building", research=prep["research"], step=0,
@@ -396,9 +421,13 @@ async def api_plan_start(request: Request):
     user, verified = _identity(request, body.get("email"))
     if "@" not in user:
         return JSONResponse({"error": "Enter an email so we can save your plan."}, status_code=400)
-    allowed, reason = usage.can_run(user, is_paid=_is_paid(user, verified))
-    if not allowed:
-        return JSONResponse({"error": reason, "upgrade": True}, status_code=402)
+    if not _is_byok(user):   # BYOK users run on their own key → skip the free cap + daily kill switch
+        allowed, reason = usage.can_run(user, is_paid=_is_paid(user, verified))
+        if not allowed:
+            # When BYOK is available, steer an out-of-runs user to add their key; else to upgrade.
+            need_key = keys.enabled() and bool(user and "@" in user)
+            return JSONResponse({"error": reason, "upgrade": not need_key, "needKey": need_key},
+                                status_code=402)
     directors = [k for k in (body.get("directors") or []) if k in personas.KEYS]  # optional board
     sid = uuid.uuid4().hex[:12]
     store.plan_create(sid, user, idea, directors=directors)
@@ -440,14 +469,14 @@ async def api_plan_respond(sid: str, request: Request):
     if choice not in planner.CHOICES:
         return JSONResponse({"error": "pick yes_and / not_quite / okay_but"}, status_code=400)
     try:
-        with RUN_LOCK:
+        with RUN_LOCK, provider.use(_provider_for(s.get("user"))):
             # If a board is set it vets each finalized section and its takeaway steers the next draft
             # (planner.advance runs the board inline). cost includes any board review.
             upd = planner.advance(s, choice, body.get("note"), mock=MOCK,
                                   directors=s.get("directors") or None)
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"error": str(e)}, status_code=500)
-    usage.record_spend(round((upd.get("cost", 0) or 0) - (s.get("cost") or 0), 4))  # draft + board review
+    _meter(s.get("user"), round((upd.get("cost", 0) or 0) - (s.get("cost") or 0), 4))  # draft + board review
     store.plan_save(sid, **upd)
     return _plan_state(store.plan_get(sid))
 
@@ -466,7 +495,7 @@ async def api_plan_next(sid: str, request: Request):
     if active["step"] >= planner.N:
         return JSONResponse({"error": "This plan is already complete."}, status_code=409)
     try:
-        with RUN_LOCK:
+        with RUN_LOCK, provider.use(_provider_for(s.get("user"))):
             child, cost = planner.forward(planner._working_idea(s), s["research"], active, feedback,
                                           directors=s.get("directors") or None,
                                           founder=planner._founder(s), mock=MOCK)
@@ -476,7 +505,7 @@ async def api_plan_next(sid: str, request: Request):
     tree["nodes"][node["id"]] = node
     active.setdefault("children", []).append(node["id"])
     tree["active"] = node["id"]
-    usage.record_spend(cost)
+    _meter(s.get("user"), cost)
     store.plan_save(sid, tree=tree, cost=round((s.get("cost") or 0) + cost, 4), **_mirror(tree))
     return _plan_state(store.plan_get(sid))
 
@@ -502,7 +531,7 @@ async def api_plan_back(sid: str, request: Request):
                             status_code=400)
     prev = tree["nodes"][active["parent"]]   # the previous step's node — the one we re-draft
     try:
-        with RUN_LOCK:
+        with RUN_LOCK, provider.use(_provider_for(s.get("user"))):
             sib, cost = planner.rebranch(planner._working_idea(s), s["research"], prev, feedback,
                                          founder=planner._founder(s), mock=MOCK)
     except Exception as e:  # noqa: BLE001
@@ -512,7 +541,7 @@ async def api_plan_back(sid: str, request: Request):
     if prev.get("parent"):
         tree["nodes"][prev["parent"]].setdefault("children", []).append(node["id"])
     tree["active"] = node["id"]
-    usage.record_spend(cost)
+    _meter(s.get("user"), cost)
     store.plan_save(sid, tree=tree, cost=round((s.get("cost") or 0) + cost, 4), **_mirror(tree))
     return _plan_state(store.plan_get(sid))
 
@@ -545,12 +574,12 @@ async def api_plan_ask(sid: str, request: Request):
     if archetype not in planner.ARCHETYPE_KEYS:
         return JSONResponse({"error": "pick an advisor"}, status_code=400)
     try:
-        with RUN_LOCK:
+        with RUN_LOCK, provider.use(_provider_for(s.get("user"))):
             res, cost = planner.ask_expert(s["idea"], s.get("files") or {}, archetype,
                                            body.get("question") or "", mock=MOCK)
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"error": str(e)}, status_code=500)
-    usage.record_spend(cost)
+    _meter(s.get("user"), cost)
     return res
 
 
@@ -572,11 +601,11 @@ async def api_plan_board(sid: str, request: Request):
     work_idea = planner._working_idea(s)
     plan_text = planner.bundle_markdown(work_idea, s.get("files") or {})
     try:
-        with RUN_LOCK:
+        with RUN_LOCK, provider.use(_provider_for(s.get("user"))):
             res, cost = board.convene(work_idea, plan_text, question, directors, mock=MOCK)
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"error": str(e)}, status_code=500)
-    usage.record_spend(cost)
+    _meter(s.get("user"), cost)
     if picked:  # persist a freshly chosen board so later steps are vetted by it
         store.plan_save(sid, directors=directors)
     return res
@@ -599,13 +628,13 @@ async def api_plan_chat(sid: str, request: Request):
         return JSONResponse({"error": "Keep it under 2000 characters."}, status_code=400)
     history = list(s.get("chat") or [])
     try:
-        with RUN_LOCK:
+        with RUN_LOCK, provider.use(_provider_for(s.get("user"))):
             reply, cost = advisor.chat_reply(s, message, history=history, mock=MOCK)
     except Exception as e:  # noqa: BLE001
         traceback.print_exc()
         return JSONResponse({"error": str(e)}, status_code=500)
     history += [{"role": "user", "content": message}, {"role": "assistant", "content": reply}]
-    usage.record_spend(cost)  # chat is ongoing spend → counts toward the daily kill switch
+    _meter(s.get("user"), cost)  # FILG-key chat counts toward the daily kill switch; BYOK is the user's spend
     store.plan_save(sid, chat=history)
     return {"reply": reply, "messages": history}
 
@@ -669,13 +698,13 @@ async def api_plan_pdf(sid: str, request: Request):
     if s["status"] != "done":
         return JSONResponse({"error": "plan isn't finished yet"}, status_code=400)
     try:
-        with RUN_LOCK:
+        with RUN_LOCK, provider.use(_provider_for(s.get("user"))):
             plan, cost = plan_pdf.synthesize(s, mock=MOCK)
             data = plan_pdf.render(plan, style=(request.query_params.get("style") or "filg"))
     except Exception as e:  # noqa: BLE001
         traceback.print_exc()
         return JSONResponse({"error": f"Could not build the PDF: {e}"}, status_code=500)
-    usage.record_spend(cost)
+    _meter(s.get("user"), cost)
     fn = f"{_slug(s.get('idea'))}-business-plan.pdf"
     return Response(data, media_type="application/pdf",
                     headers={"Content-Disposition": f'attachment; filename="{fn}"'})

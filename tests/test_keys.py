@@ -50,3 +50,46 @@ def test_key_save_requires_signin_when_enabled(client, monkeypatch):
 def test_key_remove_requires_signin(client):
     r = client.post("/api/key/remove", json={})
     assert r.status_code == 401
+
+
+# ── phase 3: gating + metering routing ────────────────────────────────────────
+from app import main  # noqa: E402
+
+_IDEA = {"idea": "a real idea about coaching small dental practices", "email": "x@y.com"}
+
+
+def test_start_steers_to_add_key_when_byok_on_and_capped(client, monkeypatch):
+    monkeypatch.setattr(main.keys, "enabled", lambda: True)
+    monkeypatch.setattr(main.usage, "can_run", lambda *a, **k: (False, "free limit reached"))
+    r = client.post("/api/plan/start", json=_IDEA)
+    assert r.status_code == 402
+    d = r.json()
+    assert d["needKey"] is True and d["upgrade"] is False   # steer to BYOK, not upgrade
+
+
+def test_start_steers_to_upgrade_when_byok_off_and_capped(client, monkeypatch):
+    monkeypatch.setattr(main.keys, "enabled", lambda: False)
+    monkeypatch.setattr(main.usage, "can_run", lambda *a, **k: (False, "free limit reached"))
+    r = client.post("/api/plan/start", json=_IDEA)
+    assert r.status_code == 402
+    d = r.json()
+    assert d["upgrade"] is True and d["needKey"] is False   # legacy behavior preserved
+
+
+def test_byok_user_bypasses_the_free_cap(client, monkeypatch):
+    monkeypatch.setattr(main.keys, "enabled", lambda: True)
+    monkeypatch.setattr(main.keys, "has_key", lambda u: True)        # user has a saved key
+    monkeypatch.setattr(main.usage, "can_run", lambda *a, **k: (False, "blocked"))  # would block
+    r = client.post("/api/plan/start", json=_IDEA)
+    assert r.status_code == 200 and "id" in r.json()                 # BYOK skips can_run entirely
+
+
+def test_meter_skips_byok_runs(monkeypatch):
+    calls = []
+    monkeypatch.setattr(main.usage, "record_spend", lambda c: calls.append(c))
+    monkeypatch.setattr(main, "_is_byok", lambda u: True)
+    main._meter("x@y.com", 0.5)
+    assert calls == []                                              # BYOK = user's spend, not metered
+    monkeypatch.setattr(main, "_is_byok", lambda u: False)
+    main._meter("x@y.com", 0.5)
+    assert calls == [0.5]                                           # FILG-key run still metered
