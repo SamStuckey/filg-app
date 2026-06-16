@@ -602,7 +602,13 @@ button:hover{filter:brightness(1.04)}button:active{transform:translateY(1px)}but
 .sec{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:16px}
 .sec h3{font-size:12px;margin:0 0 12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:800}
 .ev{list-style:none;padding:0;margin:0}.ev li{padding:9px 0;border-top:1px dashed var(--line);font-size:13px}.ev li:first-child{border-top:0}
-#research .ev{max-height:46vh;overflow-y:auto;overflow-x:hidden;padding-right:6px;margin-right:-4px}
+/* collapsible sidebar sections (accordion) — header toggles, body shows when .open */
+.sec.collap .sechead{display:flex;align-items:center;gap:8px;width:100%;background:none;border:0;padding:0;margin:0;cursor:pointer;text-align:left;font:inherit}
+.sec.collap .sechead h3{margin:0;flex:1}
+.sec.collap .sechead .caret{color:var(--muted);font-size:12px;transition:transform .15s}
+.sec.collap.open .sechead .caret{transform:rotate(90deg)}
+.sec.collap .secbody{display:none;margin-top:12px}
+.sec.collap.open .secbody{display:block}
 .ev .note{color:var(--muted);font-size:12px}
 .badge{font-size:10px;font-weight:800;padding:1px 7px;border-radius:20px}.b-ok{background:var(--ok-bg);color:var(--ok)}.b-warn{background:var(--warn-bg);color:var(--warn)}
 .tree{list-style:none;padding:0;margin:0}.tree li{padding:10px 0;border-top:1px solid var(--line)}.tree li:first-child{border-top:0}
@@ -760,14 +766,16 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <div class=sec id=dtreesec style="display:none"><h3>Decision tree</h3>
 <p class=bhelp>Every branch you've explored. Click a node to hop back to it — the active branch is highlighted.</p>
 <div id=dtree></div></div>
-<div class="sec addons"><h3>Ask an expert</h3><div class=ax id=addons></div>
-<div class=disc id=adisc></div></div>
-<div class="sec board" id=boardsec style="display:none"><h3>Board of Directors</h3>
-<p class=bhelp>Tap to add or drop a director, then convene them on your plan.</p>
+<div class="sec collap" id=expertsec><button type=button class=sechead aria-expanded=false onclick="toggleSec('expertsec')"><h3>Ask an expert</h3><span class=caret aria-hidden=true>▸</span></button>
+<div class=secbody><div class=ax id=addons></div>
+<div class=disc id=adisc></div></div></div>
+<div class="sec collap board" id=boardsec style="display:none"><button type=button class=sechead aria-expanded=false onclick="toggleSec('boardsec')"><h3>Board of Directors</h3><span class=caret aria-hidden=true>▸</span></button>
+<div class=secbody><p class=bhelp>Tap to add or drop a director, then convene them on your plan.</p>
 <div class=bdirs id=boarddirs></div>
 <button type=button class=convene id=convene onclick=convene()>Convene the board</button>
-<div class=disc>AI composite directors — not real people, not professional advice.</div></div>
-<div class=sec><h3>Research — graded</h3><div id=research></div></div>
+<div class=disc>AI composite directors — not real people, not professional advice.</div></div></div>
+<div class="sec collap open" id=researchsec><button type=button class=sechead aria-expanded=true onclick="toggleSec('researchsec')"><h3>Research — graded</h3><span class=caret aria-hidden=true>▸</span></button>
+<div class=secbody><div id=research></div></div></div>
 </aside>
 <main class=main>
 <div id=vet></div>
@@ -817,9 +825,24 @@ function render(s){
     document.getElementById('node').innerHTML='<div class=node><h3>Hit a snag</h3><p class=lead>'+esc(s.error)+'</p><button type=button onclick=newPlan()>Start over</button></div>';
     say('Something went wrong: '+(s.error||'')); return;
   }
-  renderResearch(s);renderVet(s);renderAnswer(s);renderTree(s);renderNode(s);renderAddons(s);renderBoard(s);renderBoardRound(s);renderDecisionTree(s);
+  renderResearch(s);renderVet(s);renderAnswer(s);renderTree(s);renderNode(s);renderAddons(s);renderBoard(s);renderBoardRound(s);renderDecisionTree(s);syncSidebar(s);
   if(s.done)say('Your plan is complete — all '+s.total+' parts ready to download.');
   else if(s.vetting&&s.vetting.verdict)say('Research graded. Verdict: '+s.vetting.verdict+'. Ready to build part '+((s.step||0)+1)+'.');
+}
+// Collapsible sidebar sections. On the first page (the offer + graded research) Research is open and
+// the advisor sections are collapsed; once we start building (step ≥ 1) Research collapses and the
+// advisors expand, since they're now the relevant tools. This auto-switch fires only on the phase
+// change, so any manual collapse/expand the user makes afterward sticks.
+let SIDEBAR_PHASE=null;
+function setOpen(id,open){const el=document.getElementById(id);if(!el)return;el.classList.toggle('open',open);const h=el.querySelector('.sechead');if(h)h.setAttribute('aria-expanded',String(open));}
+function toggleSec(id){const el=document.getElementById(id);if(!el)return;const open=el.classList.toggle('open');const h=el.querySelector('.sechead');if(h)h.setAttribute('aria-expanded',String(open));}
+function syncSidebar(s){
+  const phase=(s.step>=1||s.done)?'build':'intro';
+  if(phase===SIDEBAR_PHASE)return;   // only auto-apply on a phase change — respect manual toggles after
+  SIDEBAR_PHASE=phase;
+  setOpen('researchsec',phase==='intro');
+  setOpen('expertsec',phase==='build');
+  setOpen('boardsec',phase==='build');
 }
 function renderBoardRound(s){
   const el=document.getElementById('boardround'); if(!el)return;
@@ -1173,7 +1196,7 @@ async function upgrade(){
   }catch(e){toast('Network error starting checkout.','err');}
 }
 function show(id){['intake','workspace','profile'].forEach(x=>{const e=document.getElementById(x);if(e)e.style.display=(x===id?(x==='workspace'?'grid':'block'):'none');});}
-function newPlan(){show('intake');renderBoardPick();gateIntake();}
+function newPlan(){SIDEBAR_PHASE=null;show('intake');renderBoardPick();gateIntake();}
 async function showPlans(){
   let d; try{const r=await fetch('/api/plans',{headers:authHeaders()});if(!r.ok){toast('Sign in to see your plans.','err');return;}d=await r.json();}catch(e){toast('Network error.','err');return;}
   show('profile');renderPlans(d);
@@ -1192,7 +1215,7 @@ function renderPlans(d){
     `<div style="margin:10px 0 16px"><button onclick=newPlan()>+ New plan</button></div>`+rows+integ+`</div>`;
 }
 async function resume(id){
-  SID=id;show('workspace');SESSION_BOARD=null;
+  SID=id;show('workspace');SESSION_BOARD=null;SIDEBAR_PHASE=null;
   const ab=document.getElementById('addons');if(ab)delete ab.dataset.done;
   closeDrawer();
   try{const r=await fetch('/api/plan/'+SID,{headers:authHeaders()});const s=await r.json();render(s);if(s.status==='researching')poll();}catch(e){document.getElementById('err2').textContent='Could not load that plan.';}
