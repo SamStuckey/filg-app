@@ -51,6 +51,9 @@ def test_branching_next_back_goto(client):
     s = client.post(f"/api/plan/{sid}/next", json={"feedback": "go bolder"}).json()
     assert s["step"] == 2 and len(s["files"]) == 2
 
+    # a forward note is flagged on the next section (how it folded into the plan)
+    assert s["proposal"]["change"] and "go bolder" in s["proposal"]["change"]
+
     # back without a note → form error (feedback is required to go back)
     r = client.post(f"/api/plan/{sid}/back", json={"feedback": ""})
     assert r.status_code == 400

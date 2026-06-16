@@ -282,7 +282,7 @@ def _mirror(tree: dict) -> dict:
     done = a["step"] >= planner.N
     return {"step": a["step"], "files": a["files"], "history": a["history"], "board": a["board"],
             "proposal": (None if done else {"section": a["section"], "title": a["title"],
-                                            "draft": a["draft"]}),
+                                            "draft": a["draft"], "change": a.get("change")}),
             "status": "done" if done else "building"}
 
 
@@ -768,6 +768,8 @@ button:hover{filter:brightness(1.04)}button:active{transform:translateY(1px)}but
 .balloon .bh:hover{background:var(--bg)}.balloon .bh .caret{margin-left:auto;color:var(--muted);font-size:12px;transition:transform .12s}
 .balloon.open .bh .caret{transform:rotate(90deg)}
 .balloon .bb{padding:0 13px 12px;font-size:13.5px;display:none}.balloon.open .bb{display:block}
+.changeflag{background:var(--warn-bg);border:1px solid #f4d9a8;border-left:3px solid var(--sun);border-radius:12px;padding:11px 14px;margin:0 0 14px;font-size:13.5px;color:var(--ink)}
+.changeflag .cf-l{display:block;font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--warn);margin-bottom:4px}
 .takeaway{margin-top:14px;background:var(--ok-bg);border:1px solid #cfe9d8;border-radius:14px;padding:13px 15px;font-size:14px}
 .takeaway .tl{font-weight:800;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--ok);margin-bottom:5px}
 .takeaway .split{display:block;margin-top:6px;color:var(--muted);font-size:13px}
@@ -1054,9 +1056,10 @@ function renderNode(s){
     '<div class=planacts><button type=button onclick=download()>⬇ Download (PDF)</button><button type=button class=ghost onclick="sharePlan(SID)">🔗 Share</button></div></div>';return;}
   const p=s.proposal; if(!p){n.innerHTML='';return;}
   const sec=(s.sections||[]).find(x=>x.title===p.title)||{};
-  const intro=s.step===0?`<p class=lead>We build your plan in ${s.total} parts — one at a time, your call on each (watch them fill in on the left). First up:</p>`:'';
+  const intro=s.step===0?`<p class=lead>We build your plan in ${s.total} parts, one at a time, your call on each (watch them fill in on the left). First up:</p>`:'';
+  const changeFlag=p.change?`<div class=changeflag><span class=cf-l>↳ Your note shaped this</span>${esc(p.change)}</div>`:'';
   n.innerHTML=`<div class=node><span class=eyebrow>Your plan · part ${s.step+1} of ${s.total}</span><h3>${esc(p.title)}</h3><p class=h3sub>${esc(sec.sub||'')}</p>`+
-    intro+
+    changeFlag+intro+
     `<div class="draft md">${mdToHtml(p.draft)}</div>`+
     `<div class=fbk><label for=feedback class=sr-only>Your feedback on this part</label>`+
     `<textarea id=feedback rows=2 placeholder="Give optional feedback and roll forward, or push back to start a new decision branch."></textarea>`+

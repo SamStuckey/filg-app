@@ -165,6 +165,24 @@ def propose(idea: str, section_key: str, research_data: dict, history: list,
     return draft, round(LEDGER.cost_slice(start), 4)
 
 
+def _change_note(idea: str, feedback: str | None, section: dict, mock: bool = False) -> tuple[str | None, float]:
+    """A one-line, plain-language flag of HOW the operator's note was folded into the plan — shown as
+    a callout at the top of the affected section so the change is visible, not silent. (feedback empty
+    → no note.)"""
+    fb = (feedback or "").strip()
+    if not fb:
+        return None, 0.0
+    if mock:
+        return (f"Folded in your note (“{fb[:60]}”): this part now takes it into account."), 0.0
+    from pipeline import LEDGER, call, SONNET  # heavy; real mode only
+    start = len(LEDGER.rows)
+    note = call("plan_change_note", SONNET, max_tokens=120, system=skills.VOICE, cache=True, prompt=(
+        f"The operator is building a business plan for: {idea}.\nThey just added this note: \"{fb}\".\n"
+        f"In ONE short sentence (no preamble, no quotes), tell them how you folded that note into the "
+        f"\"{section['title']}\" section. Be specific about what you actually did with it."))
+    return note.strip(), round(LEDGER.cost_slice(start), 4)
+
+
 def _board_notes(reviews: list) -> str | None:
     """Condense per-section board reviews into a guidance block for the next section's synthesis —
     this is how the board's takeaway actually influences the output, not just narrates it."""
@@ -299,8 +317,11 @@ def forward(idea: str, research_data: dict, node: dict, feedback: str | None,
         draft, c = propose(idea, nxt["key"], research_data, history,
                            board_notes=_board_notes(reviews), founder=founder, mock=mock)
         cost += c
+        change, cc = _change_note(idea, fb, nxt, mock=mock)   # flag how the note shaped the next part
+        cost += cc
         child = {"step": step + 1, "section": nxt["key"], "title": nxt["title"], "sub": nxt["sub"],
-                 "draft": draft, "files": files, "history": history, "board": reviews, "feedback": fb}
+                 "draft": draft, "files": files, "history": history, "board": reviews, "feedback": fb,
+                 "change": change}
     else:
         child = {"step": N, "section": None, "title": "Plan complete", "sub": "", "draft": None,
                  "files": files, "history": history, "board": reviews, "feedback": fb}
@@ -316,10 +337,12 @@ def rebranch(idea: str, research_data: dict, node: dict, feedback: str,
     draft, c = propose(idea, section["key"], research_data, node["history"],
                        steer=_steer("not_quite", feedback), board_notes=_board_notes(node["board"]),
                        founder=founder, mock=mock)
+    change, cc = _change_note(idea, feedback, section, mock=mock)
     sib = {"step": node["step"], "section": section["key"], "title": section["title"],
            "sub": section["sub"], "draft": draft, "files": dict(node["files"]),
-           "history": list(node["history"]), "board": list(node["board"]), "feedback": feedback}
-    return sib, round(c, 4)
+           "history": list(node["history"]), "board": list(node["board"]), "feedback": feedback,
+           "change": change}
+    return sib, round(c + cc, 4)
 
 
 def first_proposal(idea: str, research_data: dict, founder: str | None = None,
@@ -408,8 +431,11 @@ if __name__ == "__main__":  # self-test (mock, no API)
     child, _ = forward("guitar coaching", r3, root, "go bolder", mock=True)
     assert child["step"] == 1 and len(child["files"]) == 1            # section 0 finalized
     assert "revised" in child["files"]["1-the-setup.md"]             # forward note steered it
+    assert child["change"] and "go bolder" in child["change"]        # the fold-in is flagged
     sib, _ = rebranch("guitar coaching", r3, root, "narrower niche", mock=True)
     assert sib["step"] == 0 and "revised" in sib["draft"] and sib["files"] == {}  # re-draft, no finalize
+    assert sib["change"] and "narrower niche" in sib["change"]
+    assert forward("guitar coaching", r3, root, None, mock=True)[0]["change"] is None  # no note, no flag
     # forward to the end → terminal node
     node = child
     while node["step"] < N:
