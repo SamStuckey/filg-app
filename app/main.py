@@ -867,12 +867,11 @@ function renderNode(s){
   n.innerHTML=`<div class=node><span class=eyebrow>Your plan · part ${s.step+1} of ${s.total}</span><h3>${esc(p.title)}</h3><p class=h3sub>${esc(sec.sub||'')}</p>`+
     intro+
     `<div class="draft md">${mdToHtml(p.draft)}</div>`+
-    `<p class=lead>React below — your note steers what's written next. <b>Next</b> moves forward; <b>Back</b> revises the previous part (a note's required to go back).</p>`+
     `<div class=fbk><label for=feedback class=sr-only>Your feedback on this part</label>`+
-    `<textarea id=feedback rows=2 placeholder="Optional to go forward · required to go back — what should change?"></textarea>`+
+    `<textarea id=feedback rows=2 placeholder="Add feedback and roll forward if you're into it, or go back if you want to make changes."></textarea>`+
     `<div class=chips>${FB_CHIPS.map(x=>`<button type=button class=chip onclick="addChip('${x}')">${esc(x)}</button>`).join('')}</div>`+
-    `<div class=navrow><button type=button class=b-back onclick=backStep()${s.step===0?' disabled title="You\\'re on the first part"':''}>← Back</button>`+
-    `<button type=button class=b-next onclick=nextStep()>Next →</button></div>`+
+    `<div class=navrow><button type=button class=b-back onclick=backStep()${s.step===0?' disabled title="You\\'re on the first part"':''}>← Not feeling it</button>`+
+    `<button type=button class=b-next onclick=nextStep()>I'm with you →</button></div>`+
     `<div class=ferr id=ferr></div></div>`;
 }
 const FB_CHIPS=["go bolder","narrower niche","cheaper entry","B2B only","more specific","add an upsell"];
