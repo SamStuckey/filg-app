@@ -122,7 +122,13 @@ class _PDF(FPDF):
         self.set_y(10)
         self.set_font("Inter", "", 7.5)
         self.set_text_color(*MUTED)
-        self.cell(0, 5, self.plan_title.upper(), align="L")
+        title = self.plan_title.upper()
+        maxw = (self.w - self.l_margin - self.r_margin) - 34  # leave room for "BUILT WITH FILG"
+        if self.get_string_width(title) > maxw:
+            while title and self.get_string_width(title + "…") > maxw:
+                title = title[:-1]
+            title = title.rstrip() + "…"
+        self.cell(maxw, 5, title, align="L")
         self.cell(0, 5, "BUILT WITH FILG", align="R")
         self.set_draw_color(*LINE)
         self.set_line_width(0.2)
@@ -152,7 +158,11 @@ def _md_to_html(md: str) -> str:
     # Demote body headings to bold run-in lines: keeps them visually distinct but stops fpdf2's
     # write_html from auto-registering every body sub-heading as a table-of-contents/outline entry.
     md = re.sub(r"(?m)^#{1,6}\s+(.*)$", r"**\1**", md or "")
-    return markdown.markdown(md, extensions=["tables", "sane_lists"])
+    html = markdown.markdown(md, extensions=["tables", "sane_lists"])
+    # fpdf2's write_html inherits multi_cell's JUSTIFY default, which strands ugly word gaps. Force
+    # left alignment on the block tags.
+    return (html.replace("<p>", '<p align="left">').replace("<li>", '<li align="left">')
+                .replace("<td>", '<td align="left">'))
 
 
 def _body_html(pdf: _PDF, md: str) -> None:
@@ -163,7 +173,7 @@ def _body_html(pdf: _PDF, md: str) -> None:
     except Exception:  # noqa: BLE001 — never let one section's markup kill the whole PDF
         pdf.set_font("Inter", "", 11)
         pdf.set_text_color(*INK)
-        pdf.multi_cell(0, 6.2, re.sub(r"[*#`>|_-]", "", md or "").strip())
+        pdf.multi_cell(0, 6.2, re.sub(r"[*#`>|_-]", "", md or "", align="L").strip())
 
 
 def _cover(pdf: _PDF, plan: dict) -> None:
@@ -178,15 +188,17 @@ def _cover(pdf: _PDF, plan: dict) -> None:
     pdf.cell(0, 7, "B U S I N E S S   P L A N")
     pdf.ln(16)
     pdf.set_x(pdf.l_margin)
-    pdf.set_font("Fraunces", "", 33)
+    n = len(plan["title"])                       # adaptive size so long titles don't overflow/cramp
+    size = 33 if n <= 42 else (27 if n <= 64 else 22)
+    pdf.set_font("Fraunces", "", size)
     pdf.set_text_color(*INK)
-    pdf.multi_cell(0, 13, plan["title"])
+    pdf.multi_cell(0, size * 0.42, plan["title"], align="L")
     pdf.ln(3)
     if plan.get("subtitle"):
         pdf.set_x(pdf.l_margin)
         pdf.set_font("Inter", "", 13)
         pdf.set_text_color(*MUTED)
-        pdf.multi_cell(0, 7, plan["subtitle"])
+        pdf.multi_cell(0, 7, plan["subtitle"], align="L")
     pdf.ln(6)
     pdf.set_draw_color(*CORAL)
     pdf.set_line_width(1.1)
@@ -202,7 +214,7 @@ def _cover(pdf: _PDF, plan: dict) -> None:
     pdf.set_font("Inter", "", 10)
     pdf.set_text_color(*MUTED)
     pdf.multi_cell(0, 5.5, "Every market claim in this plan is graded by a source-credibility gate. "
-                           "Vendor-marketing stats are labeled, not laundered.")
+                           "Vendor-marketing stats are labeled, not laundered.", align="L")
     pdf.set_xy(pdf.l_margin, pdf.h - 26)
     pdf.set_font("Inter", "", 9)
     pdf.cell(0, 5, plan["date"])
@@ -217,12 +229,12 @@ def _section_head(pdf: _PDF, eyebrow: str, title: str, sub: str = "") -> None:
     pdf.set_x(pdf.l_margin)
     pdf.set_font("Fraunces", "", 21)
     pdf.set_text_color(*INK)
-    pdf.multi_cell(0, 9, title)
+    pdf.multi_cell(0, 9, title, align="L")
     if sub:
         pdf.set_x(pdf.l_margin)
         pdf.set_font("Inter", "", 11)
         pdf.set_text_color(*MUTED)
-        pdf.multi_cell(0, 6, sub)
+        pdf.multi_cell(0, 6, sub, align="L")
     pdf.ln(2)
     pdf.set_draw_color(*LINE)
     pdf.set_line_width(0.3)
@@ -239,7 +251,7 @@ def _evidence(pdf: _PDF, plan: dict) -> None:
     if not plan["evidence"]:
         pdf.set_font("Inter", "", 11)
         pdf.set_text_color(*MUTED)
-        pdf.multi_cell(0, 6, "No graded claims captured for this plan.")
+        pdf.multi_cell(0, 6, "No graded claims captured for this plan.", align="L")
         return
     for e in plan["evidence"]:
         ok = e["mark"] == "ok"
@@ -252,11 +264,11 @@ def _evidence(pdf: _PDF, plan: dict) -> None:
         pdf.set_x(pdf.l_margin)
         pdf.set_font("Inter", "", 11)
         pdf.set_text_color(*INK)
-        pdf.multi_cell(0, 6, e["text"])
+        pdf.multi_cell(0, 6, e["text"], align="L")
         pdf.set_x(pdf.l_margin)
         pdf.set_font("Inter", "", 9.5)
         pdf.set_text_color(*MUTED)
-        pdf.multi_cell(0, 5.2, f"{e['source']} — {e['note']}")
+        pdf.multi_cell(0, 5.2, f"{e['source']}  ·  {e['note']}", align="L")
         pdf.ln(4)
 
 
