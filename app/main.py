@@ -649,6 +649,7 @@ h1.logo{font-size:30px;font-weight:800;letter-spacing:-.02em;margin:0}.logo span
 .sub{color:var(--muted);margin:0 0 18px;font-size:17px}
 textarea,input{width:100%;padding:14px 16px;border:1.5px solid var(--line);border-radius:14px;font:inherit;background:#fff;margin-bottom:12px}
 textarea:focus,input:focus{outline:none;border-color:var(--sky)}textarea{min-height:120px;resize:vertical}
+textarea::placeholder,input::placeholder{color:#B7B1BF;opacity:1}
 button{background:var(--coral);color:#fff;border:0;font:inherit;font-weight:800;padding:13px 22px;border-radius:14px;cursor:pointer;transition:transform .06s,filter .15s}
 button:hover{filter:brightness(1.04)}button:active{transform:translateY(1px)}button:disabled{opacity:.55;cursor:default}
 .intake{max-width:680px;margin:28px auto;text-align:center}.intake textarea,.intake input{text-align:left}
@@ -919,7 +920,7 @@ async function start(){
   const idea=document.getElementById('idea').value.trim(), email=document.getElementById('email').value.trim();
   const go=document.getElementById('go'), err=document.getElementById('err');
   err.textContent='';document.getElementById('joke').innerHTML='';
-  if(CFG.authEnabled&&!session){gateIntake();return;}   // login required when auth is on
+  if(CFG.authEnabled&&!session){authModal();return;}   // signed-out → prompt them with the sign-in modal
   const body={idea}; if(!session) body.email=email;   // signed in → identity from the token
   if(BOARD.length) body.directors=BOARD;               // optional Board of Directors → vets each step
   go.disabled=true; go.textContent='Researching…'; ACT_RESEARCH=false;
@@ -1427,21 +1428,32 @@ function renderAuth(){
       `<span class=who>${esc(session.user.email)}${paid?' · <b>Operator</b>':''}</span>`+
       (!paid&&CFG.billingEnabled?`<button class="link up" onclick=upgrade()>Upgrade, $39/mo</button>`:'')+
       `<button class=link onclick=signout()>Sign out</button>`;
-  }else if(sb){bar.style.display='';bar.innerHTML=`<button class=link onclick=signinEmail()>Sign in</button>`;}
+  }else if(sb){bar.style.display='';bar.innerHTML=`<button class=link onclick=authModal()>Log in / Sign up</button>`;}
   else{bar.style.display='none';}
   gateIntake();
 }
 function gateIntake(){
+  // Auth options no longer live on the page. The prompt box + Build button always show; a signed-out
+  // user picks an idea, hits Build, and start() opens the sign-in modal. The email field is only for
+  // the auth-off (free/dev) path — when auth is on, identity comes from the token after the modal.
   const gate=document.getElementById('authgate'),email=document.getElementById('email'),go=document.getElementById('go');
-  if(!gate)return;
-  if(CFG.authEnabled&&!session){
-    email.style.display='none';go.style.display='none';
-    gate.innerHTML=`<div class=authgate>`+
-      (CFG.supabaseUrl?`<button class=gbtn onclick=signinGoogle()><svg class=gicon viewBox="0 0 18 18" aria-hidden=true><path fill="#4285F4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.92c1.71-1.57 2.68-3.89 2.68-6.62z"></path><path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.92-2.26c-.81.54-1.84.86-3.04.86-2.34 0-4.32-1.58-5.03-3.7H.96v2.33A9 9 0 0 0 9 18z"></path><path fill="#FBBC05" d="M3.97 10.72a5.4 5.4 0 0 1 0-3.44V4.95H.96a9 9 0 0 0 0 8.1l3.01-2.33z"></path><path fill="#EA4335" d="M9 3.58c1.32 0 2.5.45 3.44 1.35l2.58-2.58C13.46.9 11.43 0 9 0A9 9 0 0 0 .96 4.95l3.01 2.33C4.68 5.16 6.66 3.58 9 3.58z"></path></svg>Continue with Google</button>`:'')+
-      `<button class=gbtn onclick=signinEmail()>✉️ Email me a sign-in link</button>`+
-      `<p class=or>Free to start, sign in so your plans save to your profile.</p></div>`;
-  }else{gate.innerHTML='';go.style.display='';email.style.display=CFG.authEnabled?'none':'';}
+  if(go)go.style.display='';
+  if(email)email.style.display=CFG.authEnabled?'none':'';
+  if(gate)gate.innerHTML='';
 }
+const GOOGLE_SVG=`<svg class=gicon viewBox="0 0 18 18" aria-hidden=true><path fill="#4285F4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.92c1.71-1.57 2.68-3.89 2.68-6.62z"></path><path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.92-2.26c-.81.54-1.84.86-3.04.86-2.34 0-4.32-1.58-5.03-3.7H.96v2.33A9 9 0 0 0 9 18z"></path><path fill="#FBBC05" d="M3.97 10.72a5.4 5.4 0 0 1 0-3.44V4.95H.96a9 9 0 0 0 0 8.1l3.01-2.33z"></path><path fill="#EA4335" d="M9 3.58c1.32 0 2.5.45 3.44 1.35l2.58-2.58C13.46.9 11.43 0 9 0A9 9 0 0 0 .96 4.95l3.01 2.33C4.68 5.16 6.66 3.58 9 3.58z"></path></svg>`;
+function authModal(){
+  saveIdea();   // keep the typed idea through the OAuth redirect / email round-trip
+  document.getElementById('modal-title').textContent='Save your plan';
+  document.getElementById('modal-body').innerHTML=
+    `<p class=or style="margin:0 0 12px">Sign in so your plan saves to your profile. Free to start.</p>`+
+    `<div class=authgate>`+
+    (CFG.supabaseUrl?`<button class=gbtn onclick="authGo('google')">${GOOGLE_SVG}Continue with Google</button>`:'')+
+    `<button class=gbtn onclick="authGo('email')">✉️ Email me a sign-in link</button></div>`;
+  document.getElementById('modal-actions').innerHTML='';
+  _openModal('.authgate button');
+}
+function authGo(kind){_closeModal();if(kind==='google')signinGoogle();else signinEmail();}
 function saveIdea(){try{const v=document.getElementById('idea').value;if(v)localStorage.setItem('filg_idea',v);}catch(e){}}
 function restoreIdea(){try{const v=localStorage.getItem('filg_idea');if(v){document.getElementById('idea').value=v;localStorage.removeItem('filg_idea');}}catch(e){}}
 async function loadMe(){
