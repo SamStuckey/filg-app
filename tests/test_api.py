@@ -90,6 +90,29 @@ def test_download_follows_active_branch_no_paywall(client):
     assert r.status_code == 200 and b"1-the-setup.md" in r.content
 
 
+def test_chat_with_plan(client):
+    # The standing advisor: grounded, persisted on the plan, owner-only.
+    sid = client.post("/api/plan/start", json={"idea": GRAB_BAG, "email": "chat@x.com"}).json()["id"]
+    s = wait_status(client, sid)
+    while not s["done"]:
+        s = client.post(f"/api/plan/{sid}/next", json={"feedback": ""}).json()
+    assert s["chat"] == [] and s["chatStarters"]                 # state exposes thread + starter Qs
+
+    r = client.post(f"/api/plan/{sid}/chat", json={"message": "why would they buy from me?"})
+    assert r.status_code == 200
+    d = r.json()
+    assert d["reply"] and len(d["messages"]) == 2                # user + assistant persisted
+    assert d["messages"][0]["role"] == "user" and d["messages"][1]["role"] == "assistant"
+
+    # the thread persists on the session and a follow-up appends
+    again = client.post(f"/api/plan/{sid}/chat", json={"message": "and the price?"}).json()
+    assert len(again["messages"]) == 4
+    assert client.get(f"/api/plan/{sid}").json()["chat"][0]["content"] == "why would they buy from me?"
+
+    # empty message rejected
+    assert client.post(f"/api/plan/{sid}/chat", json={"message": "  "}).status_code == 400
+
+
 def test_plan_pdf_renders(client):
     # The core artifact: a finished plan downloads as a real, styled PDF (no paywall).
     sid = client.post("/api/plan/start", json={"idea": GRAB_BAG, "email": "pdf@x.com"}).json()["id"]

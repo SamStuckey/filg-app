@@ -48,6 +48,7 @@ import personas  # noqa: E402 — advisor/director registry (shared by ask-an-ex
 import board     # noqa: E402 — Board of Directors orchestration
 import gibberish  # noqa: E402 — pre-LLM "is this even an idea?" gate (saves a run, hands back a roast)
 import plan_pdf   # noqa: E402 — styled PDF generation (synthesis + fpdf2 render)
+import advisor    # noqa: E402 — "chat with your plan" (grounded advisory layer)
 
 from . import auth, billing, planner, store  # noqa: E402 — persistence, auth, billing, plan-builder
 
@@ -252,6 +253,7 @@ def _plan_state(s: dict) -> dict:
         "step": s.get("step", 0), "total": planner.N, "proposal": s.get("proposal"),
         "done": s["status"] == "done", "shared": bool(s.get("shared")),
         "tree": _tree_view(s["tree"]) if s.get("tree") else None,
+        "chat": s.get("chat") or [], "chatStarters": advisor.STARTERS,
     }
 
 
@@ -514,6 +516,34 @@ async def api_plan_board(sid: str, request: Request):
     return res
 
 
+@app.post("/api/plan/{sid}/chat")
+async def api_plan_chat(sid: str, request: Request):
+    """Chat with your plan — a standing advisor grounded in the plan, graded research, decisions, and
+    the chosen board. Persists the thread on the session so it lives with the plan. Owner only."""
+    s = store.plan_get(sid)
+    if not s or not _owns(request, s):
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    if s["status"] in ("researching", "error"):
+        return JSONResponse({"error": "Finish building the plan first."}, status_code=409)
+    body = await request.json()
+    message = (body.get("message") or "").strip()
+    if not message:
+        return JSONResponse({"error": "Ask a question."}, status_code=400)
+    if len(message) > 2000:
+        return JSONResponse({"error": "Keep it under 2000 characters."}, status_code=400)
+    history = list(s.get("chat") or [])
+    try:
+        with RUN_LOCK:
+            reply, cost = advisor.chat_reply(s, message, history=history, mock=MOCK)
+    except Exception as e:  # noqa: BLE001
+        traceback.print_exc()
+        return JSONResponse({"error": str(e)}, status_code=500)
+    history += [{"role": "user", "content": message}, {"role": "assistant", "content": reply}]
+    usage.record_spend(cost)  # chat is ongoing spend → counts toward the daily kill switch
+    store.plan_save(sid, chat=history)
+    return {"reply": reply, "messages": history}
+
+
 @app.post("/api/plan/{sid}/delete")
 async def api_plan_delete(sid: str, request: Request):
     """Permanently delete a plan (owner only). Note: deleting does NOT refund a free-tier run — each
@@ -642,6 +672,18 @@ button:hover{filter:brightness(1.04)}button:active{transform:translateY(1px)}but
 .sec.collap.open .sechead .caret{transform:rotate(90deg)}
 .sec.collap .secbody{display:none;margin-top:12px}
 .sec.collap.open .secbody{display:block}
+/* chat with your plan */
+.chatlog{display:flex;flex-direction:column;gap:8px;max-height:42vh;overflow-y:auto;margin-bottom:10px}
+.chatlog:empty{display:none;margin:0}
+.cmsg{font-size:13px;line-height:1.45;padding:8px 11px;border-radius:13px;max-width:92%}
+.cmsg.user{background:#eef4ff;border:1px solid #dbe6ff;color:var(--ink);align-self:flex-end;border-bottom-right-radius:4px}
+.cmsg.bot{background:var(--bg);border:1px solid var(--line);color:var(--ink);align-self:flex-start;border-bottom-left-radius:4px}
+.cmsg.bot p:first-child{margin-top:0}.cmsg.bot p:last-child{margin-bottom:0}
+.cmsg .think{color:var(--muted);font-style:italic}
+.chatstart{display:flex;flex-direction:column;gap:6px;margin-bottom:10px}
+.chatstart button{background:#fff;border:1.5px solid var(--line);color:var(--ink);font-size:12.5px;font-weight:700;padding:8px 11px;border-radius:11px;text-align:left;width:100%}
+.chatstart button:hover{border-color:var(--sky);color:var(--sky)}
+.chatsend{width:100%;background:var(--sky);font-size:14px}
 .ev .note{color:var(--muted);font-size:12px}
 .badge{font-size:10px;font-weight:800;padding:1px 7px;border-radius:20px}.b-ok{background:var(--ok-bg);color:var(--ok)}.b-warn{background:var(--warn-bg);color:var(--warn)}
 .tree{list-style:none;padding:0;margin:0}.tree li{padding:10px 0;border-top:1px solid var(--line)}.tree li:first-child{border-top:0}
@@ -692,6 +734,7 @@ button:hover{filter:brightness(1.04)}button:active{transform:translateY(1px)}but
 .chip{background:var(--bg);border:1px solid var(--line);color:var(--ink);font-size:13px;font-weight:700;padding:6px 11px;border-radius:20px}
 .compose .row{display:flex;gap:8px;margin-top:10px}.compose .row button{flex:none}.compose .ghost{background:#fff;color:var(--muted);border:1.5px solid var(--line)}
 .done{background:var(--ok-bg);border:1px solid #cfe9d8;border-radius:14px;padding:16px 18px;font-size:15px}
+.planacts{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}.planacts .ghost{background:#fff;color:var(--ink);border:1.5px solid var(--line)}
 .addons .ax{display:flex;flex-wrap:wrap;gap:8px}
 .addons .ax button{flex:1;min-width:120px;background:#fff;border:1.5px solid var(--line);color:var(--ink);font-size:13px;font-weight:800;padding:9px 10px;text-align:left}
 .addons .ax .bl{display:block;font-size:11px;color:var(--muted);font-weight:500}
@@ -820,6 +863,14 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <div class=sec id=dtreesec style="display:none"><h3>Decision tree</h3>
 <p class=bhelp>Each step is a node. Go <b>Back</b> to branch and try another direction; click any node to hop to it. The active branch is highlighted.</p>
 <div id=dtree></div></div>
+<div class="sec collap" id=chatsec style="display:none"><button type=button class=sechead aria-expanded=false onclick="toggleSec('chatsec')"><h3>Chat with your plan</h3><span class=caret aria-hidden=true>▸</span></button>
+<div class=secbody>
+<div class=chatlog id=chatlog></div>
+<div class=chatstart id=chatstart></div>
+<label for=chatinput class=sr-only>Ask the planner about your plan</label>
+<textarea id=chatinput rows=2 placeholder="Ask anything about your plan…"></textarea>
+<button type=button class=chatsend id=chatsend onclick=sendChat()>Ask the planner →</button>
+<div class=disc>AI advisor grounded in your plan + graded research — not professional advice.</div></div></div>
 <div class="sec collap addons" id=expertsec><button type=button class=sechead aria-expanded=false onclick="toggleSec('expertsec')"><h3>Ask an expert</h3><span class=caret aria-hidden=true>▸</span></button>
 <div class=secbody><div class=ax id=addons></div>
 <div class=disc id=adisc></div></div></div>
@@ -888,7 +939,8 @@ function render(s){
     document.getElementById('node').innerHTML='<div class=node><h3>Hit a snag</h3><p class=lead>'+esc(s.error)+'</p><button type=button onclick=newPlan()>Start over</button></div>';
     say('Something went wrong: '+(s.error||'')); return;
   }
-  renderResearch(s);renderVet(s);renderAnswer(s);renderTree(s);renderNode(s);renderAddons(s);renderBoard(s);renderBoardRound(s);renderDecisionTree(s);syncSidebar(s);
+  renderResearch(s);renderVet(s);renderAnswer(s);renderTree(s);renderNode(s);renderAddons(s);renderBoard(s);renderBoardRound(s);renderDecisionTree(s);renderChat(s);syncSidebar(s);
+  if(s.done&&SID)location.hash='#/plan/'+SID;   // the finished plan lives at a route (revisit + bookmark)
   if(s.done)say('Your plan is complete — all '+s.total+' parts ready to download.');
   else if(s.vetting&&s.vetting.verdict)say('Research graded. Verdict: '+s.vetting.verdict+'. Ready to build part '+((s.step||0)+1)+'.');
 }
@@ -900,12 +952,40 @@ let SIDEBAR_PHASE=null;
 function setOpen(id,open){const el=document.getElementById(id);if(!el)return;el.classList.toggle('open',open);const h=el.querySelector('.sechead');if(h)h.setAttribute('aria-expanded',String(open));}
 function toggleSec(id){const el=document.getElementById(id);if(!el)return;const open=el.classList.toggle('open');const h=el.querySelector('.sechead');if(h)h.setAttribute('aria-expanded',String(open));}
 function syncSidebar(s){
-  const phase=(s.step>=1||s.done)?'build':'intro';
+  const phase = s.done ? 'plan' : (s.step>=1 ? 'build' : 'intro');
   if(phase===SIDEBAR_PHASE)return;   // only auto-apply on a phase change — respect manual toggles after
   SIDEBAR_PHASE=phase;
+  setOpen('chatsec',phase==='plan');         // chat auto-opens on the finished plan page
   setOpen('researchsec',phase==='intro');
   setOpen('expertsec',phase==='build');
   setOpen('boardsec',phase==='build');
+}
+let CHAT_BUSY=false;
+function renderChat(s){
+  const sec=document.getElementById('chatsec'); if(!sec)return;
+  sec.style.display = (s.status==='building'||s.done) ? '' : 'none';   // available once a plan exists
+  const log=document.getElementById('chatlog'); if(!log)return;
+  const msgs=s.chat||[];
+  log.innerHTML=msgs.map(m=>`<div class="cmsg ${m.role==='user'?'user':'bot md'}">${m.role==='user'?esc(m.content):mdToHtml(m.content)}</div>`).join('');
+  log.scrollTop=log.scrollHeight;
+  const st=document.getElementById('chatstart');
+  if(st)st.innerHTML = msgs.length ? '' : (s.chatStarters||[]).map(q=>`<button type=button onclick="chatStart(this)">${esc(q)}</button>`).join('');
+}
+function chatStart(btn){const t=document.getElementById('chatinput');if(t){t.value=btn.textContent;t.focus();}}
+async function sendChat(){
+  if(CHAT_BUSY)return;
+  const t=document.getElementById('chatinput'),msg=(t.value||'').trim(); if(!msg)return;
+  const log=document.getElementById('chatlog'),btn=document.getElementById('chatsend'),st=document.getElementById('chatstart');
+  CHAT_BUSY=true;btn.disabled=true;t.value='';if(st)st.innerHTML='';
+  log.insertAdjacentHTML('beforeend',`<div class="cmsg user">${esc(msg)}</div><div class="cmsg bot md" id=chatthinking><span class=think>Thinking…</span></div>`);
+  log.scrollTop=log.scrollHeight;
+  try{
+    const r=await fetch('/api/plan/'+SID+'/chat',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({message:msg})});
+    const d=await r.json();const th=document.getElementById('chatthinking');
+    if(!r.ok){if(th){th.removeAttribute('id');th.innerHTML='<span class=think>'+esc(d.error||'Could not reach the advisor.')+'</span>';}}
+    else if(th){th.removeAttribute('id');th.innerHTML=mdToHtml(d.reply);}
+  }catch(e){const th=document.getElementById('chatthinking');if(th)th.innerHTML='<span class=think>Network error.</span>';}
+  finally{CHAT_BUSY=false;btn.disabled=false;log.scrollTop=log.scrollHeight;}
 }
 function renderBoardRound(s){
   const el=document.getElementById('boardround'); if(!el)return;
@@ -947,7 +1027,8 @@ function renderTree(s){
 function renderNode(s){
   const n=document.getElementById('node');
   if(s.status==='researching')return;
-  if(s.done){n.innerHTML='<div class=node><div class=done>🎉 Your plan\\'s ready — all '+s.total+' parts. Grab the download on the left, or ask an expert to pressure-test it.</div></div>';return;}
+  if(s.done){n.innerHTML='<div class=node><div class=done>🎉 <b>Your plan is ready</b> — all '+s.total+' parts. This is your plan\\'s home: <b>download the PDF</b> on the left, <b>chat with your plan</b> in the sidebar to pressure-test it, or share it.</div>'+
+    '<div class=planacts><button type=button onclick=download()>⬇ Download (PDF)</button><button type=button class=ghost onclick="sharePlan(SID)">🔗 Share</button></div></div>';return;}
   const p=s.proposal; if(!p){n.innerHTML='';return;}
   const sec=(s.sections||[]).find(x=>x.title===p.title)||{};
   const intro=s.step===0?`<p class=lead>We build your plan in ${s.total} parts — one at a time, your call on each (watch them fill in on the left). First up:</p>`:'';
@@ -1337,10 +1418,14 @@ async function initAuth(){
   if(q.get('upgraded'))banner('🎉 You\\'re on Operator. Your plans + integrations are unlocked.');
   if(q.get('canceled'))banner('Checkout canceled — no charge. You\\'re still on the free tier.');
   restoreIdea();renderBoardPick();
-  if(!CFG.authEnabled||!window.supabase){renderAuth();return;}
+  if(!CFG.authEnabled||!window.supabase){renderAuth();routeFromHash();return;}
   sb=window.supabase.createClient(CFG.supabaseUrl,CFG.supabaseAnon);
   sb.auth.onAuthStateChange(async (_e,s)=>{session=s;await loadMe();renderAuth();});
-  const {data}=await sb.auth.getSession();session=data.session;await loadMe();renderAuth();
+  const {data}=await sb.auth.getSession();session=data.session;await loadMe();renderAuth();routeFromHash();
+}
+function routeFromHash(){   // a finished plan lives at #/plan/{id} — deep-link / bookmark / revisit
+  const m=(location.hash||'').match(/^#\\/plan\\/([a-z0-9]+)/i);
+  if(m&&m[1])resume(m[1]);
 }
 document.addEventListener('keydown',function(e){
   const drawer=document.getElementById('drawer'), modal=document.getElementById('modal');
