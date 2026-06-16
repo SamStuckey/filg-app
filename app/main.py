@@ -400,7 +400,8 @@ async def api_plan_next(sid: str, request: Request):
     try:
         with RUN_LOCK:
             child, cost = planner.forward(planner._working_idea(s), s["research"], active, feedback,
-                                          directors=s.get("directors") or None, mock=MOCK)
+                                          directors=s.get("directors") or None,
+                                          founder=planner._founder(s), mock=MOCK)
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"error": str(e)}, status_code=500)
     node = _new_node(child, active["id"])
@@ -435,7 +436,7 @@ async def api_plan_back(sid: str, request: Request):
     try:
         with RUN_LOCK:
             sib, cost = planner.rebranch(planner._working_idea(s), s["research"], prev, feedback,
-                                         mock=MOCK)
+                                         founder=planner._founder(s), mock=MOCK)
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"error": str(e)}, status_code=500)
     node = _new_node(sib, prev.get("parent"))   # sibling of `prev` → branches from prev's parent

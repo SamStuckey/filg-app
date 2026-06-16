@@ -22,6 +22,22 @@ def _fresh_session():
             "proposal": prep["proposal"], "status": "building"}
 
 
+def test_why_you_win_section_and_delivery_model_guide():
+    keys = [s["key"] for s in planner.SECTIONS]
+    assert "why" in keys and planner.N == 7                      # positioning section now exists
+    offer = next(s for s in planner.SECTIONS if s["key"] == "offer")
+    assert offer.get("guide") and "reselling" in offer["guide"]  # offer forces the delivery model
+
+
+def test_propose_injects_founder_edge_and_section_guide(patch_call):
+    cap = {}
+    patch_call(lambda stage, prompt: cap.setdefault("p", prompt) or "draft")
+    r = planner.research("x", mock=True)
+    planner.propose("idea", "why", r, [], founder="ten years shipping automations", mock=False)
+    assert "UNFAIR ADVANTAGE" in cap["p"] and "ten years shipping" in cap["p"]
+    assert "WHAT THIS SECTION MUST DO" in cap["p"]               # the per-section guide is injected
+
+
 def test_not_quite_stays_on_node():
     s = _fresh_session()
     upd = planner.advance(s, "not_quite", "make it punchier", mock=True)

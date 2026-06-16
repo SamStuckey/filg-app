@@ -24,19 +24,41 @@ to want it.
 
 ---
 
-## 2. What you sell — the offer
+## 2. What you sell — the offer & business model
 
 **"Never miss a new patient again."** A done-for-you AI receptionist that answers the practice's
 overflow and after-hours calls, screens for new-patient intent, books the appointment straight into
 the existing scheduler, and texts the front desk a summary the next morning.
 
+**What this actually is:** a productized service, not a software product and not a custom one-off. You
+configure existing voice + scheduling tools into a repeatable install and run it for the practice. The
+buyer pays for the outcome (booked new patients), not for a tool they have to operate themselves. You
+are *not* asking them to learn software, and you are *not* reselling a raw platform — you own the setup
+and the playbook so each practice runs the same way.
+
 - One named outcome, fixed scope, flat monthly price.
 - Live in five business days. No long build, no per-call metering for the customer.
-- You own the setup and the playbook, so each new practice runs the same way.
 
 ---
 
-## 3. What you charge — packaging and price
+## 3. Why you win — alternatives and your edge
+
+The practice's real alternatives are: (1) keep missing the calls and hope it's fine, (2) hire or
+overtime a human to cover the phones, (3) buy a generic AI-receptionist tool and wire it up themselves,
+or (4) hire a bigger agency. Be honest that those exist — then win on a specific edge:
+
+- **Versus doing nothing:** you make the cost visible (call their own after-hours line, let it ring
+  out) and remove it in five days.
+- **Versus a human:** no scheduling, no sick days, a fraction of the cost, and it never forgets to text
+  the summary.
+- **Versus a DIY tool:** practices don't want another thing to operate — you deliver the outcome, fully
+  installed, and keep it working.
+- **Your unfair advantage:** you've built and shipped these automations before, so you install in days
+  what a practice would spend weeks failing to wire up. That speed-to-live is the wedge.
+
+---
+
+## 4. What you charge — packaging and price
 
 One tier to start: a **setup fee plus a flat monthly retainer**, priced against the revenue a single
 recovered new patient represents to the practice, not against your hours or per-lead.
@@ -53,7 +75,7 @@ fact.**
 
 ---
 
-## 4. How you get customers — go-to-market
+## 5. How you get customers — go-to-market
 
 Pick **one trade and one metro** and go deep before going wide: independent dental practices in a
 single city.
@@ -67,7 +89,7 @@ single city.
 
 ---
 
-## 5. How you deliver — the delivery playbook
+## 6. How you deliver — the delivery playbook
 
 Templatize every step so it runs the same at one practice or ten:
 
@@ -82,7 +104,7 @@ checklist so each new one is a known job, not a custom project.
 
 ---
 
-## 6. Your first 30 days — the roadmap
+## 7. Your first 30 days — the roadmap
 
 - **Week 1** — Build the reference install at one practice. Record the after-hours demo.
 - **Week 2** — List 50 practices in the metro. Start outreach with the demo.

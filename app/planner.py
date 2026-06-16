@@ -31,13 +31,25 @@ import board  # noqa: E402 — Board of Directors review, run inline so its take
 import skill_registry as skills  # noqa: E402
 
 # The plan = an ordered set of files. Plain-language titles (operator voice), friendly filenames.
+# `guide` (optional) is extra per-section instruction injected into synthesis — it forces the section
+# to answer the questions a generic plan leaves vague (what am I actually selling? why me?).
 SECTIONS = [
     {"key": "brief",    "file": "1-the-setup.md",            "title": "The setup",             "sub": "who it's for & why now"},
-    {"key": "offer",    "file": "2-what-you-sell.md",        "title": "What you sell",         "sub": "the offer"},
-    {"key": "pricing",  "file": "3-what-you-charge.md",      "title": "What you charge",       "sub": "packaging & price"},
-    {"key": "gtm",      "file": "4-how-you-get-customers.md","title": "How you get customers", "sub": "go-to-market"},
-    {"key": "delivery", "file": "5-how-you-deliver.md",      "title": "How you deliver",       "sub": "delivery playbook"},
-    {"key": "roadmap",  "file": "6-your-first-30-days.md",   "title": "Your first 30 days",    "sub": "the roadmap"},
+    {"key": "offer",    "file": "2-what-you-sell.md",        "title": "What you sell",         "sub": "the offer & business model",
+     "guide": "State plainly WHAT the operator sells AND how it's produced — pick one and name it: a "
+              "done-for-you build/service, a productized repeatable package, reselling/white-labeling "
+              "an existing tool, or their own software. Make it unambiguous whether they're building "
+              "it custom, productizing it, reselling someone else's, or selling a service — and say "
+              "exactly what the buyer is paying for."},
+    {"key": "why",      "file": "3-why-you-win.md",          "title": "Why you win",           "sub": "alternatives & your edge",
+     "guide": "Name the REAL alternatives the buyer weighs — including doing nothing / DIY and the "
+              "obvious competitor or substitute — then make the honest, specific case for why THIS "
+              "operator wins anyway, led by their unfair advantage (founder edge). No 'we care more'; "
+              "give a defensible reason a buyer picks them over the named alternatives."},
+    {"key": "pricing",  "file": "4-what-you-charge.md",      "title": "What you charge",       "sub": "packaging & price"},
+    {"key": "gtm",      "file": "5-how-you-get-customers.md","title": "How you get customers", "sub": "go-to-market"},
+    {"key": "delivery", "file": "6-how-you-deliver.md",      "title": "How you deliver",       "sub": "delivery playbook"},
+    {"key": "roadmap",  "file": "7-your-first-30-days.md",   "title": "Your first 30 days",    "sub": "the roadmap"},
 ]
 N = len(SECTIONS)
 
@@ -57,8 +69,12 @@ _MOCK_DRAFT = {
               "*what to sell*.\n**Wedge:** a single, specific, outcome-named offer.\n**Who it's "
               "for:** people already trying to solve this and failing.\n**Why now:** demand is "
               "visible and unmet."),
-    "offer": ("## Offer\n\nA productized package with one named outcome, fixed scope, flat price, "
-              "delivered on a short timeline. No custom quotes, no inventory."),
+    "offer": ("## Offer\n\nA productized service: you build and run one named outcome for the client "
+              "(done-for-you), fixed scope, flat price, short timeline. The buyer pays for the outcome, "
+              "not your hours — not a tool they self-serve, not a custom one-off."),
+    "why": ("## Why you win\n\nThe alternatives are doing nothing, a DIY tool, or a generalist "
+            "competitor. You win on a specific unfair advantage — name it and make it the wedge, not a "
+            "vague claim of caring more."),
     "pricing": ("## Packaging & pricing\n\nOne tier to start: a flat setup fee + a small monthly. "
                 "Anchor on the outcome's value, not your hours. (Vendor 'leak/ROI' figures are "
                 "*unverified* — model per client.)"),
@@ -82,6 +98,12 @@ def _working_idea(session: dict) -> str:
     return (session.get("shaped") or {}).get("thesis") or session["idea"]
 
 
+def _founder(session: dict) -> str | None:
+    """The operator's unfair advantage (from intake) — fed into synthesis so 'Why you win' and the
+    offer can lead with it instead of a generic pitch."""
+    return (session.get("shaped") or {}).get("founder_edge")
+
+
 def prepare(idea: str, mock: bool = False) -> dict:
     """Full pre-build pass for a new session: intake (shape the grab-bag into one thesis) → research
     the thesis → vet it (kill-gate) → draft section 0. Returns everything the session needs to start
@@ -91,7 +113,8 @@ def prepare(idea: str, mock: bool = False) -> dict:
     thesis = shaped["thesis"]
     research_data = research(thesis, mock=mock)
     vetting, c_vet = intake.vet(idea, shaped, research_data, mock=mock)
-    proposal, c_prop = first_proposal(thesis, research_data, mock=mock)
+    proposal, c_prop = first_proposal(thesis, research_data, founder=shaped.get("founder_edge"),
+                                      mock=mock)
     return {"shaped": shaped, "research": research_data, "vetting": vetting, "proposal": proposal,
             "research_cost": research_data["cost"],
             "cost": round(research_data["cost"] + c_shape + c_vet + c_prop, 4)}
@@ -105,12 +128,13 @@ def _cited_flagged(rows: list) -> tuple[str, str]:
 
 def propose(idea: str, section_key: str, research_data: dict, history: list,
             steer: str | None = None, board_notes: str | None = None,
-            mock: bool = False) -> tuple[str, float]:
+            founder: str | None = None, mock: bool = False) -> tuple[str, float]:
     """Draft one section. `steer` is a branch instruction (set when re-drafting after a branch with
     a note). `board_notes` are the board's net takeaways on earlier sections — injected so the
-    directors actually shape what gets written next, not just comment after the fact. Both go into
-    the prompt so the operator's choices and their board genuinely steer the output. Returns
-    (draft, cost)."""
+    directors actually shape what gets written next, not just comment after the fact. `founder` is the
+    operator's unfair advantage (so positioning leads with it). Per-section `guide` (from SECTIONS)
+    forces the section to answer what it must. All go into the prompt so the operator's choices, edge,
+    and board genuinely steer the output. Returns (draft, cost)."""
     if mock:
         draft = _MOCK_DRAFT[section_key]
         if steer:
@@ -125,6 +149,9 @@ def propose(idea: str, section_key: str, research_data: dict, history: list,
     cited, flagged = _cited_flagged(research_data["rows"])
     prior = "\n".join(f"- {h['section']}: {h['choice']}" + (f" — “{h['note']}”" if h.get("note") else "")
                       for h in history) or "- (none yet)"
+    guide_block = f"\n\nWHAT THIS SECTION MUST DO: {section['guide']}" if section.get("guide") else ""
+    founder_block = (f"\n\nOPERATOR'S UNFAIR ADVANTAGE (lead positioning with this): {founder}"
+                     if founder else "")
     steer_block = f"\n\nOPERATOR DIRECTION (honor this): {steer}" if steer else ""
     board_block = (f"\n\nBOARD GUIDANCE (your directors' net takeaways on earlier sections — honor "
                    f"them):\n{board_notes}") if board_notes else ""
@@ -132,8 +159,8 @@ def propose(idea: str, section_key: str, research_data: dict, history: list,
     # runtime data (which section, the idea, decisions, graded research, board) goes in the user message.
     draft = call(f"plan_{section_key}", SONNET, max_tokens=1100,
                  system=skills.system("synth_section"), cache=True, prompt=(
-        f"SECTION TO WRITE: **{section['title']}** ({section['sub']}).\n\n"
-        f"IDEA:\n{idea}\n\nDECISIONS SO FAR:\n{prior}{steer_block}{board_block}\n\n"
+        f"SECTION TO WRITE: **{section['title']}** ({section['sub']}).{guide_block}\n\n"
+        f"IDEA:\n{idea}\n\nDECISIONS SO FAR:\n{prior}{founder_block}{steer_block}{board_block}\n\n"
         f"CITED RESEARCH:\n{cited}\n\nFLAGGED (vendor) CLAIMS:\n{flagged}"))
     return draft, round(LEDGER.cost_slice(start), 4)
 
@@ -186,11 +213,13 @@ def advance(session: dict, choice: str, note: str | None, mock: bool = False,
     cost = session.get("cost") or 0.0
     note = (note or "").strip() or None
     idea = _working_idea(session)  # synthesize on the focused thesis, not the raw grab-bag
+    founder = _founder(session)
     history.append({"section": section["key"], "choice": choice, "note": note})
 
     if choice == "not_quite":
         draft, c = propose(idea, section["key"], session["research"], history,
-                           steer=_steer(choice, note), board_notes=_board_notes(reviews), mock=mock)
+                           steer=_steer(choice, note), board_notes=_board_notes(reviews),
+                           founder=founder, mock=mock)
         return {"proposal": {"section": section["key"], "title": section["title"], "draft": draft},
                 "history": history, "cost": round(cost + c, 4)}
 
@@ -198,7 +227,7 @@ def advance(session: dict, choice: str, note: str | None, mock: bool = False,
     steer = _steer(choice, note)
     if steer:
         draft, c = propose(idea, section["key"], session["research"], history,
-                           steer=steer, board_notes=_board_notes(reviews), mock=mock)
+                           steer=steer, board_notes=_board_notes(reviews), founder=founder, mock=mock)
         cost = round(cost + c, 4)
     else:
         draft = session["proposal"]["draft"]
@@ -214,7 +243,7 @@ def advance(session: dict, choice: str, note: str | None, mock: bool = False,
     if step + 1 < N:
         nxt = SECTIONS[step + 1]
         draft, c = propose(idea, nxt["key"], session["research"], history,
-                           board_notes=_board_notes(reviews), mock=mock)
+                           board_notes=_board_notes(reviews), founder=founder, mock=mock)
         upd = {"files": files, "step": step + 1, "history": history, "cost": round(cost + c, 4),
                "proposal": {"section": nxt["key"], "title": nxt["title"], "draft": draft}}
     else:
@@ -240,7 +269,8 @@ def root_node(proposal: dict) -> dict:
 
 
 def forward(idea: str, research_data: dict, node: dict, feedback: str | None,
-            directors: list | None = None, mock: bool = False) -> tuple[dict, float]:
+            directors: list | None = None, founder: str | None = None,
+            mock: bool = False) -> tuple[dict, float]:
     """Finalize `node`'s section (re-synthesizing if `feedback` steers it), optionally let the board
     review it, then draft the next section. Returns (child_node_content, cost). When the section just
     finalized is the last one, the child is a terminal 'done' node (no draft)."""
@@ -254,7 +284,7 @@ def forward(idea: str, research_data: dict, node: dict, feedback: str | None,
     if fb:  # a forward note adds/extends — re-synthesize this section honoring it, then finalize
         final, c = propose(idea, section["key"], research_data, history,
                            steer=_steer("yes_and", fb), board_notes=_board_notes(node["board"]),
-                           mock=mock)
+                           founder=founder, mock=mock)
         cost += c
     else:
         final = node["draft"]
@@ -267,7 +297,7 @@ def forward(idea: str, research_data: dict, node: dict, feedback: str | None,
     if step + 1 < N:
         nxt = SECTIONS[step + 1]
         draft, c = propose(idea, nxt["key"], research_data, history,
-                           board_notes=_board_notes(reviews), mock=mock)
+                           board_notes=_board_notes(reviews), founder=founder, mock=mock)
         cost += c
         child = {"step": step + 1, "section": nxt["key"], "title": nxt["title"], "sub": nxt["sub"],
                  "draft": draft, "files": files, "history": history, "board": reviews, "feedback": fb}
@@ -278,24 +308,25 @@ def forward(idea: str, research_data: dict, node: dict, feedback: str | None,
 
 
 def rebranch(idea: str, research_data: dict, node: dict, feedback: str,
-             mock: bool = False) -> tuple[dict, float]:
+             founder: str | None = None, mock: bool = False) -> tuple[dict, float]:
     """Re-draft `node`'s section taking `feedback` as a redirect — a fresh sibling branch of `node`.
     Used by Back: the operator revises a previous step, spawning a new branch from that point. The
     section isn't finalized (it becomes the live proposal again), so no board review runs here."""
     section = SECTIONS[node["step"]]
     draft, c = propose(idea, section["key"], research_data, node["history"],
                        steer=_steer("not_quite", feedback), board_notes=_board_notes(node["board"]),
-                       mock=mock)
+                       founder=founder, mock=mock)
     sib = {"step": node["step"], "section": section["key"], "title": section["title"],
            "sub": section["sub"], "draft": draft, "files": dict(node["files"]),
            "history": list(node["history"]), "board": list(node["board"]), "feedback": feedback}
     return sib, round(c, 4)
 
 
-def first_proposal(idea: str, research_data: dict, mock: bool = False) -> tuple[dict, float]:
+def first_proposal(idea: str, research_data: dict, founder: str | None = None,
+                   mock: bool = False) -> tuple[dict, float]:
     """Draft section 0's proposal right after research completes."""
     s0 = SECTIONS[0]
-    draft, cost = propose(idea, s0["key"], research_data, [], mock=mock)
+    draft, cost = propose(idea, s0["key"], research_data, [], founder=founder, mock=mock)
     return {"section": s0["key"], "title": s0["title"], "draft": draft}, cost
 
 
@@ -350,7 +381,7 @@ if __name__ == "__main__":  # self-test (mock, no API)
     while sess.get("status") != "done":
         sess.update(advance(sess, "yes_and", None, mock=True))
     assert sess["status"] == "done" and len(sess["files"]) == N
-    assert "revised" not in sess["files"]["6-your-first-30-days.md"]  # plain-accepted kept as-is
+    assert "revised" not in sess["files"]["7-your-first-30-days.md"]  # plain-accepted kept as-is
     md = bundle_markdown(sess["idea"], sess["files"])
     assert "Business plan" in md
     exp, _ = ask_expert(sess["idea"], sess["files"], "closer", "is the price right?", mock=True)
