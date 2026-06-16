@@ -29,6 +29,20 @@ from pathlib import Path
 
 SKILLS_DIR = Path(__file__).resolve().parent / "skills"
 
+# Standing voice rule — appended to EVERY skill's system block so all generated, user-facing text
+# avoids the usual AI tells. One place to edit; applies everywhere (synthesis, advisor, board, …).
+VOICE = (
+    "## Voice (applies to everything you write)\n\n"
+    "Write like a human operator, not an AI.\n"
+    "- Do NOT use the em-dash or en-dash characters (— or –). Use commas, periods, or parentheses.\n"
+    "- Never use the word \"honestly\" or the phrase \"to be honest\". Say the thing directly.\n"
+    "- Avoid these AI-tell words: delve, tapestry, comprehensive, leverage, synergy, robust, "
+    "seamless, elevate, unlock, realm, testament, ever-evolving, pivotal, crucial, vibrant, "
+    "underscore (as a verb), navigate (when used figuratively).\n"
+    "- Be plain, specific, and direct. No throat-clearing, no preamble.\n"
+    "- Structure with markdown headings and lists. Do not output rows of dashes as separators."
+)
+
 
 def _parse(text: str) -> tuple[dict, str]:
     """Split optional leading `---` frontmatter (simple key: value lines) from the body."""
@@ -54,8 +68,9 @@ def _load(name: str) -> tuple[dict, str]:
 
 
 def system(name: str) -> str:
-    """The skill's body — use as the (cacheable) system block of an API call."""
-    return _load(name)[1]
+    """The skill's body + the standing VOICE rule — use as the (cacheable) system block of an API
+    call. VOICE is stable, so the prefix still caches."""
+    return f"{_load(name)[1]}\n\n{VOICE}"
 
 
 def meta(name: str) -> dict:
@@ -78,5 +93,6 @@ if __name__ == "__main__":  # self-test (no API)
     assert "intake" in found and "vet" in found, found
     assert system("intake") and "thesis" in system("intake").lower()
     assert system("vet") and ("pursue" in system("vet").lower())
+    assert "honestly" in system("intake") and "em-dash" in system("intake")  # VOICE appended to all
     assert exists("director_base") and not exists("nope")
     print("skill_registry.py self-test OK —", len(found), "skills:", ", ".join(found))

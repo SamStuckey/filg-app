@@ -706,6 +706,7 @@ button:hover{filter:brightness(1.04)}button:active{transform:translateY(1px)}but
 .md h4,.md h5{font-weight:800;margin:12px 0 4px;line-height:1.3}.md h4{font-size:15px}.md h5{font-size:13.5px}.md>:first-child{margin-top:0}
 .md p{margin:0 0 8px}.md p:last-child{margin-bottom:0}.md ul{margin:6px 0 8px;padding-left:20px}.md li{margin:3px 0}
 .md a{color:var(--sky)}.md strong{font-weight:800}.md code{background:#fff;border:1px solid var(--line);border-radius:5px;padding:0 4px;font-size:.92em}
+.md hr{border:0;border-top:1px solid var(--line);margin:16px 0}
 .md table{border-collapse:collapse;width:100%;margin:12px 0;font-size:13.5px;overflow:hidden;border-radius:10px;border:1px solid var(--line)}
 .md th,.md td{border-bottom:1px solid var(--line);border-right:1px solid var(--line);padding:8px 11px;text-align:left;vertical-align:top}
 .md th:last-child,.md td:last-child{border-right:0}.md tbody tr:last-child td{border-bottom:0}
@@ -785,20 +786,19 @@ button:hover{filter:brightness(1.04)}button:active{transform:translateY(1px)}but
 .toasts{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);display:flex;flex-direction:column;gap:8px;z-index:60;align-items:center;pointer-events:none}
 .toast{background:var(--ink);color:#fff;padding:11px 18px;border-radius:12px;font-size:14px;font-weight:700;box-shadow:0 8px 24px rgba(20,17,14,.2);transition:opacity .3s,transform .3s;max-width:90vw}
 .toast.err{background:var(--coral-d)}.toast.out{opacity:0;transform:translateY(8px)}
-/* PDF "thinking" sequence — the generate-the-plan moment */
-.pdfgen-back{position:fixed;inset:0;background:rgba(20,17,14,.5);opacity:0;visibility:hidden;transition:opacity .2s;z-index:70}
-.pdfgen-back.show{opacity:1;visibility:visible}
-.pdfgen{position:fixed;left:50%;top:50%;transform:translate(-50%,-46%);width:min(440px,93vw);background:var(--card);border:1px solid var(--line);border-radius:20px;box-shadow:0 28px 70px rgba(20,17,14,.28);padding:26px 28px;z-index:71;opacity:0;visibility:hidden;transition:opacity .2s,transform .2s}
-.pdfgen.open{opacity:1;visibility:visible;transform:translate(-50%,-50%)}
-.pdfgen h3{font-family:"Fraunces",Georgia,serif;font-size:22px;font-weight:600;margin:0 0 4px}
-.pdfgen .pg-sub{color:var(--muted);font-size:13px;margin:0 0 16px}
-.pdfsteps{list-style:none;margin:0;padding:0}
-.pdfsteps li{display:flex;align-items:center;gap:11px;font-size:14.5px;color:var(--muted);padding:6px 0;opacity:.5;transition:opacity .25s,color .25s}
-.pdfsteps li.active,.pdfsteps li.done{opacity:1;color:var(--ink)}
-.pdfsteps .pdot{width:16px;height:16px;flex:none;border-radius:50%;border:2px solid var(--line);position:relative}
-.pdfsteps li.active .pdot{border-color:var(--sky);animation:pulse 1s infinite}
-.pdfsteps li.done .pdot{border-color:var(--ok);background:var(--ok)}
-.pdfsteps li.done .pdot:after{content:"✓";position:absolute;inset:0;color:#fff;font-size:10px;font-weight:800;display:grid;place-items:center}
+/* Reusable AI-activity ticker — a pinned, non-covering footer that narrates work (terminal-ish, but
+   friendly). Used anywhere AI runs and the user waits (research, PDF, …). */
+.activity{position:fixed;left:0;right:0;bottom:0;z-index:80;transform:translateY(115%);transition:transform .28s cubic-bezier(.4,0,.2,1);background:var(--ink);color:#fff;box-shadow:0 -8px 30px rgba(20,17,14,.18)}
+.activity.show{transform:translateY(0)}
+.activity .abar{max-width:1140px;margin:0 auto;padding:11px 22px;display:flex;align-items:center;gap:11px;font-size:13.5px}
+.activity .adot{width:9px;height:9px;border-radius:50%;background:var(--coral);flex:none;animation:pulse 1s infinite}
+.activity.ok .adot{background:var(--ok);animation:none}
+.activity .aprompt{color:var(--sun);font-weight:800;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.activity .aline{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.activity .acursor{display:inline-block;width:7px;height:15px;background:#fff;margin-left:1px;vertical-align:-2px;animation:blink 1s steps(1) infinite}
+.activity.ok .acursor{display:none}
+.activity .aprog{margin-left:auto;color:rgba(255,255,255,.5);font-size:12px;flex:none;font-variant-numeric:tabular-nums}
+@keyframes blink{50%{opacity:0}}
 .authgate{margin:6px 0 2px}.authgate button{width:100%;margin-bottom:8px}
 .gbtn{display:flex;align-items:center;justify-content:center;gap:10px;background:#fff;color:var(--ink);border:1.5px solid var(--line);font-weight:800}
 .gicon{width:18px;height:18px;flex:none}
@@ -850,11 +850,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <div class=modal id=modal role=dialog aria-modal=true aria-labelledby=modal-title aria-hidden=true>
 <h3 id=modal-title></h3><div id=modal-body></div><div class=modal-actions id=modal-actions></div></div>
 <div class=toasts id=toasts aria-live=polite></div>
-<div class=pdfgen-back id=pdfgenback></div>
-<div class=pdfgen id=pdfgen role=dialog aria-modal=true aria-labelledby=pdfgen-title aria-hidden=true>
-<h3 id=pdfgen-title>Building your business plan</h3>
-<p class=pg-sub>Turning your decisions into a styled, investor-ready PDF.</p>
-<ul class=pdfsteps id=pdfsteps></ul></div>
+<div class=activity id=activity aria-live=polite aria-hidden=true><div class=abar><span class=adot aria-hidden=true></span><span class=aprompt aria-hidden=true>&rsaquo;</span><span class=aline id=activity-line></span><span class=acursor id=activity-cursor aria-hidden=true></span><span class=aprog id=activity-prog></span></div></div>
 <div class=workspace id=workspace style="display:none">
 <aside class=side>
 <div class=sec><h3>Your plan</h3><ul class=tree id=tree></ul>
@@ -902,7 +898,7 @@ async function start(){
   if(CFG.authEnabled&&!session){gateIntake();return;}   // login required when auth is on
   const body={idea}; if(!session) body.email=email;   // signed in → identity from the token
   if(BOARD.length) body.directors=BOARD;               // optional Board of Directors → vets each step
-  go.disabled=true; go.textContent='Researching…';
+  go.disabled=true; go.textContent='Researching…'; ACT_RESEARCH=false;
   try{
     const r=await fetch('/api/plan/start',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify(body)});
     const d=await r.json();
@@ -928,12 +924,15 @@ async function poll(){
   const s=await r.json();
   renderTree(s);renderAddons(s);     // show the plan outline immediately, even while researching
   if(s.status==='researching'){
-    document.getElementById('node').innerHTML='<div class=node><span class=eyebrow>Working</span><h3>Researching + grading your market…</h3><p class=lead>Pulling sources and grading every number — vendor spin gets labeled, not laundered. ~1–2 min. Watch your plan fill in on the left.</p></div>';
+    if(!ACT_RESEARCH){Activity.start(RESEARCH_STEPS);ACT_RESEARCH=true;}   // narrate the wait in the footer
+    document.getElementById('node').innerHTML='<div class=node><span class=eyebrow>Working</span><h3>Researching + grading your market…</h3><p class=lead>Pulling sources and grading every number, so vendor spin gets labeled, not laundered. About 1 to 2 minutes. Watch your plan fill in on the left.</p></div>';
     say('Researching and grading your market.');
     setTimeout(poll,2500);return;
   }
+  if(ACT_RESEARCH){Activity.done(s.status==='error'?'Hit a snag.':'Research graded. Building your plan.');ACT_RESEARCH=false;}
   render(s);
 }
+let ACT_RESEARCH=false;
 function render(s){
   if(s.status==='error'){
     document.getElementById('node').innerHTML='<div class=node><h3>Hit a snag</h3><p class=lead>'+esc(s.error)+'</p><button type=button onclick=newPlan()>Start over</button></div>';
@@ -1036,7 +1035,7 @@ function renderNode(s){
     intro+
     `<div class="draft md">${mdToHtml(p.draft)}</div>`+
     `<div class=fbk><label for=feedback class=sr-only>Your feedback on this part</label>`+
-    `<textarea id=feedback rows=2 placeholder="Add feedback and roll forward if you're into it, or go back if you want to make changes."></textarea>`+
+    `<textarea id=feedback rows=2 placeholder="Give optional feedback and roll forward, or push back to start a new decision branch."></textarea>`+
     `<div class=chips>${FB_CHIPS.map(x=>`<button type=button class=chip onclick="addChip('${x}')">${esc(x)}</button>`).join('')}</div>`+
     `<div class=navrow><button type=button class=b-back onclick=backStep()${s.step===0?' disabled title="You\\'re on the first part"':''}>← Not feeling it</button>`+
     `<button type=button class=b-next onclick=nextStep()>I'm with you →</button></div>`+
@@ -1253,34 +1252,48 @@ async function submitDrawer(){
     }
   }catch(e){go.disabled=false;out.innerHTML='Network error.';}
 }
-// The "thinking" sequence while the server synthesizes + typesets the PDF. Real work backs it
-// (exec-summary synthesis + render), and a minimum dwell guarantees the moment actually lands.
+// ── Reusable AI-activity ticker (pinned footer; never covers content) ─────────
+// Any AI wait feeds it honest, real-stage lines: Activity.start([...]) → Activity.done('…') (or
+// Activity.stop() on error). It auto-advances through the steps and holds on the last until done.
+const Activity={
+  steps:[], i:0, timer:null,
+  start(steps){
+    this.stop(true);
+    this.steps=(steps||[]).slice(); this.i=0;
+    const a=document.getElementById('activity'); if(!a)return;
+    a.classList.remove('ok'); a.classList.add('show'); a.setAttribute('aria-hidden','false');
+    this._render();
+    this.timer=setInterval(()=>{ if(this.i<this.steps.length-1){this.i++;this._render();} },1700);
+  },
+  push(line){ const el=document.getElementById('activity-line'); if(el)el.textContent=line; },
+  _render(){
+    const el=document.getElementById('activity-line'), pr=document.getElementById('activity-prog');
+    if(el)el.textContent=this.steps[this.i]||'';
+    if(pr)pr.textContent=this.steps.length>1?((this.i+1)+' / '+this.steps.length):'';
+  },
+  done(msg){
+    clearInterval(this.timer); this.timer=null;
+    const a=document.getElementById('activity'); if(!a)return;
+    a.classList.add('ok');
+    const el=document.getElementById('activity-line'); if(el)el.textContent=msg||'Done.';
+    const pr=document.getElementById('activity-prog'); if(pr)pr.textContent='';
+    setTimeout(()=>this._hide(),1200);
+  },
+  stop(immediate){ clearInterval(this.timer); this.timer=null; if(immediate)this._hide(); },
+  _hide(){ const a=document.getElementById('activity'); if(a){a.classList.remove('show');a.setAttribute('aria-hidden','true');} }
+};
+const RESEARCH_STEPS=["Focusing your idea into one sharp thesis","Spinning up research across the web","Grading every source for credibility","Re-sourcing the headline stats","Drafting your first offer"];
 const PDF_STEPS=["Applying your board's input","Pulling your graded evidence","Building the decision matrix","Laying out a modern, on-brand design","Typesetting your PDF"];
-let pdfTimer=null;
-function openPdfGen(){
-  const steps=document.getElementById('pdfsteps');
-  steps.innerHTML=PDF_STEPS.map((t,i)=>`<li id=pstep-${i}><span class=pdot></span>${esc(t)}</li>`).join('');
-  const m=document.getElementById('pdfgen');m.classList.add('open');m.setAttribute('aria-hidden','false');
-  document.getElementById('pdfgenback').classList.add('show');
-  let i=0; const tick=()=>{
-    if(i>0){const p=document.getElementById('pstep-'+(i-1));if(p){p.classList.remove('active');p.classList.add('done');}}
-    const c=document.getElementById('pstep-'+i);if(c)c.classList.add('active');
-    i++; if(i<=PDF_STEPS.length)pdfTimer=setTimeout(tick,720);
-  }; tick();
-}
-function closePdfGen(){clearTimeout(pdfTimer);pdfTimer=null;const m=document.getElementById('pdfgen');m.classList.remove('open');m.setAttribute('aria-hidden','true');document.getElementById('pdfgenback').classList.remove('show');}
 async function download(){
-  openPdfGen();
+  Activity.start(PDF_STEPS);
   const minShow=new Promise(res=>setTimeout(res,2600));   // let the sequence breathe (covers fast mock runs)
   try{
     const [r]=await Promise.all([fetch('/api/plan/'+SID+'/plan.pdf',{headers:authHeaders()}),minShow]);
-    if(!r.ok){let d={};try{d=await r.json();}catch(e){} closePdfGen();toast(d.error||'Could not build the PDF.','err');return;}
+    if(!r.ok){let d={};try{d=await r.json();}catch(e){} Activity.stop(true);toast(d.error||'Could not build the PDF.','err');return;}
     const blob=await r.blob();
-    PDF_STEPS.forEach((_,i)=>{const p=document.getElementById('pstep-'+i);if(p){p.classList.remove('active');p.classList.add('done');}});
-    await new Promise(res=>setTimeout(res,500));
+    Activity.done('Your PDF is ready.');
     const u=URL.createObjectURL(blob),a=document.createElement('a');a.href=u;a.download='filg-business-plan.pdf';a.click();URL.revokeObjectURL(u);
-    closePdfGen();
-  }catch(e){closePdfGen();toast('Network error building the PDF.','err');}
+  }catch(e){Activity.stop(true);toast('Network error building the PDF.','err');}
 }
 async function downloadZip(){   // power-user escape hatch: the raw source files
   try{
@@ -1312,6 +1325,7 @@ function mdToHtml(md){
       t+=body.map(function(r){return '<tr>'+r.map(function(c){return '<td>'+c+'</td>';}).join('')+'</tr>';}).join('');
       out.push(t+'</tbody></table>'); continue;
     }
+    if(/^\\s*(-{3,}|\\*{3,}|_{3,})\\s*$/.test(ln)){if(inList){out.push('</ul>');inList=false;}out.push('<hr>');i++;continue;}  // --- → real rule, not text
     if(m=ln.match(/^(#{1,6})\\s+(.*)$/)){if(inList){out.push('</ul>');inList=false;}const lvl=Math.min(m[1].length+3,5);out.push('<h'+lvl+'>'+m[2]+'</h'+lvl+'>');i++;continue;}
     if(m=ln.match(/^\\s*[-*]\\s+(.*)$/)){if(!inList){out.push('<ul>');inList=true;}out.push('<li>'+m[1]+'</li>');i++;continue;}
     if(ln.trim()===''){if(inList){out.push('</ul>');inList=false;}i++;continue;}
@@ -1369,7 +1383,7 @@ async function upgrade(){
   }catch(e){toast('Network error starting checkout.','err');}
 }
 function show(id){['intake','workspace','profile'].forEach(x=>{const e=document.getElementById(x);if(e)e.style.display=(x===id?(x==='workspace'?'grid':'block'):'none');});}
-function newPlan(){SIDEBAR_PHASE=null;show('intake');renderBoardPick();gateIntake();}
+function newPlan(){SIDEBAR_PHASE=null;ACT_RESEARCH=false;Activity.stop(true);show('intake');renderBoardPick();gateIntake();}
 async function showPlans(){
   let d; try{const r=await fetch('/api/plans',{headers:authHeaders()});if(!r.ok){toast('Sign in to see your plans.','err');return;}d=await r.json();}catch(e){toast('Network error.','err');return;}
   show('profile');renderPlans(d);

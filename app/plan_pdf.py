@@ -27,6 +27,7 @@ from pathlib import Path
 from fpdf import FPDF
 
 import planner  # section list + working idea
+import skill_registry as skills  # the standing VOICE rule (no AI tells)
 
 _FONTS = Path(__file__).resolve().parent / "assets" / "fonts"
 
@@ -70,10 +71,10 @@ def _exec_summary(thesis: str, files: dict, vetting: dict, mock: bool = False) -
     risk = (vetting or {}).get("biggest_risk") or ""
     test = (vetting or {}).get("first_test") or ""
     system = ("You write the executive summary of a business plan for a solo operator. One page, "
-              "~220 words, plain and specific (no buzzwords, no em-dashes). Lead with the offer in "
-              "one line, then cover the opportunity, how it makes money, the main risk, and the "
-              "cheapest first test. Never invent numbers or cite a statistic as fact — the plan's "
-              "research is graded elsewhere. Return markdown (a lead line in **bold**, then prose).")
+              "~220 words. Lead with the offer in one line, then cover the opportunity, how it makes "
+              "money, the main risk, and the cheapest first test. Never invent numbers or cite a "
+              "statistic as fact (the plan's research is graded elsewhere). Return markdown (a lead "
+              "line in **bold**, then prose).\n\n" + skills.VOICE)
     body = call("plan_exec_summary", SONNET, max_tokens=600, system=system, cache=True, prompt=(
         f"BUSINESS: {thesis}\n\nPLAN:\n{plan}\n\nBIGGEST RISK: {risk}\nCHEAPEST FIRST TEST: {test}"))
     return body.strip(), round(LEDGER.cost_slice(start), 4)

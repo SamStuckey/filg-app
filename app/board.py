@@ -52,7 +52,7 @@ def _synthesize(idea: str, focus: str, takes: list[dict]) -> tuple[dict, float]:
     from pipeline import LEDGER, call, extract_json, SONNET
     start = len(LEDGER.rows)
     board_block = "\n\n".join(f"### {t['name']}\n{t['take']}" for t in takes)
-    out = call("board_synth", SONNET, max_tokens=600, prompt=(
+    out = call("board_synth", SONNET, max_tokens=600, system=skills.VOICE, prompt=(
         "You are the chair synthesizing a board of composite advisors. Below are each director's take "
         "on the same question. Produce strictly this JSON, no preamble:\n"
         '{"consensus": "what they agree on (1-2 sentences)", '
