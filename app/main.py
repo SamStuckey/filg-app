@@ -810,16 +810,18 @@ button:hover{filter:brightness(1.04)}button:active{transform:translateY(1px)}but
    log (friendly, not technical). Used anywhere AI runs and the user waits (research, PDF, …). */
 .activity{position:fixed;left:0;right:0;bottom:0;z-index:80;transform:translateY(115%);transition:transform .28s cubic-bezier(.4,0,.2,1);background:var(--ink);color:#fff;box-shadow:0 -8px 30px rgba(20,17,14,.18)}
 .activity.show{transform:translateY(0)}
-.alog{max-width:1140px;margin:0 auto;padding:12px 22px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;max-height:112px;overflow:hidden}
-.aline{display:flex;align-items:center;gap:9px;padding:2.5px 0;opacity:.4;transition:opacity .3s}
-.aline.active{opacity:1}.aline.done{opacity:.6}
-.aline .aglyph{width:13px;flex:none;text-align:center;color:var(--sun)}
+.alog{max-width:1140px;margin:0 auto;padding:9px 22px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;line-height:1.55;height:72px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.3) transparent}
+.alog::-webkit-scrollbar{width:6px}.alog::-webkit-scrollbar-thumb{background:rgba(255,255,255,.25);border-radius:6px}
+.aline{display:flex;align-items:center;gap:9px;padding:1px 0;background:none;color:rgba(255,255,255,.55)}
+.aline.done{color:rgba(255,255,255,.74)}
+.aline.active{color:#fff;font-weight:600}
+.aline .aglyph{width:12px;flex:none;text-align:center;color:var(--sun)}
 .aline.active .aglyph{animation:blink 1s steps(1) infinite}
 .aline.active .aglyph::before{content:"\\203A";font-weight:800}
-.aline.done .aglyph::before{content:"\\2713";color:var(--ok)}
+.aline.done .aglyph::before{content:"\\2713";color:#43d17f}
 .activity.ok .aline.active .aglyph{animation:none}
 .aline .atext{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-@keyframes blink{50%{opacity:.25}}
+@keyframes blink{50%{opacity:.3}}
 .authgate{margin:6px 0 2px}.authgate button{width:100%;margin-bottom:8px}
 .gbtn{display:flex;align-items:center;justify-content:center;gap:10px;background:#fff;color:var(--ink);border:1.5px solid var(--line);font-weight:800}
 .gicon{width:18px;height:18px;flex:none}
@@ -1341,7 +1343,8 @@ const Activity={
     li.innerHTML='<span class=aglyph aria-hidden=true></span><span class=atext></span>';
     li.querySelector('.atext').textContent=this.steps[this.i]||'';
     log.appendChild(li);
-    while(log.children.length>5)log.removeChild(log.firstChild);
+    while(log.children.length>50)log.removeChild(log.firstChild);
+    log.scrollTop=log.scrollHeight;   // keep the newest line in view (fixed-height window scrolls)
   },
   open(){   // manual-push mode (no auto-cycle): caller feeds real lines via push()
     clearInterval(this.timer); this.timer=null; this.steps=[]; this.i=-1;
@@ -1355,7 +1358,7 @@ const Activity={
     const a=document.getElementById('activity'),log=document.getElementById('activity-log'); if(!a)return;
     a.classList.add('ok');
     const prev=log&&log.querySelector('.aline.active'); if(prev){prev.classList.remove('active');prev.classList.add('done');}
-    if(msg&&log){const li=document.createElement('div');li.className='aline done';li.innerHTML='<span class=aglyph aria-hidden=true></span><span class=atext></span>';li.querySelector('.atext').textContent=msg;log.appendChild(li);while(log.children.length>5)log.removeChild(log.firstChild);}
+    if(msg&&log){const li=document.createElement('div');li.className='aline done';li.innerHTML='<span class=aglyph aria-hidden=true></span><span class=atext></span>';li.querySelector('.atext').textContent=msg;log.appendChild(li);while(log.children.length>50)log.removeChild(log.firstChild);log.scrollTop=log.scrollHeight;}
     setTimeout(()=>this._hide(),1400);
   },
   stop(immediate){ clearInterval(this.timer); this.timer=null; if(immediate)this._hide(); },
