@@ -713,6 +713,7 @@ async def api_plan_pdf(sid: str, request: Request):
 @app.get("/", response_class=HTMLResponse)
 async def index():
     cfg = json.dumps({"authEnabled": auth.AUTH_ENABLED, "billingEnabled": billing.BILLING_ENABLED,
+                      "byokEnabled": keys.enabled(),
                       "supabaseUrl": os.environ.get("SUPABASE_URL", ""),
                       "supabaseAnon": (os.environ.get("SUPABASE_PUBLISHABLE_KEY")
                                        or os.environ.get("SUPABASE_ANON_KEY", "")),
@@ -917,6 +918,8 @@ button:hover{filter:brightness(1.04)}button:active{transform:translateY(1px)}but
 .gbtn{display:flex;align-items:center;justify-content:center;gap:10px;background:#fff;color:var(--ink);border:1.5px solid var(--line);font-weight:800}
 .gicon{width:18px;height:18px;flex:none}
 .authgate .or{color:var(--muted);font-size:13px;margin:4px 0 0}
+.keysteps{margin:0 0 12px;padding-left:20px;color:var(--muted);font-size:13px;line-height:1.7}
+.keysteps a{color:var(--sky);font-weight:700}
 .plans{max-width:760px;margin:8px auto}.plans h2{font-size:24px;font-weight:800;margin:8px 0 4px}
 .pcard{display:flex;justify-content:space-between;align-items:center;gap:12px;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px 18px;margin-bottom:12px}
 .pcard .idea{font-weight:700;font-size:15px}.pcard .meta{color:var(--muted);font-size:12px;margin-top:2px}
@@ -1018,7 +1021,7 @@ async function start(){
     const r=await fetch('/api/plan/start',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify(body)});
     const d=await r.json();
     if(d.gibberish){showJoke(d);go.disabled=false;go.textContent='Build my plan →';return;}  // nonsense → roast, no run
-    if(!r.ok){err.textContent=d.error||'Something went wrong.';if(d.upgrade)err.innerHTML+=' <a href=# onclick="upgrade();return false">Upgrade →</a>';go.disabled=false;go.textContent='Build my plan →';return;}
+    if(!r.ok){err.textContent=d.error||'Something went wrong.';if(d.needKey)err.innerHTML+=' <a href=# onclick="keyModal();return false">Add your key →</a>';else if(d.upgrade)err.innerHTML+=' <a href=# onclick="upgrade();return false">Upgrade →</a>';go.disabled=false;go.textContent='Build my plan →';return;}
     SID=d.id;
     document.getElementById('intake').style.display='none';
     document.getElementById('workspace').style.display='grid';
@@ -1515,6 +1518,7 @@ function renderAuth(){
   if(sb&&session){
     const paid=me&&me.paid; bar.style.display='';
     bar.innerHTML=`<button class=link onclick=showPlans()>My plans</button>`+
+      (CFG.byokEnabled?`<button class=link onclick=keyModal()>🔑 Your key</button>`:'')+
       `<span class=who>${esc(session.user.email)}${paid?' · <b>Operator</b>':''}</span>`+
       (!paid&&CFG.billingEnabled?`<button class="link up" onclick=upgrade()>Upgrade, $39/mo</button>`:'')+
       `<button class=link onclick=signout()>Sign out</button>`;
@@ -1544,6 +1548,53 @@ function authModal(){
   _openModal('.authgate button');
 }
 function authGo(kind){_closeModal();if(kind==='google')signinGoogle();else signinEmail();}
+async function keyModal(){
+  if(!CFG.byokEnabled){toast('Bring-your-own-key isn\\u2019t turned on yet.','err');return;}
+  if(CFG.authEnabled&&!session){authModal();return;}   // BYOK is account-scoped → sign in first
+  let d; try{const r=await fetch('/api/key',{headers:authHeaders()});d=await r.json();}catch(e){d={key:null};}
+  if(d&&d.key){
+    document.getElementById('modal-title').textContent='Your API key';
+    document.getElementById('modal-body').innerHTML=
+      `<p class=or style="margin:0 0 12px">You\\u2019re running on your own <b>${esc(d.key.provider)}</b> key (\\u2022\\u2022\\u2022\\u2022${esc(d.key.last4)}). Plans use your key, not ours.</p>`+
+      `<div class=authgate><button class=gbtn onclick="keyForm()">Replace key</button>`+
+      `<button class=gbtn onclick="removeKey()">Remove key</button></div>`;
+    document.getElementById('modal-actions').innerHTML=`<button type=button onclick="_closeModal()">Done</button>`;
+    _openModal('.authgate button');
+  }else{keyForm();}
+}
+function keyForm(){
+  document.getElementById('modal-title').textContent='Bring your own key';
+  document.getElementById('modal-body').innerHTML=
+    `<p class=or style="margin:0 0 10px">Run FILG on your own OpenRouter key. One key gives you every model plus cited web search, and your plans run on your key (you pay OpenRouter directly, usually pennies a plan).</p>`+
+    `<ol class=keysteps>`+
+      `<li><a href="https://openrouter.ai/keys" target=_blank rel=noopener>Open OpenRouter \\u2192 Keys</a> and sign up (free)</li>`+
+      `<li>Click <b>Create Key</b> and copy it</li>`+
+      `<li>Paste it below and save \\u2014 we\\u2019ll test it before storing</li></ol>`+
+    `<label for=keyinput class=sr-only>Your OpenRouter API key</label>`+
+    `<input id=keyinput type=password placeholder="sk-or-v1-\\u2026" autocomplete=off spellcheck=false style="margin:4px 0 2px">`+
+    `<div class=err id=keyerr></div>`;
+  document.getElementById('modal-actions').innerHTML=
+    `<button type=button class=ghost onclick="_closeModal()">Cancel</button>`+
+    `<button type=button id=keysave onclick="saveKey()">Save &amp; validate</button>`;
+  _openModal('#keyinput');
+}
+async function saveKey(){
+  const inp=document.getElementById('keyinput'),btn=document.getElementById('keysave'),er=document.getElementById('keyerr');
+  const key=(inp.value||'').trim(); er.textContent='';
+  if(key.length<8){er.textContent='That doesn\\u2019t look like a key.';return;}
+  btn.disabled=true;btn.textContent='Validating\\u2026';
+  try{
+    const r=await fetch('/api/key',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({provider:'openrouter',key})});
+    const d=await r.json();
+    if(!r.ok){er.textContent=d.error||'Could not save the key.';btn.disabled=false;btn.textContent='Save & validate';return;}
+    _closeModal();toast('Key saved \\u2014 you\\u2019re running on your own key. \\u2713');
+  }catch(e){er.textContent='Network error.';btn.disabled=false;btn.textContent='Save & validate';}
+}
+async function removeKey(){
+  try{const r=await fetch('/api/key/remove',{method:'POST',headers:authHeaders()});
+    if(r.ok){toast('Key removed.');_closeModal();}else toast('Could not remove the key.','err');
+  }catch(e){toast('Network error.','err');}
+}
 function saveIdea(){try{const v=document.getElementById('idea').value;if(v)localStorage.setItem('filg_idea',v);}catch(e){}}
 function restoreIdea(){try{const v=localStorage.getItem('filg_idea');if(v){document.getElementById('idea').value=v;localStorage.removeItem('filg_idea');}}catch(e){}}
 async function loadMe(){
