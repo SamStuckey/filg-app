@@ -8,9 +8,9 @@ in the worker, right before building the provider client. The plaintext key is n
 returned to the client, and never written anywhere but the encrypted column.
 
 Security model:
-  - `FILG_KEY_SECRET` (a Fernet key) is the encryption secret, held only in the server env (Render
-    dashboard secret). Generate one with `python3 -c "from cryptography.fernet import Fernet;
-    print(Fernet.generate_key().decode())"`. Rotating it invalidates stored keys (users re-enter).
+  - `FILG_KEY_SECRET` is the encryption secret, held only in the server env (Render dashboard
+    secret). Any non-empty random string works (e.g. Render's "Generate" button) — we hash it into a
+    valid Fernet key (see `_secret`). Rotating it invalidates stored keys (users re-enter).
   - With no `FILG_KEY_SECRET`, BYOK is OFF (enabled() is False) and the endpoints 503 — same
     graceful-degrade shape as auth/billing.
   - Reads expose only metadata (provider + last4), never the secret.
@@ -37,15 +37,23 @@ _fernet = None
 
 
 def _secret():
-    """The Fernet cipher built from FILG_KEY_SECRET, or None if BYOK isn't configured."""
+    """The Fernet cipher built from FILG_KEY_SECRET, or None if BYOK isn't configured.
+
+    Accepts ANY non-empty secret (including Render's "Generate" button, which doesn't emit a
+    Fernet-formatted key): we derive a valid 32-byte url-safe base64 Fernet key by hashing it.
+    Deterministic, so the same secret always decrypts what it encrypted. Keep the secret stable —
+    changing it makes previously stored keys undecryptable (users re-enter)."""
     global _fernet
     if _fernet is not None:
         return _fernet
     raw = os.environ.get("FILG_KEY_SECRET")
     if not raw:
         return None
+    import base64
+    import hashlib
     from cryptography.fernet import Fernet
-    _fernet = Fernet(raw.encode() if isinstance(raw, str) else raw)
+    raw_bytes = raw.encode() if isinstance(raw, str) else raw
+    _fernet = Fernet(base64.urlsafe_b64encode(hashlib.sha256(raw_bytes).digest()))
     return _fernet
 
 
