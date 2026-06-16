@@ -75,7 +75,17 @@ class Ledger:
     def add(self, stage: str, model: str, usage) -> None:
         searches = getattr(getattr(usage, "server_tool_use", None),
                            "web_search_requests", 0) or 0
-        self.rows.append((stage, model, usage.input_tokens, usage.output_tokens, searches))
+        real = getattr(usage, "cost", None)   # OpenRouter reports the actual USD cost; Anthropic → None
+        self.rows.append((stage, model, usage.input_tokens, usage.output_tokens, searches, real))
+
+    @staticmethod
+    def _row_cost(model, tin, tout, searches, real) -> float:
+        """Real provider-reported cost when we have it (OpenRouter/BYOK), else FILG's price table
+        (Anthropic). An unknown model with no reported cost resolves to $0."""
+        if real is not None:
+            return float(real)
+        pin, pout = PRICES.get(model, (0.0, 0.0))
+        return tin / 1e6 * pin + tout / 1e6 * pout + searches * WEB_SEARCH_PRICE
 
     def cost(self) -> float:
         return self.cost_slice(0)
@@ -83,18 +93,13 @@ class Ledger:
     def cost_slice(self, start: int) -> float:
         """Cost of rows added since index `start` — lets the server meter one run even though
         the ledger is process-global. (Production: use a per-request ledger.)"""
-        total = 0.0
-        for _stage, model, tin, tout, searches in self.rows[start:]:
-            pin, pout = PRICES.get(model, (0.0, 0.0))  # BYOK model ids → $0 to FILG (user's spend)
-            total += tin / 1e6 * pin + tout / 1e6 * pout + searches * WEB_SEARCH_PRICE
-        return total
+        return sum(self._row_cost(m, tin, tout, s, real)
+                   for _stg, m, tin, tout, s, real in self.rows[start:])
 
     def breakdown(self) -> dict:
         agg: dict[str, float] = {}
-        for stage, model, tin, tout, searches in self.rows:
-            pin, pout = PRICES.get(model, (0.0, 0.0))
-            c = tin / 1e6 * pin + tout / 1e6 * pout + searches * WEB_SEARCH_PRICE
-            agg[stage] = agg.get(stage, 0.0) + c
+        for stage, model, tin, tout, searches, real in self.rows:
+            agg[stage] = agg.get(stage, 0.0) + self._row_cost(model, tin, tout, searches, real)
         return agg
 
     def searches(self) -> int:
@@ -242,10 +247,14 @@ def _call_openai(prov, stage: str, model: str, prompt: str, *, max_tokens: int,
         msgs.append({"role": "system", "content": system})
     msgs.append({"role": "user", "content": prompt})
     kwargs = dict(model=prov.model_id(model), max_tokens=max_tokens, messages=msgs)
+    # usage.include → OpenRouter returns the real USD cost in resp.usage.cost (so BYOK $ is accurate,
+    # not a price-table guess). Plugins (web search) merge into the same extra_body.
+    extra_body: dict = {"usage": {"include": True}}
     if tools and any(_is_web_search_tool(t) for t in tools):
         # OpenRouter web plugin: real-time, cited search for any model. The model still emits the
         # source_url JSON our research prompts ask for; the gate grades those URLs unchanged.
-        kwargs["extra_body"] = {"plugins": [{"id": "web", "max_results": OPENROUTER_WEB_MAX}]}
+        extra_body["plugins"] = [{"id": "web", "max_results": OPENROUTER_WEB_MAX}]
+    kwargs["extra_body"] = extra_body
     resp = prov.client.chat.completions.create(**kwargs)
     LEDGER.add(stage, prov.model_id(model), _openai_usage(resp))
     choice = resp.choices[0] if resp.choices else None
@@ -255,13 +264,21 @@ def _call_openai(prov, stage: str, model: str, prompt: str, *, max_tokens: int,
 
 def _openai_usage(resp):
     """Adapt an OpenAI/OpenRouter usage object to what Ledger.add expects (input/output tokens +
-    server_tool_use.web_search_requests). Counts are best-effort; BYOK cost is the user's, so the
-    ledger value is informational and resolves to $0 against FILG's budget."""
+    server_tool_use.web_search_requests + the real USD `cost`). OpenRouter returns the actual cost in
+    `usage.cost` when we send usage.include=true; we read it (attr or pydantic model_extra) so the BYOK
+    $ is real, not a price-table guess. None → fall back to the price table."""
     u = getattr(resp, "usage", None)
+    cost = None
+    if u is not None:
+        cost = getattr(u, "cost", None)
+        if cost is None:
+            extra = getattr(u, "model_extra", None) or {}
+            cost = extra.get("cost") if isinstance(extra, dict) else None
     return SimpleNamespace(
         input_tokens=getattr(u, "prompt_tokens", 0) or 0,
         output_tokens=getattr(u, "completion_tokens", 0) or 0,
         server_tool_use=None,
+        cost=cost,
     )
 
 

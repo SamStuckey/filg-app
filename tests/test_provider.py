@@ -76,6 +76,31 @@ def test_byok_run_costs_filg_nothing(monkeypatch):
     assert pipeline.LEDGER.cost_slice(start) == 0.0
 
 
+def _fake_openai_with_cost(capture, cost):
+    def create(**kwargs):
+        capture.update(kwargs)
+        usage = types.SimpleNamespace(prompt_tokens=20, completion_tokens=8, cost=cost)
+        msg = types.SimpleNamespace(content="openrouter-reply")
+        return types.SimpleNamespace(choices=[types.SimpleNamespace(message=msg)], usage=usage)
+    return types.SimpleNamespace(chat=types.SimpleNamespace(
+        completions=types.SimpleNamespace(create=create)))
+
+
+def test_openrouter_real_cost_and_tokens(monkeypatch):
+    # OpenRouter reports the actual USD cost in usage.cost (we send usage.include=true). The ledger
+    # uses that real cost for BYOK $ (not $0), and counts the real tokens for the session meter.
+    cap = {}
+    prov = provider.Provider("openrouter", "openai", _fake_openai_with_cost(cap, 0.0123),
+                             dict(provider.OPENROUTER_MODELS), bills_filg=False)
+    start = len(pipeline.LEDGER.rows)
+    t0 = pipeline.LEDGER.tokens()
+    with provider.use(prov):
+        pipeline.call("synth", pipeline.SONNET, "hi")
+    assert cap.get("extra_body", {}).get("usage") == {"include": True}     # we asked for the real cost
+    assert abs(pipeline.LEDGER.cost_slice(start) - 0.0123) < 1e-9          # real BYOK cost, not $0
+    assert pipeline.LEDGER.tokens() - t0 == 28                             # 20 + 8 real tokens counted
+
+
 # ── contextvar plumbing ───────────────────────────────────────────────────────
 def test_bound_rebinds_provider_in_worker_thread():
     from concurrent.futures import ThreadPoolExecutor
