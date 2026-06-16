@@ -25,6 +25,7 @@ from __future__ import annotations
 import html
 import io
 import json
+import contextlib
 import os
 import re
 import sys
@@ -50,6 +51,8 @@ import gibberish  # noqa: E402 — pre-LLM "is this even an idea?" gate (saves a
 import plan_pdf   # noqa: E402 — styled PDF generation (synthesis + fpdf2 render)
 import advisor    # noqa: E402 — "chat with your plan" (grounded advisory layer)
 import provider   # noqa: E402 — BYOK: per-run LLM provider (FILG's key vs a user's OpenRouter key)
+import pipeline   # noqa: E402 — engine: per-run cost ledger (run_ledger) for safe concurrency
+import plans      # noqa: E402 — account plans + entitlements (concurrency limit, future feature gates)
 
 from . import auth, billing, keys, planner, store  # noqa: E402 — persistence, auth, billing, BYOK keys
 
@@ -101,12 +104,55 @@ def _key_wall(session: dict):
 
 
 app = FastAPI(title="FILG")
-RUN_LOCK = threading.Lock()         # serialize runs so per-run cost metering stays accurate
+
+# Per-user concurrency: a user may run up to their plan's `max_concurrent` AI operations at once
+# (cost is isolated per run via pipeline.run_ledger, so concurrent runs don't mis-bill each other).
+_inflight: dict[str, int] = {}
+_inflight_lock = threading.Lock()
+
+
+class BusyError(Exception):
+    """Raised when a user is already at their plan's concurrent-operation limit."""
+    def __init__(self, cap: int):
+        self.cap = cap
+        super().__init__(f"at concurrency limit ({cap})")
+
+
+def _concurrency_cap(user: str) -> int:
+    return plans.max_concurrent(store.account_plan(user))
+
+
+@contextlib.contextmanager
+def _run_slot(user: str):
+    """Reserve a concurrency slot for `user`, bind their provider + a fresh per-run cost ledger, then
+    release the slot on exit. Raises BusyError if they're already at their plan's limit."""
+    cap = _concurrency_cap(user)
+    with _inflight_lock:
+        if _inflight.get(user, 0) >= cap:
+            raise BusyError(cap)
+        _inflight[user] = _inflight.get(user, 0) + 1
+    try:
+        with provider.use(_provider_for(user)), pipeline.run_ledger():
+            yield
+    finally:
+        with _inflight_lock:
+            n = _inflight.get(user, 0) - 1
+            if n > 0:
+                _inflight[user] = n
+            else:
+                _inflight.pop(user, None)
+
+
+def _busy_response(e: BusyError) -> JSONResponse:
+    plural = "s" if e.cap != 1 else ""
+    return JSONResponse(
+        {"error": f"You already have {e.cap} operation{plural} running. Let one finish, then try again.",
+         "busy": True}, status_code=429)
 
 
 def _run_job(job_id: str, idea: str, user: str, mode: str) -> None:
     try:
-        with RUN_LOCK:
+        with pipeline.run_ledger():
             res = (teardown.generate_full if mode == "full" else teardown.generate)(idea, mock=MOCK)
         usage.record_run(user, res["cost"])
         store.finish(job_id, res, mode)
@@ -410,7 +456,7 @@ def _plan_research(session_id: str, idea: str, user: str) -> None:
             progress.append(line)
             store.plan_save(session_id, progress=list(progress))
         prov = _provider_for(user)   # BYOK: run the whole pre-build pass on the user's key if they have one
-        with RUN_LOCK, provider.use(prov):
+        with provider.use(prov), pipeline.run_ledger():
             prep = planner.prepare(idea, mock=MOCK, on_progress=on_progress)  # intake → research → vet → draft
         if prov is None:   # FILG's key → meter the free run; BYOK is the user's spend, not metered
             usage.record_run(user, prep["research_cost"])           # the metered free run + daily total
@@ -497,11 +543,13 @@ async def api_plan_respond(sid: str, request: Request):
     if choice not in planner.CHOICES:
         return JSONResponse({"error": "pick yes_and / not_quite / okay_but"}, status_code=400)
     try:
-        with RUN_LOCK, provider.use(_provider_for(s.get("user"))):
+        with _run_slot(s.get("user")):
             # If a board is set it vets each finalized section and its takeaway steers the next draft
             # (planner.advance runs the board inline). cost includes any board review.
             upd = planner.advance(s, choice, body.get("note"), mock=MOCK,
                                   directors=s.get("directors") or None)
+    except BusyError as be:
+        return _busy_response(be)
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"error": str(e)}, status_code=500)
     _meter(s.get("user"), round((upd.get("cost", 0) or 0) - (s.get("cost") or 0), 4))  # draft + board review
@@ -525,10 +573,12 @@ async def api_plan_next(sid: str, request: Request):
     if active["step"] >= planner.N:
         return JSONResponse({"error": "This plan is already complete."}, status_code=409)
     try:
-        with RUN_LOCK, provider.use(_provider_for(s.get("user"))):
+        with _run_slot(s.get("user")):
             child, cost = planner.forward(planner._working_idea(s), s["research"], active, feedback,
                                           directors=s.get("directors") or None,
                                           founder=planner._founder(s), mock=MOCK)
+    except BusyError as be:
+        return _busy_response(be)
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"error": str(e)}, status_code=500)
     node = _new_node(child, active["id"])
@@ -563,9 +613,11 @@ async def api_plan_back(sid: str, request: Request):
                             status_code=400)
     prev = tree["nodes"][active["parent"]]   # the previous step's node — the one we re-draft
     try:
-        with RUN_LOCK, provider.use(_provider_for(s.get("user"))):
+        with _run_slot(s.get("user")):
             sib, cost = planner.rebranch(planner._working_idea(s), s["research"], prev, feedback,
                                          founder=planner._founder(s), mock=MOCK)
+    except BusyError as be:
+        return _busy_response(be)
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"error": str(e)}, status_code=500)
     node = _new_node(sib, prev.get("parent"))   # sibling of `prev` → branches from prev's parent
@@ -608,9 +660,11 @@ async def api_plan_ask(sid: str, request: Request):
     if archetype not in planner.ARCHETYPE_KEYS:
         return JSONResponse({"error": "pick an advisor"}, status_code=400)
     try:
-        with RUN_LOCK, provider.use(_provider_for(s.get("user"))):
+        with _run_slot(s.get("user")):
             res, cost = planner.ask_expert(s["idea"], s.get("files") or {}, archetype,
                                            body.get("question") or "", mock=MOCK)
+    except BusyError as be:
+        return _busy_response(be)
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"error": str(e)}, status_code=500)
     _meter(s.get("user"), cost)
@@ -637,8 +691,10 @@ async def api_plan_board(sid: str, request: Request):
     work_idea = planner._working_idea(s)
     plan_text = planner.bundle_markdown(work_idea, s.get("files") or {})
     try:
-        with RUN_LOCK, provider.use(_provider_for(s.get("user"))):
+        with _run_slot(s.get("user")):
             res, cost = board.convene(work_idea, plan_text, question, directors, mock=MOCK)
+    except BusyError as be:
+        return _busy_response(be)
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"error": str(e)}, status_code=500)
     _meter(s.get("user"), cost)
@@ -666,8 +722,10 @@ async def api_plan_chat(sid: str, request: Request):
         return JSONResponse({"error": "Keep it under 2000 characters."}, status_code=400)
     history = list(s.get("chat") or [])
     try:
-        with RUN_LOCK, provider.use(_provider_for(s.get("user"))):
+        with _run_slot(s.get("user")):
             reply, cost = advisor.chat_reply(s, message, history=history, mock=MOCK)
+    except BusyError as be:
+        return _busy_response(be)
     except Exception as e:  # noqa: BLE001
         traceback.print_exc()
         return JSONResponse({"error": str(e)}, status_code=500)
@@ -738,9 +796,11 @@ async def api_plan_pdf(sid: str, request: Request):
     if (wall := _key_wall(s)):
         return wall
     try:
-        with RUN_LOCK, provider.use(_provider_for(s.get("user"))):
+        with _run_slot(s.get("user")):
             plan, cost = plan_pdf.synthesize(s, mock=MOCK)
             data = plan_pdf.render(plan, style=(request.query_params.get("style") or "filg"))
+    except BusyError as be:
+        return _busy_response(be)
     except Exception as e:  # noqa: BLE001
         traceback.print_exc()
         return JSONResponse({"error": f"Could not build the PDF: {e}"}, status_code=500)

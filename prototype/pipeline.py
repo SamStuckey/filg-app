@@ -30,6 +30,9 @@ Needs ANTHROPIC_API_KEY.
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
+import functools
 import json
 import re
 import sys
@@ -98,7 +101,70 @@ class Ledger:
         return sum(r[4] for r in self.rows)
 
 
-LEDGER = Ledger()
+# Per-run ledger: a fresh Ledger is bound per request so concurrent operations don't interleave
+# their rows (cost_slice would otherwise mis-bill one run with another's tokens). Outside a bound
+# run (tests, standalone, teardown) calls fall back to the process-global ledger.
+_GLOBAL_LEDGER = Ledger()
+_ledger_var: contextvars.ContextVar[Ledger | None] = contextvars.ContextVar("filg_ledger", default=None)
+
+
+def _active_ledger() -> Ledger:
+    return _ledger_var.get() or _GLOBAL_LEDGER
+
+
+@contextlib.contextmanager
+def run_ledger():
+    """Bind a fresh per-run ledger for the duration of one request, so its cost is isolated from any
+    concurrent run. `bound()` carries it into the research fan-out's worker threads."""
+    token = _ledger_var.set(Ledger())
+    try:
+        yield _ledger_var.get()
+    finally:
+        _ledger_var.reset(token)
+
+
+class _LedgerProxy:
+    """Delegates to the active per-run ledger (or the global one). Keeps `from pipeline import LEDGER`
+    working everywhere while making the ledger per-run under concurrency."""
+    @property
+    def rows(self):
+        return _active_ledger().rows
+
+    def add(self, *a, **k):
+        return _active_ledger().add(*a, **k)
+
+    def cost(self):
+        return _active_ledger().cost()
+
+    def cost_slice(self, start):
+        return _active_ledger().cost_slice(start)
+
+    def breakdown(self):
+        return _active_ledger().breakdown()
+
+    def searches(self):
+        return _active_ledger().searches()
+
+
+LEDGER = _LedgerProxy()
+
+
+def bound(fn):
+    """Wrap a fan-out worker so it re-binds BOTH the active provider and the per-run ledger inside its
+    own thread (ThreadPoolExecutor workers don't inherit contextvars). Captured at submit time."""
+    prov = provider.active()
+    led = _ledger_var.get()
+
+    @functools.wraps(fn)
+    def inner(*args, **kwargs):
+        with provider.use(prov):
+            token = _ledger_var.set(led)
+            try:
+                return fn(*args, **kwargs)
+            finally:
+                _ledger_var.reset(token)
+
+    return inner
 
 
 # --- Low-level call with server-tool resume ----------------------------------
@@ -442,7 +508,7 @@ def main() -> int:
     with ThreadPoolExecutor(max_workers=3) as ex:
         # bound() re-binds the active provider inside each worker (threads don't inherit contextvars),
         # so a BYOK run's fan-out still runs on the user's key.
-        lane_claims = list(ex.map(provider.bound(lambda ln: research_lane(idea, ln)), lanes))
+        lane_claims = list(ex.map(bound(lambda ln: research_lane(idea, ln)), lanes))
     claims = [c for lane in lane_claims for c in lane]
     quant = [c for c in claims if c.quantitative]
     print(f"  {len(claims)} claims gathered ({len(quant)} quantitative).")
@@ -471,7 +537,7 @@ def main() -> int:
     print("\nRE-SEARCH — forcing a primary/neutral cite for each flagged claim…")
     rescues: list[Rescue] = []
     with ThreadPoolExecutor(max_workers=4) as ex:
-        results = list(ex.map(provider.bound(lambda v: research_primary(v.claim)), flagged))
+        results = list(ex.map(bound(lambda v: research_primary(v.claim)), flagged))
     for v, r in zip(flagged, results):
         r.original = v
         rescues.append(r)

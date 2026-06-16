@@ -68,6 +68,13 @@ def init() -> None:
                 con.execute(
                     "CREATE INDEX IF NOT EXISTS idx_subs_customer "
                     "ON subscriptions (stripe_customer)")
+                # Account → plan assignment (entitlements live in code, see app/plans.py). A missing
+                # row means "no explicit plan" → the caller applies the default plan.
+                con.execute(
+                    "CREATE TABLE IF NOT EXISTS accounts ("
+                    "  email TEXT PRIMARY KEY,"
+                    "  plan TEXT,"
+                    "  updated_at TEXT NOT NULL)")
                 # Interactive plan-builder sessions (idea → decision-tree → downloadable file tree).
                 con.execute(
                     "CREATE TABLE IF NOT EXISTS plan_sessions ("
@@ -208,6 +215,35 @@ def is_paid(email: str) -> bool:
     return not (cpe and time.time() > cpe)
 
 
+# ── Accounts (plan assignment) ───────────────────────────────────────────────
+def account_plan(email: str) -> str | None:
+    """The plan key assigned to this account, or None (caller defaults via app/plans.py)."""
+    if not email:
+        return None
+    init()
+    con = _connect()
+    try:
+        row = con.execute("SELECT plan FROM accounts WHERE email=?",
+                          (email.strip().lower(),)).fetchone()
+    finally:
+        con.close()
+    return row["plan"] if row else None
+
+
+def set_account_plan(email: str, plan: str | None) -> None:
+    """Assign (or clear) an account's plan. Clearing falls the account back to the default plan."""
+    init()
+    con = _connect()
+    try:
+        with con:
+            con.execute(
+                "INSERT INTO accounts (email, plan, updated_at) VALUES (?,?,?) "
+                "ON CONFLICT(email) DO UPDATE SET plan=excluded.plan, updated_at=excluded.updated_at",
+                (email.strip().lower(), plan, datetime.now(timezone.utc).isoformat()))
+    finally:
+        con.close()
+
+
 # ── Plan-builder sessions ────────────────────────────────────────────────────
 _PLAN_JSON = ("research", "files", "proposal", "history",  # columns stored as JSON
               "shaped", "vetting", "directors", "board", "tree", "chat", "progress")
@@ -321,6 +357,12 @@ if __name__ == "__main__":  # quick self-test (no API)
     assert email_for_customer("cus_1") == "p@x.com"
     upsert_subscription("p@x.com", status="active", current_period_end=1)  # past → expired
     assert is_paid("p@x.com") is False
+    # accounts (plan assignment)
+    assert account_plan("acct@x.com") is None                 # no row → default applies upstream
+    set_account_plan("Acct@X.com", "pro")
+    assert account_plan("acct@x.com") == "pro"                # case-insensitive
+    set_account_plan("acct@x.com", None)                      # clear → back to default
+    assert account_plan("acct@x.com") is None
     # plan sessions
     plan_create("pl1", "u@x.com", "an idea about guitar coaching", directors=["closer", "cfo"])
     assert plan_get("pl1")["status"] == "researching"
