@@ -90,6 +90,24 @@ def test_download_follows_active_branch_no_paywall(client):
     assert r.status_code == 200 and b"1-the-setup.md" in r.content
 
 
+def test_plan_pdf_renders(client):
+    # The core artifact: a finished plan downloads as a real, styled PDF (no paywall).
+    sid = client.post("/api/plan/start", json={"idea": GRAB_BAG, "email": "pdf@x.com"}).json()["id"]
+    s = wait_status(client, sid)
+    while not s["done"]:
+        s = client.post(f"/api/plan/{sid}/next", json={"feedback": ""}).json()
+    r = client.get(f"/api/plan/{sid}/plan.pdf")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "application/pdf"
+    assert r.content[:5] == b"%PDF-" and len(r.content) > 5000      # a non-trivial PDF
+    assert "filename=" in r.headers.get("content-disposition", "")
+
+    # not downloadable until finished
+    sid2 = client.post("/api/plan/start", json={"idea": GRAB_BAG, "email": "pdf2@x.com"}).json()["id"]
+    wait_status(client, sid2)
+    assert client.get(f"/api/plan/{sid2}/plan.pdf").status_code == 400
+
+
 def test_gibberish_idea_gets_roasted_for_free(client):
     # Total nonsense → a pre-rolled roast, status 200, NO session created (no run, no LLM spend).
     junk = "asdlfk asd fa lskdjf llaskjdflkajs dflk asdfasd lf lk asdlfk sladkf lkasdf"

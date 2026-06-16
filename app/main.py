@@ -26,6 +26,7 @@ import html
 import io
 import json
 import os
+import re
 import sys
 import threading
 import traceback
@@ -46,6 +47,7 @@ import usage     # noqa: E402
 import personas  # noqa: E402 — advisor/director registry (shared by ask-an-expert + the board)
 import board     # noqa: E402 — Board of Directors orchestration
 import gibberish  # noqa: E402 — pre-LLM "is this even an idea?" gate (saves a run, hands back a roast)
+import plan_pdf   # noqa: E402 — styled PDF generation (synthesis + fpdf2 render)
 
 from . import auth, billing, planner, store  # noqa: E402 — persistence, auth, billing, plan-builder
 
@@ -554,6 +556,34 @@ async def api_plan_download(sid: str, request: Request):
                     headers={"Content-Disposition": 'attachment; filename="filg-business-plan.zip"'})
 
 
+def _slug(text: str) -> str:
+    s = re.sub(r"[^a-z0-9]+", "-", (text or "business-plan").lower()).strip("-")
+    return (s or "business-plan")[:50]
+
+
+@app.get("/api/plan/{sid}/plan.pdf")
+async def api_plan_pdf(sid: str, request: Request):
+    """The core artifact: a styled, branded PDF of the finished plan. Synthesizes an exec summary,
+    lays out the active branch's sections, and appends the graded-research evidence exhibit. No
+    paywall (monetization in flux). Builds from `s["files"]` = the final decision set."""
+    s = store.plan_get(sid)
+    if not s or not _owns(request, s):
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    if s["status"] != "done":
+        return JSONResponse({"error": "plan isn't finished yet"}, status_code=400)
+    try:
+        with RUN_LOCK:
+            plan, cost = plan_pdf.synthesize(s, mock=MOCK)
+            data = plan_pdf.render(plan, style=(request.query_params.get("style") or "filg"))
+    except Exception as e:  # noqa: BLE001
+        traceback.print_exc()
+        return JSONResponse({"error": f"Could not build the PDF: {e}"}, status_code=500)
+    usage.record_spend(cost)
+    fn = f"{_slug(s.get('idea'))}-business-plan.pdf"
+    return Response(data, media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="{fn}"'})
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index():
     cfg = json.dumps({"authEnabled": auth.AUTH_ENABLED, "billingEnabled": billing.BILLING_ENABLED,
@@ -711,6 +741,20 @@ button:hover{filter:brightness(1.04)}button:active{transform:translateY(1px)}but
 .toasts{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);display:flex;flex-direction:column;gap:8px;z-index:60;align-items:center;pointer-events:none}
 .toast{background:var(--ink);color:#fff;padding:11px 18px;border-radius:12px;font-size:14px;font-weight:700;box-shadow:0 8px 24px rgba(20,17,14,.2);transition:opacity .3s,transform .3s;max-width:90vw}
 .toast.err{background:var(--coral-d)}.toast.out{opacity:0;transform:translateY(8px)}
+/* PDF "thinking" sequence — the generate-the-plan moment */
+.pdfgen-back{position:fixed;inset:0;background:rgba(20,17,14,.5);opacity:0;visibility:hidden;transition:opacity .2s;z-index:70}
+.pdfgen-back.show{opacity:1;visibility:visible}
+.pdfgen{position:fixed;left:50%;top:50%;transform:translate(-50%,-46%);width:min(440px,93vw);background:var(--card);border:1px solid var(--line);border-radius:20px;box-shadow:0 28px 70px rgba(20,17,14,.28);padding:26px 28px;z-index:71;opacity:0;visibility:hidden;transition:opacity .2s,transform .2s}
+.pdfgen.open{opacity:1;visibility:visible;transform:translate(-50%,-50%)}
+.pdfgen h3{font-family:"Fraunces",Georgia,serif;font-size:22px;font-weight:600;margin:0 0 4px}
+.pdfgen .pg-sub{color:var(--muted);font-size:13px;margin:0 0 16px}
+.pdfsteps{list-style:none;margin:0;padding:0}
+.pdfsteps li{display:flex;align-items:center;gap:11px;font-size:14.5px;color:var(--muted);padding:6px 0;opacity:.5;transition:opacity .25s,color .25s}
+.pdfsteps li.active,.pdfsteps li.done{opacity:1;color:var(--ink)}
+.pdfsteps .pdot{width:16px;height:16px;flex:none;border-radius:50%;border:2px solid var(--line);position:relative}
+.pdfsteps li.active .pdot{border-color:var(--sky);animation:pulse 1s infinite}
+.pdfsteps li.done .pdot{border-color:var(--ok);background:var(--ok)}
+.pdfsteps li.done .pdot:after{content:"✓";position:absolute;inset:0;color:#fff;font-size:10px;font-weight:800;display:grid;place-items:center}
 .authgate{margin:6px 0 2px}.authgate button{width:100%;margin-bottom:8px}
 .gbtn{display:flex;align-items:center;justify-content:center;gap:10px;background:#fff;color:var(--ink);border:1.5px solid var(--line);font-weight:800}
 .gicon{width:18px;height:18px;flex:none}
@@ -736,7 +780,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <h2>You've got a business in you. Let's find it. 🚀</h2>
 <p class=sub>Drop in your idea. You'll get the offer + the research graded — then we build the whole plan together, your call at every step.</p>
 <label for=idea class=sr-only>Your business idea</label>
-<textarea id=idea placeholder="e.g. I'm handy with automations and I think I could help dentists stop missing new-patient calls — but I don't know what to sell or how."></textarea>
+<textarea id=idea placeholder="e.g. I know automation and feel like I could help scale small dental businesses… OR I like doggies, the color purple, and live in a bunker with my 12 brothers — either way, let's find the business."></textarea>
 <div class=boardpick id=boardpick></div>
 <div id=authgate></div>
 <label for=email class=sr-only>Your email</label>
@@ -762,10 +806,16 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <div class=modal id=modal role=dialog aria-modal=true aria-labelledby=modal-title aria-hidden=true>
 <h3 id=modal-title></h3><div id=modal-body></div><div class=modal-actions id=modal-actions></div></div>
 <div class=toasts id=toasts aria-live=polite></div>
+<div class=pdfgen-back id=pdfgenback></div>
+<div class=pdfgen id=pdfgen role=dialog aria-modal=true aria-labelledby=pdfgen-title aria-hidden=true>
+<h3 id=pdfgen-title>Building your business plan</h3>
+<p class=pg-sub>Turning your decisions into a styled, investor-ready PDF.</p>
+<ul class=pdfsteps id=pdfsteps></ul></div>
 <div class=workspace id=workspace style="display:none">
 <aside class=side>
 <div class=sec><h3>Your plan</h3><ul class=tree id=tree></ul>
-<button id=dl class=dl onclick=download() style="display:none;margin-top:12px">⬇ Download plan (.zip)</button></div>
+<button id=dl class=dl onclick=download() style="display:none;margin-top:12px">⬇ Download plan (PDF)</button>
+<button id=dlzip class=link onclick=downloadZip() style="display:none;margin-top:6px;font-size:12px">or source files (.zip)</button></div>
 <div class=sec id=dtreesec style="display:none"><h3>Decision tree</h3>
 <p class=bhelp>Each step is a node. Go <b>Back</b> to branch and try another direction; click any node to hop to it. The active branch is highlighted.</p>
 <div id=dtree></div></div>
@@ -891,6 +941,7 @@ function renderTree(s){
     return `<li class=pending><div class=f><span class=ic aria-hidden=true>○</span>${nm}</div></li>`;
   }).join('');
   const dl=document.getElementById('dl'); if(dl)dl.style.display=s.done?'block':'none';
+  const dz=document.getElementById('dlzip'); if(dz)dz.style.display=s.done?'block':'none';
 }
 function renderNode(s){
   const n=document.getElementById('node');
@@ -1120,10 +1171,38 @@ async function submitDrawer(){
     }
   }catch(e){go.disabled=false;out.innerHTML='Network error.';}
 }
+// The "thinking" sequence while the server synthesizes + typesets the PDF. Real work backs it
+// (exec-summary synthesis + render), and a minimum dwell guarantees the moment actually lands.
+const PDF_STEPS=["Applying your board's input","Pulling your graded evidence","Building the decision matrix","Laying out a modern, on-brand design","Typesetting your PDF"];
+let pdfTimer=null;
+function openPdfGen(){
+  const steps=document.getElementById('pdfsteps');
+  steps.innerHTML=PDF_STEPS.map((t,i)=>`<li id=pstep-${i}><span class=pdot></span>${esc(t)}</li>`).join('');
+  const m=document.getElementById('pdfgen');m.classList.add('open');m.setAttribute('aria-hidden','false');
+  document.getElementById('pdfgenback').classList.add('show');
+  let i=0; const tick=()=>{
+    if(i>0){const p=document.getElementById('pstep-'+(i-1));if(p){p.classList.remove('active');p.classList.add('done');}}
+    const c=document.getElementById('pstep-'+i);if(c)c.classList.add('active');
+    i++; if(i<=PDF_STEPS.length)pdfTimer=setTimeout(tick,720);
+  }; tick();
+}
+function closePdfGen(){clearTimeout(pdfTimer);pdfTimer=null;const m=document.getElementById('pdfgen');m.classList.remove('open');m.setAttribute('aria-hidden','true');document.getElementById('pdfgenback').classList.remove('show');}
 async function download(){
+  openPdfGen();
+  const minShow=new Promise(res=>setTimeout(res,2600));   // let the sequence breathe (covers fast mock runs)
+  try{
+    const [r]=await Promise.all([fetch('/api/plan/'+SID+'/plan.pdf',{headers:authHeaders()}),minShow]);
+    if(!r.ok){let d={};try{d=await r.json();}catch(e){} closePdfGen();toast(d.error||'Could not build the PDF.','err');return;}
+    const blob=await r.blob();
+    PDF_STEPS.forEach((_,i)=>{const p=document.getElementById('pstep-'+i);if(p){p.classList.remove('active');p.classList.add('done');}});
+    await new Promise(res=>setTimeout(res,500));
+    const u=URL.createObjectURL(blob),a=document.createElement('a');a.href=u;a.download='filg-business-plan.pdf';a.click();URL.revokeObjectURL(u);
+    closePdfGen();
+  }catch(e){closePdfGen();toast('Network error building the PDF.','err');}
+}
+async function downloadZip(){   // power-user escape hatch: the raw source files
   try{
     const r=await fetch('/api/plan/'+SID+'/download',{headers:authHeaders()});
-    if(r.status===402){const d=await r.json();if(await uiConfirm('Unlock the download',(d.error||'Unlock the download.'),'Go to checkout'))upgrade();return;}
     if(!r.ok){toast('Could not download.','err');return;}
     const blob=await r.blob(),u=URL.createObjectURL(blob);
     const a=document.createElement('a');a.href=u;a.download='filg-business-plan.zip';a.click();URL.revokeObjectURL(u);
