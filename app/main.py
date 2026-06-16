@@ -85,6 +85,21 @@ def _meter(user: str, cost: float) -> None:
         usage.record_spend(cost)
 
 
+def _needs_key(user: str) -> bool:
+    """BYOK model: when BYOK is on and this user has no saved key, they're behind the wall — every
+    API action past the one free welcome plan requires their own key."""
+    return bool(keys.enabled() and not _is_byok(user))
+
+
+def _key_wall(session: dict):
+    """402 if the session owner must bring a key before this (API-calling) action; else None.
+    The one free welcome plan is granted at /api/plan/start, so every later engine call is walled."""
+    if _needs_key(session.get("user")):
+        return JSONResponse(
+            {"error": "Add your OpenRouter key to keep building.", "needKey": True}, status_code=402)
+    return None
+
+
 app = FastAPI(title="FILG")
 RUN_LOCK = threading.Lock()         # serialize runs so per-run cost metering stays accurate
 
@@ -421,13 +436,24 @@ async def api_plan_start(request: Request):
     user, verified = _identity(request, body.get("email"))
     if "@" not in user:
         return JSONResponse({"error": "Enter an email so we can save your plan."}, status_code=400)
-    if not _is_byok(user):   # BYOK users run on their own key → skip the free cap + daily kill switch
+    if _is_byok(user):
+        pass   # has a key → unlimited plans on their own spend
+    elif keys.enabled():
+        # BYOK on, no key: one free welcome plan, then they must bring a key. The daily kill switch
+        # still guards FILG's spend on these free runs.
+        if usage.free_used(user):
+            return JSONResponse(
+                {"error": "That was your free plan. Add your OpenRouter key to build as many as you want.",
+                 "needKey": True}, status_code=402)
+        if usage.kill_switch_tripped():
+            return JSONResponse(
+                {"error": "FILG's free-run budget for today is maxed. Add your key to run now.",
+                 "needKey": True}, status_code=402)
+    else:
+        # BYOK off (no FILG_KEY_SECRET — dev/local): keep the legacy free-cap behavior so dev works.
         allowed, reason = usage.can_run(user, is_paid=_is_paid(user, verified))
         if not allowed:
-            # When BYOK is available, steer an out-of-runs user to add their key; else to upgrade.
-            need_key = keys.enabled() and bool(user and "@" in user)
-            return JSONResponse({"error": reason, "upgrade": not need_key, "needKey": need_key},
-                                status_code=402)
+            return JSONResponse({"error": reason, "upgrade": True}, status_code=402)
     directors = [k for k in (body.get("directors") or []) if k in personas.KEYS]  # optional board
     sid = uuid.uuid4().hex[:12]
     store.plan_create(sid, user, idea, directors=directors)
@@ -462,6 +488,8 @@ async def api_plan_respond(sid: str, request: Request):
     s = store.plan_get(sid)
     if not s or not _owns(request, s):
         return JSONResponse({"error": "unknown session"}, status_code=404)
+    if (wall := _key_wall(s)):
+        return wall
     if s["status"] != "building":
         return JSONResponse({"error": f"session is {s['status']}"}, status_code=409)
     body = await request.json()
@@ -488,6 +516,8 @@ async def api_plan_next(sid: str, request: Request):
     s = store.plan_get(sid)
     if not s or not _owns(request, s):
         return JSONResponse({"error": "unknown session"}, status_code=404)
+    if (wall := _key_wall(s)):
+        return wall
     body = await request.json()
     feedback = (body.get("feedback") or "").strip() or None
     tree = _ensure_tree(s)
@@ -518,6 +548,8 @@ async def api_plan_back(sid: str, request: Request):
     s = store.plan_get(sid)
     if not s or not _owns(request, s):
         return JSONResponse({"error": "unknown session"}, status_code=404)
+    if (wall := _key_wall(s)):
+        return wall
     body = await request.json()
     feedback = (body.get("feedback") or "").strip()
     if not feedback:
@@ -569,6 +601,8 @@ async def api_plan_ask(sid: str, request: Request):
     s = store.plan_get(sid)
     if not s or not _owns(request, s):
         return JSONResponse({"error": "unknown session"}, status_code=404)
+    if (wall := _key_wall(s)):
+        return wall
     body = await request.json()
     archetype = body.get("archetype")
     if archetype not in planner.ARCHETYPE_KEYS:
@@ -592,6 +626,8 @@ async def api_plan_board(sid: str, request: Request):
     s = store.plan_get(sid)
     if not s or not _owns(request, s):
         return JSONResponse({"error": "unknown session"}, status_code=404)
+    if (wall := _key_wall(s)):
+        return wall
     body = await request.json()
     picked = body.get("directors")
     directors = [k for k in (picked or s.get("directors") or personas.DEFAULT_BOARD)
@@ -620,6 +656,8 @@ async def api_plan_chat(sid: str, request: Request):
         return JSONResponse({"error": "unknown session"}, status_code=404)
     if s["status"] in ("researching", "error"):
         return JSONResponse({"error": "Finish building the plan first."}, status_code=409)
+    if (wall := _key_wall(s)):
+        return wall
     body = await request.json()
     message = (body.get("message") or "").strip()
     if not message:
@@ -697,6 +735,8 @@ async def api_plan_pdf(sid: str, request: Request):
         return JSONResponse({"error": "unknown session"}, status_code=404)
     if s["status"] != "done":
         return JSONResponse({"error": "plan isn't finished yet"}, status_code=400)
+    if (wall := _key_wall(s)):
+        return wall
     try:
         with RUN_LOCK, provider.use(_provider_for(s.get("user"))):
             plan, cost = plan_pdf.synthesize(s, mock=MOCK)
@@ -1009,6 +1049,21 @@ const CFG=window.FILG||{authEnabled:false,billingEnabled:false};
 let sb=null, session=null, me=null;
 function authHeaders(){return session?{'Authorization':'Bearer '+session.access_token}:{};}
 let SID=null;
+// ── BYOK: mandatory after the one free welcome plan ──────────────────────────
+let HAS_KEY=false, WELCOME_PROMPTED=false;
+async function loadKey(){            // refresh whether this user has a saved key
+  if(!CFG.byokEnabled){HAS_KEY=false;return;}
+  try{const r=await fetch('/api/key',{headers:authHeaders()});const d=await r.json();HAS_KEY=!!(d&&d.key);}
+  catch(e){HAS_KEY=false;}
+}
+function requireKey(){               // gate any API-calling button: no key → open the key modal
+  if(CFG.byokEnabled&&!HAS_KEY){keyModal();return false;}
+  return true;
+}
+function maybePromptKey(){           // welcome plan finished → require a key, opening the modal once per load
+  if(WELCOME_PROMPTED||!CFG.byokEnabled||HAS_KEY)return;
+  WELCOME_PROMPTED=true;keyModal();
+}
 async function start(){
   const idea=document.getElementById('idea').value.trim(), email=document.getElementById('email').value.trim();
   const go=document.getElementById('go'), err=document.getElementById('err');
@@ -1055,6 +1110,7 @@ async function poll(){
     Activity.done(s.status==='error'?'Hit a snag.':'Research graded. Building your plan.');ACT_RESEARCH=false;
   }
   render(s);
+  if(s.status!=='error')maybePromptKey();   // welcome plan is in → require a key to go further
 }
 let ACT_RESEARCH=false, ACT_PROG_N=0;
 function render(s){
@@ -1098,6 +1154,7 @@ function chatStart(btn){const t=document.getElementById('chatinput');if(t){t.val
 async function sendChat(){
   if(CHAT_BUSY)return;
   const t=document.getElementById('chatinput'),msg=(t.value||'').trim(); if(!msg)return;
+  if(!requireKey())return;
   const log=document.getElementById('chatlog'),btn=document.getElementById('chatsend'),st=document.getElementById('chatstart');
   CHAT_BUSY=true;btn.disabled=true;t.value='';if(st)st.innerHTML='';
   log.insertAdjacentHTML('beforeend',`<div class="cmsg user">${esc(msg)}</div><div class="cmsg bot md" id=chatthinking><span class=think>Thinking…</span></div>`);
@@ -1197,6 +1254,7 @@ function _aiRun(url,body,steps){
   ]).then(([r])=>r);
 }
 async function nextStep(){
+  if(!requireKey())return;
   const fb=(document.getElementById('feedback')||{}).value||'';
   _navBusy();
   const steps=[]; if(fb.trim())steps.push("Folding in your note");
@@ -1209,6 +1267,7 @@ async function nextStep(){
   }catch(e){Activity.stop(true);fbErr('Network error.');_navFree();}
 }
 async function backStep(){
+  if(!requireKey())return;
   const fb=((document.getElementById('feedback')||{}).value||'').trim();
   if(!fb){fbErr('Add a quick note on what to change, a note is required to go back a step.');const t=document.getElementById('feedback');if(t)t.focus();return;}
   _navBusy();
@@ -1391,6 +1450,7 @@ function uiPrompt(title,label,type,placeholder){
 }
 function _submitPrompt(){const i=document.getElementById('modalinput');_closeModal(i?i.value:null);}
 async function submitDrawer(){
+  if(!requireKey())return;
   const q=document.getElementById('drawerq').value, go=document.getElementById('drawer-go'),
         out=document.getElementById('drawer-out');
   out.style.display='block';
@@ -1461,6 +1521,7 @@ const Activity={
 const RESEARCH_STEPS=["Focusing your idea into one sharp thesis","Spinning up research across the web","Pulling sources on the market and competition","Grading every source for credibility","Flagging vendor-marketing spin","Re-sourcing the headline stats to primary sources","Scoring demand, market, and willingness to pay","Drafting your first offer"];
 const PDF_STEPS=["Applying your board's input","Pulling your graded evidence","Building the decision matrix","Laying out a modern, on-brand design","Typesetting your PDF"];
 async function download(){
+  if(!requireKey())return;
   Activity.start(PDF_STEPS);
   const minShow=new Promise(res=>setTimeout(res,2600));   // let the sequence breathe (covers fast mock runs)
   try{
@@ -1565,7 +1626,7 @@ async function keyModal(){
 function keyForm(){
   document.getElementById('modal-title').textContent='Bring your own key';
   document.getElementById('modal-body').innerHTML=
-    `<p class=or style="margin:0 0 10px">Run FILG on your own OpenRouter key. One key gives you every model plus cited web search, and your plans run on your key (you pay OpenRouter directly, usually pennies a plan).</p>`+
+    `<p class=or style="margin:0 0 10px">That was your free plan. To keep building \\u2014 more plans, branches, the board, chat, PDF \\u2014 connect your own OpenRouter key. One key gives you every model plus cited web search, and you pay OpenRouter directly (usually pennies a plan).</p>`+
     `<ol class=keysteps>`+
       `<li><a href="https://openrouter.ai/keys" target=_blank rel=noopener>Open OpenRouter \\u2192 Keys</a> and sign up (free)</li>`+
       `<li>Click <b>Create Key</b> and copy it</li>`+
@@ -1587,19 +1648,20 @@ async function saveKey(){
     const r=await fetch('/api/key',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({provider:'openrouter',key})});
     const d=await r.json();
     if(!r.ok){er.textContent=d.error||'Could not save the key.';btn.disabled=false;btn.textContent='Save & validate';return;}
-    _closeModal();toast('Key saved \\u2014 you\\u2019re running on your own key. \\u2713');
+    HAS_KEY=true;_closeModal();toast('Key saved \\u2014 build as many plans as you want. \\u2713');
   }catch(e){er.textContent='Network error.';btn.disabled=false;btn.textContent='Save & validate';}
 }
 async function removeKey(){
   try{const r=await fetch('/api/key/remove',{method:'POST',headers:authHeaders()});
-    if(r.ok){toast('Key removed.');_closeModal();}else toast('Could not remove the key.','err');
+    if(r.ok){HAS_KEY=false;toast('Key removed.');_closeModal();}else toast('Could not remove the key.','err');
   }catch(e){toast('Network error.','err');}
 }
 function saveIdea(){try{const v=document.getElementById('idea').value;if(v)localStorage.setItem('filg_idea',v);}catch(e){}}
 function restoreIdea(){try{const v=localStorage.getItem('filg_idea');if(v){document.getElementById('idea').value=v;localStorage.removeItem('filg_idea');}}catch(e){}}
 async function loadMe(){
-  if(!session){me=null;return;}
+  if(!session){me=null;HAS_KEY=false;return;}
   try{const r=await fetch('/api/me',{headers:authHeaders()});me=r.ok?await r.json():null;}catch(e){me=null;}
+  await loadKey();   // refresh BYOK key state alongside identity
 }
 async function signinGoogle(){saveIdea();const {error}=await sb.auth.signInWithOAuth({provider:'google',options:{redirectTo:location.origin}});if(error)toast(error.message,'err');}
 async function signinEmail(){
