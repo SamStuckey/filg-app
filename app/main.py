@@ -489,7 +489,7 @@ async def api_plan_start(request: Request):
         # still guards FILG's spend on these free runs.
         if usage.free_used(user):
             return JSONResponse(
-                {"error": "That was your free plan. Add your OpenRouter key to build as many as you want.",
+                {"error": "The first plan is on us. Hook up your OpenRouter key to keep using the full suite of tools.",
                  "needKey": True}, status_code=402)
         if usage.kill_switch_tripped():
             return JSONResponse(
@@ -1701,7 +1701,7 @@ async function keyModal(){
 function keyForm(){
   document.getElementById('modal-title').textContent='Bring your own key';
   document.getElementById('modal-body').innerHTML=
-    `<p class=or style="margin:0 0 10px">That was your free plan. To keep building \\u2014 more plans, branches, the board, chat, PDF \\u2014 connect your own OpenRouter key. One key gives you every model plus cited web search, and you pay OpenRouter directly (usually pennies a plan).</p>`+
+    `<p class=or style="margin:0 0 10px">The first plan is on us. Hook up your own OpenRouter key to keep using the full suite of tools: more plans, branches, the board, chat, and PDF export. One key gives you every model plus cited web search, and you pay OpenRouter directly (usually pennies a plan).</p>`+
     `<ol class=keysteps>`+
       `<li><a href="https://openrouter.ai/keys" target=_blank rel=noopener>Open OpenRouter \\u2192 Keys</a> and sign up (free)</li>`+
       `<li>Click <b>Create Key</b> and copy it</li>`+
