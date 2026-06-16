@@ -751,6 +751,12 @@ button:hover{filter:brightness(1.04)}button:active{transform:translateY(1px)}but
 .vet{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:18px 20px;margin-bottom:16px}
 .vet .vhead{display:flex;align-items:center;gap:10px;margin-bottom:6px}
 .vet h3{font-size:16px;font-weight:800;margin:0}
+.vet .vethead{display:flex;align-items:center;gap:10px;width:100%;background:none;border:0;padding:0;margin:0;cursor:pointer;font:inherit;text-align:left}
+.vet .vtitle{font-size:16px;font-weight:800;color:var(--ink)}
+.vet .vcaret{margin-left:auto;color:var(--muted);font-size:12px;transition:transform .15s}
+.vet.open .vcaret{transform:rotate(90deg)}
+.vet .vetbody{display:none;margin-top:12px}.vet.open .vetbody{display:block}
+.vet .filgreact{font-family:"Fraunces",Georgia,serif;font-style:italic;font-weight:600;font-size:18px;line-height:1.3;color:var(--ink);margin:0 0 12px}
 .verdict{font-size:12px;font-weight:800;padding:3px 11px;border-radius:20px;text-transform:uppercase;letter-spacing:.04em}
 .verdict.pursue{background:var(--ok-bg);color:var(--ok)}.verdict.pivot{background:var(--warn-bg);color:var(--warn)}.verdict.kill{background:#fdeaea;color:#c0392b}
 .vet .thesis{font-size:14.5px;margin:0 0 10px}.vet .vrow{font-size:13px;color:var(--muted);margin:3px 0}.vet .vrow b{color:var(--ink)}
@@ -795,19 +801,20 @@ button:hover{filter:brightness(1.04)}button:active{transform:translateY(1px)}but
 .toasts{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);display:flex;flex-direction:column;gap:8px;z-index:60;align-items:center;pointer-events:none}
 .toast{background:var(--ink);color:#fff;padding:11px 18px;border-radius:12px;font-size:14px;font-weight:700;box-shadow:0 8px 24px rgba(20,17,14,.2);transition:opacity .3s,transform .3s;max-width:90vw}
 .toast.err{background:var(--coral-d)}.toast.out{opacity:0;transform:translateY(8px)}
-/* Reusable AI-activity ticker — a pinned, non-covering footer that narrates work (terminal-ish, but
-   friendly). Used anywhere AI runs and the user waits (research, PDF, …). */
+/* Reusable AI-activity ticker — a pinned, non-covering footer that spews work as a small terminal-ish
+   log (friendly, not technical). Used anywhere AI runs and the user waits (research, PDF, …). */
 .activity{position:fixed;left:0;right:0;bottom:0;z-index:80;transform:translateY(115%);transition:transform .28s cubic-bezier(.4,0,.2,1);background:var(--ink);color:#fff;box-shadow:0 -8px 30px rgba(20,17,14,.18)}
 .activity.show{transform:translateY(0)}
-.activity .abar{max-width:1140px;margin:0 auto;padding:11px 22px;display:flex;align-items:center;gap:11px;font-size:13.5px}
-.activity .adot{width:9px;height:9px;border-radius:50%;background:var(--coral);flex:none;animation:pulse 1s infinite}
-.activity.ok .adot{background:var(--ok);animation:none}
-.activity .aprompt{color:var(--sun);font-weight:800;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
-.activity .aline{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.activity .acursor{display:inline-block;width:7px;height:15px;background:#fff;margin-left:1px;vertical-align:-2px;animation:blink 1s steps(1) infinite}
-.activity.ok .acursor{display:none}
-.activity .aprog{margin-left:auto;color:rgba(255,255,255,.5);font-size:12px;flex:none;font-variant-numeric:tabular-nums}
-@keyframes blink{50%{opacity:0}}
+.alog{max-width:1140px;margin:0 auto;padding:12px 22px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;max-height:112px;overflow:hidden}
+.aline{display:flex;align-items:center;gap:9px;padding:2.5px 0;opacity:.4;transition:opacity .3s}
+.aline.active{opacity:1}.aline.done{opacity:.6}
+.aline .aglyph{width:13px;flex:none;text-align:center;color:var(--sun)}
+.aline.active .aglyph{animation:blink 1s steps(1) infinite}
+.aline.active .aglyph::before{content:"\\203A";font-weight:800}
+.aline.done .aglyph::before{content:"\\2713";color:var(--ok)}
+.activity.ok .aline.active .aglyph{animation:none}
+.aline .atext{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+@keyframes blink{50%{opacity:.25}}
 .authgate{margin:6px 0 2px}.authgate button{width:100%;margin-bottom:8px}
 .gbtn{display:flex;align-items:center;justify-content:center;gap:10px;background:#fff;color:var(--ink);border:1.5px solid var(--line);font-weight:800}
 .gicon{width:18px;height:18px;flex:none}
@@ -859,7 +866,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <div class=modal id=modal role=dialog aria-modal=true aria-labelledby=modal-title aria-hidden=true>
 <h3 id=modal-title></h3><div id=modal-body></div><div class=modal-actions id=modal-actions></div></div>
 <div class=toasts id=toasts aria-live=polite></div>
-<div class=activity id=activity aria-live=polite aria-hidden=true><div class=abar><span class=adot aria-hidden=true></span><span class=aprompt aria-hidden=true>&rsaquo;</span><span class=aline id=activity-line></span><span class=acursor id=activity-cursor aria-hidden=true></span><span class=aprog id=activity-prog></span></div></div>
+<div class=activity id=activity aria-live=polite aria-hidden=true><div class=alog id=activity-log></div></div>
 <div class=workspace id=workspace style="display:none">
 <aside class=side>
 <div class=sec><h3>Your plan</h3><ul class=tree id=tree></ul>
@@ -934,7 +941,7 @@ async function poll(){
   const s=await r.json();
   renderTree(s);renderAddons(s);     // show the plan outline immediately, even while researching
   if(s.status==='researching'){
-    if(!ACT_RESEARCH){Activity.start(RESEARCH_STEPS);ACT_RESEARCH=true;}   // narrate the wait in the footer
+    if(!ACT_RESEARCH){Activity.start(RESEARCH_STEPS,2300);ACT_RESEARCH=true;}   // spew the wait in the footer
     document.getElementById('node').innerHTML='<div class=node><span class=eyebrow>Working</span><h3>Researching + grading your market…</h3><p class=lead>Pulling sources and grading every number, so vendor spin gets labeled, not laundered. About 1 to 2 minutes. Watch your plan fill in on the left.</p></div>';
     say('Researching and grading your market.');
     setTimeout(poll,2500);return;
@@ -1131,12 +1138,17 @@ function renderAddons(s){
   document.getElementById('adisc').textContent='AI composite advisors — not real people, not professional advice.';
   box.dataset.done='1';
 }
+let VET_OPEN=true, VET_STEPPED=false;
+function toggleVet(){VET_OPEN=!VET_OPEN;const c=document.getElementById('vetcard');if(c){c.classList.toggle('open',VET_OPEN);const h=c.querySelector('.vethead');if(h)h.setAttribute('aria-expanded',String(VET_OPEN));}}
 function renderVet(s){
   const el=document.getElementById('vet'); if(!el)return;
   const v=s.vetting, sh=s.shaped;
   if(!v&&!sh){el.innerHTML='';return;}
+  if(s.step===0&&!s.done){VET_STEPPED=false;}                 // back at the first part → eligible to auto-collapse again
+  else if(!VET_STEPPED){VET_OPEN=false;VET_STEPPED=true;}     // collapse once they click through to the next part
   const verdict=(v&&v.verdict)||'';
   const head=verdict?`<span class="verdict ${esc(verdict)}">${esc(verdict)}</span>`:'';
+  const react=(v&&v.reaction)?`<p class=filgreact>${esc(v.reaction)}</p>`:'';
   const thesis=sh&&sh.thesis?`<p class=thesis><b>Your focus:</b> ${esc(sh.thesis)}</p>`:'';
   const edge=sh&&sh.founder_edge?`<p class=vrow><b>Your edge:</b> ${esc(sh.founder_edge)}</p>`:'';
   const alts=(sh&&sh.wedges_considered&&sh.wedges_considered.length>1)?`<p class=vrow><b>Also considered:</b> ${esc(sh.wedges_considered.slice(1).join(' · '))}</p>`:'';
@@ -1144,7 +1156,8 @@ function renderVet(s){
   const risk=v&&v.biggest_risk?`<p class=vrow><b>Biggest risk:</b> ${esc(v.biggest_risk)}</p>`:'';
   const test=v&&v.first_test?`<p class=vrow><b>Cheapest first test:</b> ${esc(v.first_test)}</p>`:'';
   const cq=(sh&&sh.clarifying_question)?`<p class=vrow>🤔 ${esc(sh.clarifying_question)}</p>`:'';
-  el.innerHTML=`<div class=vet><div class=vhead>${head}<h3>Before we build — the honest read</h3></div>${thesis}${edge}${alts}${reason}${risk}${test}${cq}</div>`;
+  el.innerHTML=`<div class="vet${VET_OPEN?' open':''}" id=vetcard><button type=button class=vethead onclick=toggleVet() aria-expanded="${VET_OPEN}">${head}<span class=vtitle>Before we build: the honest read</span><span class=vcaret aria-hidden=true>▸</span></button>`+
+    `<div class=vetbody>${react}${thesis}${edge}${alts}${reason}${risk}${test}${cq}</div></div>`;
 }
 // Board selection state (keys); seeded from the default board, editable in intake + sidebar.
 let BOARD=(CFG.defaultBoard||[]).slice();
@@ -1283,33 +1296,38 @@ async function submitDrawer(){
 // Any AI wait feeds it honest, real-stage lines: Activity.start([...]) → Activity.done('…') (or
 // Activity.stop() on error). It auto-advances through the steps and holds on the last until done.
 const Activity={
-  steps:[], i:0, timer:null,
-  start(steps){
+  steps:[], i:0, timer:null, interval:1600,
+  start(steps,interval){
     this.stop(true);
-    this.steps=(steps||[]).slice(); this.i=0;
+    this.steps=(steps||[]).slice(); this.i=0; this.interval=interval||1600;
     const a=document.getElementById('activity'); if(!a)return;
     a.classList.remove('ok'); a.classList.add('show'); a.setAttribute('aria-hidden','false');
-    this._render();
-    this.timer=setInterval(()=>{ if(this.i<this.steps.length-1){this.i++;this._render();} },1700);
+    document.getElementById('activity-log').innerHTML='';
+    this._reveal();
+    this.timer=setInterval(()=>{ if(this.i<this.steps.length-1){this.i++;this._reveal();} else {clearInterval(this.timer);this.timer=null;} }, this.interval);
   },
-  push(line){ const el=document.getElementById('activity-line'); if(el)el.textContent=line; },
-  _render(){
-    const el=document.getElementById('activity-line'), pr=document.getElementById('activity-prog');
-    if(el)el.textContent=this.steps[this.i]||'';
-    if(pr)pr.textContent=this.steps.length>1?((this.i+1)+' / '+this.steps.length):'';
+  _reveal(){
+    const log=document.getElementById('activity-log'); if(!log)return;
+    const prev=log.querySelector('.aline.active'); if(prev){prev.classList.remove('active');prev.classList.add('done');}
+    const li=document.createElement('div'); li.className='aline active';
+    li.innerHTML='<span class=aglyph aria-hidden=true></span><span class=atext></span>';
+    li.querySelector('.atext').textContent=this.steps[this.i]||'';
+    log.appendChild(li);
+    while(log.children.length>5)log.removeChild(log.firstChild);
   },
+  push(line){ this.steps.push(line); this.i=this.steps.length-1; this._reveal(); },
   done(msg){
     clearInterval(this.timer); this.timer=null;
-    const a=document.getElementById('activity'); if(!a)return;
+    const a=document.getElementById('activity'),log=document.getElementById('activity-log'); if(!a)return;
     a.classList.add('ok');
-    const el=document.getElementById('activity-line'); if(el)el.textContent=msg||'Done.';
-    const pr=document.getElementById('activity-prog'); if(pr)pr.textContent='';
-    setTimeout(()=>this._hide(),1200);
+    const prev=log&&log.querySelector('.aline.active'); if(prev){prev.classList.remove('active');prev.classList.add('done');}
+    if(msg&&log){const li=document.createElement('div');li.className='aline done';li.innerHTML='<span class=aglyph aria-hidden=true></span><span class=atext></span>';li.querySelector('.atext').textContent=msg;log.appendChild(li);while(log.children.length>5)log.removeChild(log.firstChild);}
+    setTimeout(()=>this._hide(),1400);
   },
   stop(immediate){ clearInterval(this.timer); this.timer=null; if(immediate)this._hide(); },
-  _hide(){ const a=document.getElementById('activity'); if(a){a.classList.remove('show');a.setAttribute('aria-hidden','true');} }
+  _hide(){ const a=document.getElementById('activity'); if(a){a.classList.remove('show');a.setAttribute('aria-hidden','true');const l=document.getElementById('activity-log');if(l)l.innerHTML='';} }
 };
-const RESEARCH_STEPS=["Focusing your idea into one sharp thesis","Spinning up research across the web","Grading every source for credibility","Re-sourcing the headline stats","Drafting your first offer"];
+const RESEARCH_STEPS=["Focusing your idea into one sharp thesis","Spinning up research across the web","Pulling sources on the market and competition","Grading every source for credibility","Flagging vendor-marketing spin","Re-sourcing the headline stats to primary sources","Scoring demand, market, and willingness to pay","Drafting your first offer"];
 const PDF_STEPS=["Applying your board's input","Pulling your graded evidence","Building the decision matrix","Laying out a modern, on-brand design","Typesetting your PDF"];
 async function download(){
   Activity.start(PDF_STEPS);
@@ -1410,7 +1428,7 @@ async function upgrade(){
   }catch(e){toast('Network error starting checkout.','err');}
 }
 function show(id){['intake','workspace','profile'].forEach(x=>{const e=document.getElementById(x);if(e)e.style.display=(x===id?(x==='workspace'?'grid':'block'):'none');});}
-function newPlan(){SIDEBAR_PHASE=null;ACT_RESEARCH=false;Activity.stop(true);closeViewer();show('intake');renderBoardPick();gateIntake();}
+function newPlan(){SIDEBAR_PHASE=null;ACT_RESEARCH=false;VET_OPEN=true;VET_STEPPED=false;Activity.stop(true);closeViewer();show('intake');renderBoardPick();gateIntake();}
 async function showPlans(){
   let d; try{const r=await fetch('/api/plans',{headers:authHeaders()});if(!r.ok){toast('Sign in to see your plans.','err');return;}d=await r.json();}catch(e){toast('Network error.','err');return;}
   show('profile');renderPlans(d);
@@ -1429,7 +1447,7 @@ function renderPlans(d){
     `<div style="margin:10px 0 16px"><button onclick=newPlan()>+ New plan</button></div>`+rows+integ+`</div>`;
 }
 async function resume(id){
-  SID=id;show('workspace');SESSION_BOARD=null;SIDEBAR_PHASE=null;
+  SID=id;show('workspace');SESSION_BOARD=null;SIDEBAR_PHASE=null;VET_OPEN=true;VET_STEPPED=false;
   const ab=document.getElementById('addons');if(ab)delete ab.dataset.done;
   closeDrawer();closeViewer();
   try{const r=await fetch('/api/plan/'+SID,{headers:authHeaders()});const s=await r.json();render(s);if(s.status==='researching')poll();}catch(e){document.getElementById('err2').textContent='Could not load that plan.';}

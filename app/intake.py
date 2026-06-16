@@ -34,6 +34,7 @@ _MOCK_SHAPED = {
 }
 
 _MOCK_VET = {
+    "reaction": "Cool idea. Let's turn it into something you can actually sell.",
     "verdict": "pursue",
     "scores": {"demand": 4, "market": 4, "willingness_to_pay": 4, "founder_fit": 5, "execution_risk": 3},
     "reason": "Real, proven demand for outsourced sales and a clear founder edge; the risk is "
@@ -87,6 +88,7 @@ def vet(idea: str, shaped: dict, research: dict | None = None, mock: bool = Fals
     if verdict not in ("pursue", "pivot", "kill"):
         verdict = "pursue"
     return {
+        "reaction": (data.get("reaction") or "").strip(),
         "verdict": verdict,
         "scores": data.get("scores") or {},
         "reason": (data.get("reason") or "").strip(),
@@ -104,7 +106,7 @@ if __name__ == "__main__":  # self-test (mock, no API)
     assert len(shaped["wedges_considered"]) >= 2               # shows it chose, didn't blend
     vetting, c2 = vet(grab_bag, shaped, None, mock=True)
     assert vetting["verdict"] in ("pursue", "pivot", "kill")
-    assert vetting["scores"]["founder_fit"] == 5 and vetting["first_test"]
+    assert vetting["scores"]["founder_fit"] == 5 and vetting["first_test"] and vetting["reaction"]
     # skill bodies are real and used as the system blocks
     assert "Frankenstein" in skills.system("intake") and "kill-gate" in skills.system("vet")
     print("intake.py self-test OK — shape + vet (mock); verdict:", vetting["verdict"])
