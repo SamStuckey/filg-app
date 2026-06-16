@@ -36,22 +36,26 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from urllib.parse import urlparse
 
 import anthropic
+
+import provider
+from provider import HAIKU, SONNET  # canonical model ids (defined in provider to avoid a cycle)
 
 from source_credibility_gate import (
     classify_domain,
     TIER_PRIMARY, TIER_RESEARCH, TIER_VENDOR, TIER_FORUM, TIER_UNKNOWN,
 )
 
-# --- Models (lean routing: research=Haiku, synth=Sonnet) ---------------------
-HAIKU = "claude-haiku-4-5"
-SONNET = "claude-sonnet-4-6"
-
 # --- Prices: USD per 1M tokens (input, output) -------------------------------
+# Keyed by FILG's hosted model ids only. BYOK runs use a user's key (provider.bills_filg=False),
+# so their tokens are the user's spend, not FILG's — an unknown model id resolves to $0 here on
+# purpose (PRICES.get below), keeping BYOK runs off FILG's daily kill switch.
 PRICES = {HAIKU: (1.0, 5.0), SONNET: (3.0, 15.0)}
 WEB_SEARCH_PRICE = 10.0 / 1000  # $10 per 1k searches (Anthropic server tool)
+OPENROUTER_WEB_MAX = 4          # results per request for OpenRouter's web plugin
 
 # web_search defaults to programmatic calling, which Haiku can't do — pin to direct.
 WEB_SEARCH_TOOL = {"type": "web_search_20260209", "name": "web_search",
@@ -78,14 +82,14 @@ class Ledger:
         the ledger is process-global. (Production: use a per-request ledger.)"""
         total = 0.0
         for _stage, model, tin, tout, searches in self.rows[start:]:
-            pin, pout = PRICES[model]
+            pin, pout = PRICES.get(model, (0.0, 0.0))  # BYOK model ids → $0 to FILG (user's spend)
             total += tin / 1e6 * pin + tout / 1e6 * pout + searches * WEB_SEARCH_PRICE
         return total
 
     def breakdown(self) -> dict:
         agg: dict[str, float] = {}
         for stage, model, tin, tout, searches in self.rows:
-            pin, pout = PRICES[model]
+            pin, pout = PRICES.get(model, (0.0, 0.0))
             c = tin / 1e6 * pin + tout / 1e6 * pout + searches * WEB_SEARCH_PRICE
             agg[stage] = agg.get(stage, 0.0) + c
         return agg
@@ -100,12 +104,30 @@ LEDGER = Ledger()
 # --- Low-level call with server-tool resume ----------------------------------
 def call(stage: str, model: str, prompt: str, *, max_tokens: int = 1500,
          tools: list | None = None, system: str | None = None, cache: bool = False) -> str:
-    """One logical turn. Resumes server-tool loops on pause_turn. Returns text.
+    """One logical turn. Returns text.
+
+    Routes to the active provider (provider.active()): the default/None path is the unchanged
+    Anthropic SDK (FILG's hosted key); a BYOK run binds an OpenRouter provider and we speak the
+    OpenAI-compatible Chat Completions format instead. The (claim, source_url) contract the gate
+    grades is identical either way.
 
     `system` is the stable instruction block (a skill body). Pass `cache=True` to mark it
     cache-eligible (prompt caching): the system prefix is identical across every run of a stage,
     so caching it reads at ~0.1× input price after the first call — the cheapest token win we have.
     """
+    prov = provider.active()
+    if prov is not None and prov.kind == "openai":
+        return _call_openai(prov, stage, model, prompt, max_tokens=max_tokens,
+                            tools=tools, system=system)
+    return _call_anthropic(prov, stage, model, prompt, max_tokens=max_tokens,
+                           tools=tools, system=system, cache=cache)
+
+
+def _call_anthropic(prov, stage: str, model: str, prompt: str, *, max_tokens: int,
+                    tools: list | None, system: str | None, cache: bool) -> str:
+    """The Anthropic path (Messages API). prov=None → the module-global client (legacy default)."""
+    cl = prov.client if prov is not None else client
+    model = prov.model_id(model) if prov is not None else model
     messages = [{"role": "user", "content": prompt}]
     text_parts: list[str] = []
     for _ in range(6):  # cap resume hops
@@ -116,7 +138,7 @@ def call(stage: str, model: str, prompt: str, *, max_tokens: int = 1500,
             kwargs["system"] = (
                 [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
                 if cache else system)
-        resp = client.messages.create(**kwargs)
+        resp = cl.messages.create(**kwargs)
         LEDGER.add(stage, model, resp.usage)
         text_parts.extend(b.text for b in resp.content if b.type == "text")
         if resp.stop_reason == "pause_turn":
@@ -124,6 +146,50 @@ def call(stage: str, model: str, prompt: str, *, max_tokens: int = 1500,
             continue
         break
     return "\n".join(p for p in text_parts if p).strip()
+
+
+def _is_web_search_tool(t) -> bool:
+    return isinstance(t, dict) and str(t.get("type", "")).startswith("web_search")
+
+
+def _call_openai(prov, stage: str, model: str, prompt: str, *, max_tokens: int,
+                 tools: list | None, system: str | None) -> str:
+    """The OpenAI-compatible path (OpenRouter). Translates the Anthropic-shaped call:
+
+    - `system` becomes a leading system message.
+    - an Anthropic `web_search` tool in `tools` becomes OpenRouter's provider-agnostic web plugin
+      (Exa-backed, returns cited URLs the model folds into its JSON). Prompt caching is implicit on
+      OpenRouter, so there's no explicit cache flag.
+
+    NOTE: validate the web-plugin wire format against OpenRouter live before trusting the live BYOK
+    path — their docs were not fetchable when this was written; this follows the documented shape.
+    """
+    msgs: list[dict] = []
+    if system:
+        msgs.append({"role": "system", "content": system})
+    msgs.append({"role": "user", "content": prompt})
+    kwargs = dict(model=prov.model_id(model), max_tokens=max_tokens, messages=msgs)
+    if tools and any(_is_web_search_tool(t) for t in tools):
+        # OpenRouter web plugin: real-time, cited search for any model. The model still emits the
+        # source_url JSON our research prompts ask for; the gate grades those URLs unchanged.
+        kwargs["extra_body"] = {"plugins": [{"id": "web", "max_results": OPENROUTER_WEB_MAX}]}
+    resp = prov.client.chat.completions.create(**kwargs)
+    LEDGER.add(stage, prov.model_id(model), _openai_usage(resp))
+    choice = resp.choices[0] if resp.choices else None
+    text = (getattr(getattr(choice, "message", None), "content", None) or "") if choice else ""
+    return text.strip()
+
+
+def _openai_usage(resp):
+    """Adapt an OpenAI/OpenRouter usage object to what Ledger.add expects (input/output tokens +
+    server_tool_use.web_search_requests). Counts are best-effort; BYOK cost is the user's, so the
+    ledger value is informational and resolves to $0 against FILG's budget."""
+    u = getattr(resp, "usage", None)
+    return SimpleNamespace(
+        input_tokens=getattr(u, "prompt_tokens", 0) or 0,
+        output_tokens=getattr(u, "completion_tokens", 0) or 0,
+        server_tool_use=None,
+    )
 
 
 def judge(c: "Claim") -> str:
@@ -374,7 +440,9 @@ def main() -> int:
     # 2. RESEARCH fan-out (parallel)
     print("\nRESEARCH — Haiku fan-out (live web_search, parallel)…")
     with ThreadPoolExecutor(max_workers=3) as ex:
-        lane_claims = list(ex.map(lambda ln: research_lane(idea, ln), lanes))
+        # bound() re-binds the active provider inside each worker (threads don't inherit contextvars),
+        # so a BYOK run's fan-out still runs on the user's key.
+        lane_claims = list(ex.map(provider.bound(lambda ln: research_lane(idea, ln)), lanes))
     claims = [c for lane in lane_claims for c in lane]
     quant = [c for c in claims if c.quantitative]
     print(f"  {len(claims)} claims gathered ({len(quant)} quantitative).")
@@ -403,7 +471,7 @@ def main() -> int:
     print("\nRE-SEARCH — forcing a primary/neutral cite for each flagged claim…")
     rescues: list[Rescue] = []
     with ThreadPoolExecutor(max_workers=4) as ex:
-        results = list(ex.map(lambda v: research_primary(v.claim), flagged))
+        results = list(ex.map(provider.bound(lambda v: research_primary(v.claim)), flagged))
     for v, r in zip(flagged, results):
         r.original = v
         rescues.append(r)

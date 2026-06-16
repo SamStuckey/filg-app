@@ -49,8 +49,9 @@ import board     # noqa: E402 — Board of Directors orchestration
 import gibberish  # noqa: E402 — pre-LLM "is this even an idea?" gate (saves a run, hands back a roast)
 import plan_pdf   # noqa: E402 — styled PDF generation (synthesis + fpdf2 render)
 import advisor    # noqa: E402 — "chat with your plan" (grounded advisory layer)
+import provider   # noqa: E402 — BYOK: per-run LLM provider (FILG's key vs a user's OpenRouter key)
 
-from . import auth, billing, planner, store  # noqa: E402 — persistence, auth, billing, plan-builder
+from . import auth, billing, keys, planner, store  # noqa: E402 — persistence, auth, billing, BYOK keys
 
 MOCK = os.environ.get("FILG_MOCK") == "1"
 # FILG_PAID_EMAILS is now only a manual comp/override; real paid status comes from billing.is_paid.
@@ -61,6 +62,43 @@ def _is_paid(email: str, verified: bool) -> bool:
     """Paid = a verified user with a live subscription, OR an allowlisted comp. An unverified
     (free-tier, email-only) caller can't be billed-paid, but the comp allowlist still applies."""
     return (verified and billing.is_paid(email)) or (email in PAID)
+
+
+def _is_byok(user: str) -> bool:
+    """True iff this user runs on their own key (BYOK configured + a key saved)."""
+    return bool(user and keys.enabled() and keys.has_key(user))
+
+
+def _provider_for(user: str):
+    """The provider a session should run on: the user's saved OpenRouter key, else None (FILG's key).
+    provider.use(None) is a no-op, so callers can wrap unconditionally — with BYOK off this is inert."""
+    if not (user and keys.enabled()):
+        return None
+    key = keys.get_key(user)
+    return provider.openrouter_provider(key) if key else None
+
+
+def _meter(user: str, cost: float) -> None:
+    """Record spend against FILG's daily budget — but ONLY for non-BYOK runs. A BYOK run is the
+    user's spend (and resolves to ~$0 on FILG's ledger anyway), so it never touches the kill switch."""
+    if not _is_byok(user):
+        usage.record_spend(cost)
+
+
+def _needs_key(user: str) -> bool:
+    """BYOK model: when BYOK is on and this user has no saved key, they're behind the wall — every
+    API action past the one free welcome plan requires their own key."""
+    return bool(keys.enabled() and not _is_byok(user))
+
+
+def _key_wall(session: dict):
+    """402 if the session owner must bring a key before this (API-calling) action; else None.
+    The one free welcome plan is granted at /api/plan/start, so every later engine call is walled."""
+    if _needs_key(session.get("user")):
+        return JSONResponse(
+            {"error": "Add your OpenRouter key to keep building.", "needKey": True}, status_code=402)
+    return None
+
 
 app = FastAPI(title="FILG")
 RUN_LOCK = threading.Lock()         # serialize runs so per-run cost metering stays accurate
@@ -137,6 +175,67 @@ async def api_checkout(request: Request):
     except billing.StripeError as e:
         return JSONResponse({"error": str(e)}, status_code=502)
     return {"url": url}
+
+
+def _validate_key(provider_name: str, api_key: str) -> tuple[bool, str]:
+    """One cheap call confirms a BYOK key works before we store it. Skipped in mock mode (no spend)."""
+    if provider_name not in keys.PROVIDERS:
+        return False, "Unsupported provider."
+    if len(api_key) < 8:
+        return False, "That doesn't look like an API key."
+    if MOCK:
+        return True, "ok (mock)"
+    try:
+        import provider as prov_mod
+        import pipeline
+        with prov_mod.use(prov_mod.openrouter_provider(api_key)):
+            out = pipeline.call("key_validate", pipeline.HAIKU, "Reply with: OK", max_tokens=5)
+        return (True, "ok") if out else (False, "The key didn't return a response.")
+    except Exception:  # noqa: BLE001 — never surface provider internals to the client
+        return False, "That key didn't work. Check it and try again."
+
+
+@app.get("/api/key")
+async def api_key_get(request: Request):
+    """BYOK status for the current user: whether the feature is on, plus any saved key (masked)."""
+    if not keys.enabled():
+        return {"enabled": False}
+    authed = auth.user_from_request(request)
+    if not authed or not authed["email"]:
+        return {"enabled": True, "signed_in": False, "key": None}
+    return {"enabled": True, "signed_in": True, "key": keys.key_meta(authed["email"]),
+            "providers": list(keys.PROVIDERS)}
+
+
+@app.post("/api/key")
+async def api_key_save(request: Request):
+    """Validate a user's API key with one cheap call, then store it ENCRYPTED. Requires sign-in."""
+    if not keys.enabled():
+        return JSONResponse({"error": "BYOK isn't configured yet."}, status_code=503)
+    authed = auth.user_from_request(request)
+    if not authed or not authed["email"]:
+        return JSONResponse({"error": "Sign in first."}, status_code=401)
+    body = await request.json()
+    provider_name = (body.get("provider") or "openrouter").strip()
+    api_key = (body.get("key") or "").strip()
+    ok, why = _validate_key(provider_name, api_key)
+    if not ok:
+        return JSONResponse({"error": why}, status_code=400)
+    try:
+        meta = keys.save_key(authed["email"], provider_name, api_key)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    return {"ok": True, "key": meta}
+
+
+@app.post("/api/key/remove")
+async def api_key_remove(request: Request):
+    """Forget a user's stored key."""
+    authed = auth.user_from_request(request)
+    if not authed or not authed["email"]:
+        return JSONResponse({"error": "Sign in first."}, status_code=401)
+    keys.delete_key(authed["email"])
+    return {"ok": True}
 
 
 @app.post("/api/stripe/webhook")
@@ -310,10 +409,12 @@ def _plan_research(session_id: str, idea: str, user: str) -> None:
         def on_progress(line: str) -> None:  # write each real milestone/receipt so the UI can spew it live
             progress.append(line)
             store.plan_save(session_id, progress=list(progress))
-        with RUN_LOCK:
+        prov = _provider_for(user)   # BYOK: run the whole pre-build pass on the user's key if they have one
+        with RUN_LOCK, provider.use(prov):
             prep = planner.prepare(idea, mock=MOCK, on_progress=on_progress)  # intake → research → vet → draft
-        usage.record_run(user, prep["research_cost"])           # the metered free run + daily total
-        usage.record_spend(prep["cost"] - prep["research_cost"])  # intake + vet + first draft → daily
+        if prov is None:   # FILG's key → meter the free run; BYOK is the user's spend, not metered
+            usage.record_run(user, prep["research_cost"])           # the metered free run + daily total
+            usage.record_spend(prep["cost"] - prep["research_cost"])  # intake + vet + first draft → daily
         root = _new_node(planner.root_node(prep["proposal"]), None)  # seed the decision tree's root
         tree = {"nodes": {root["id"]: root}, "active": root["id"]}
         store.plan_save(session_id, status="building", research=prep["research"], step=0,
@@ -335,9 +436,24 @@ async def api_plan_start(request: Request):
     user, verified = _identity(request, body.get("email"))
     if "@" not in user:
         return JSONResponse({"error": "Enter an email so we can save your plan."}, status_code=400)
-    allowed, reason = usage.can_run(user, is_paid=_is_paid(user, verified))
-    if not allowed:
-        return JSONResponse({"error": reason, "upgrade": True}, status_code=402)
+    if _is_byok(user):
+        pass   # has a key → unlimited plans on their own spend
+    elif keys.enabled():
+        # BYOK on, no key: one free welcome plan, then they must bring a key. The daily kill switch
+        # still guards FILG's spend on these free runs.
+        if usage.free_used(user):
+            return JSONResponse(
+                {"error": "That was your free plan. Add your OpenRouter key to build as many as you want.",
+                 "needKey": True}, status_code=402)
+        if usage.kill_switch_tripped():
+            return JSONResponse(
+                {"error": "FILG's free-run budget for today is maxed. Add your key to run now.",
+                 "needKey": True}, status_code=402)
+    else:
+        # BYOK off (no FILG_KEY_SECRET — dev/local): keep the legacy free-cap behavior so dev works.
+        allowed, reason = usage.can_run(user, is_paid=_is_paid(user, verified))
+        if not allowed:
+            return JSONResponse({"error": reason, "upgrade": True}, status_code=402)
     directors = [k for k in (body.get("directors") or []) if k in personas.KEYS]  # optional board
     sid = uuid.uuid4().hex[:12]
     store.plan_create(sid, user, idea, directors=directors)
@@ -372,6 +488,8 @@ async def api_plan_respond(sid: str, request: Request):
     s = store.plan_get(sid)
     if not s or not _owns(request, s):
         return JSONResponse({"error": "unknown session"}, status_code=404)
+    if (wall := _key_wall(s)):
+        return wall
     if s["status"] != "building":
         return JSONResponse({"error": f"session is {s['status']}"}, status_code=409)
     body = await request.json()
@@ -379,14 +497,14 @@ async def api_plan_respond(sid: str, request: Request):
     if choice not in planner.CHOICES:
         return JSONResponse({"error": "pick yes_and / not_quite / okay_but"}, status_code=400)
     try:
-        with RUN_LOCK:
+        with RUN_LOCK, provider.use(_provider_for(s.get("user"))):
             # If a board is set it vets each finalized section and its takeaway steers the next draft
             # (planner.advance runs the board inline). cost includes any board review.
             upd = planner.advance(s, choice, body.get("note"), mock=MOCK,
                                   directors=s.get("directors") or None)
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"error": str(e)}, status_code=500)
-    usage.record_spend(round((upd.get("cost", 0) or 0) - (s.get("cost") or 0), 4))  # draft + board review
+    _meter(s.get("user"), round((upd.get("cost", 0) or 0) - (s.get("cost") or 0), 4))  # draft + board review
     store.plan_save(sid, **upd)
     return _plan_state(store.plan_get(sid))
 
@@ -398,6 +516,8 @@ async def api_plan_next(sid: str, request: Request):
     s = store.plan_get(sid)
     if not s or not _owns(request, s):
         return JSONResponse({"error": "unknown session"}, status_code=404)
+    if (wall := _key_wall(s)):
+        return wall
     body = await request.json()
     feedback = (body.get("feedback") or "").strip() or None
     tree = _ensure_tree(s)
@@ -405,7 +525,7 @@ async def api_plan_next(sid: str, request: Request):
     if active["step"] >= planner.N:
         return JSONResponse({"error": "This plan is already complete."}, status_code=409)
     try:
-        with RUN_LOCK:
+        with RUN_LOCK, provider.use(_provider_for(s.get("user"))):
             child, cost = planner.forward(planner._working_idea(s), s["research"], active, feedback,
                                           directors=s.get("directors") or None,
                                           founder=planner._founder(s), mock=MOCK)
@@ -415,7 +535,7 @@ async def api_plan_next(sid: str, request: Request):
     tree["nodes"][node["id"]] = node
     active.setdefault("children", []).append(node["id"])
     tree["active"] = node["id"]
-    usage.record_spend(cost)
+    _meter(s.get("user"), cost)
     store.plan_save(sid, tree=tree, cost=round((s.get("cost") or 0) + cost, 4), **_mirror(tree))
     return _plan_state(store.plan_get(sid))
 
@@ -428,6 +548,8 @@ async def api_plan_back(sid: str, request: Request):
     s = store.plan_get(sid)
     if not s or not _owns(request, s):
         return JSONResponse({"error": "unknown session"}, status_code=404)
+    if (wall := _key_wall(s)):
+        return wall
     body = await request.json()
     feedback = (body.get("feedback") or "").strip()
     if not feedback:
@@ -441,7 +563,7 @@ async def api_plan_back(sid: str, request: Request):
                             status_code=400)
     prev = tree["nodes"][active["parent"]]   # the previous step's node — the one we re-draft
     try:
-        with RUN_LOCK:
+        with RUN_LOCK, provider.use(_provider_for(s.get("user"))):
             sib, cost = planner.rebranch(planner._working_idea(s), s["research"], prev, feedback,
                                          founder=planner._founder(s), mock=MOCK)
     except Exception as e:  # noqa: BLE001
@@ -451,7 +573,7 @@ async def api_plan_back(sid: str, request: Request):
     if prev.get("parent"):
         tree["nodes"][prev["parent"]].setdefault("children", []).append(node["id"])
     tree["active"] = node["id"]
-    usage.record_spend(cost)
+    _meter(s.get("user"), cost)
     store.plan_save(sid, tree=tree, cost=round((s.get("cost") or 0) + cost, 4), **_mirror(tree))
     return _plan_state(store.plan_get(sid))
 
@@ -479,17 +601,19 @@ async def api_plan_ask(sid: str, request: Request):
     s = store.plan_get(sid)
     if not s or not _owns(request, s):
         return JSONResponse({"error": "unknown session"}, status_code=404)
+    if (wall := _key_wall(s)):
+        return wall
     body = await request.json()
     archetype = body.get("archetype")
     if archetype not in planner.ARCHETYPE_KEYS:
         return JSONResponse({"error": "pick an advisor"}, status_code=400)
     try:
-        with RUN_LOCK:
+        with RUN_LOCK, provider.use(_provider_for(s.get("user"))):
             res, cost = planner.ask_expert(s["idea"], s.get("files") or {}, archetype,
                                            body.get("question") or "", mock=MOCK)
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"error": str(e)}, status_code=500)
-    usage.record_spend(cost)
+    _meter(s.get("user"), cost)
     return res
 
 
@@ -502,6 +626,8 @@ async def api_plan_board(sid: str, request: Request):
     s = store.plan_get(sid)
     if not s or not _owns(request, s):
         return JSONResponse({"error": "unknown session"}, status_code=404)
+    if (wall := _key_wall(s)):
+        return wall
     body = await request.json()
     picked = body.get("directors")
     directors = [k for k in (picked or s.get("directors") or personas.DEFAULT_BOARD)
@@ -511,11 +637,11 @@ async def api_plan_board(sid: str, request: Request):
     work_idea = planner._working_idea(s)
     plan_text = planner.bundle_markdown(work_idea, s.get("files") or {})
     try:
-        with RUN_LOCK:
+        with RUN_LOCK, provider.use(_provider_for(s.get("user"))):
             res, cost = board.convene(work_idea, plan_text, question, directors, mock=MOCK)
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"error": str(e)}, status_code=500)
-    usage.record_spend(cost)
+    _meter(s.get("user"), cost)
     if picked:  # persist a freshly chosen board so later steps are vetted by it
         store.plan_save(sid, directors=directors)
     return res
@@ -530,6 +656,8 @@ async def api_plan_chat(sid: str, request: Request):
         return JSONResponse({"error": "unknown session"}, status_code=404)
     if s["status"] in ("researching", "error"):
         return JSONResponse({"error": "Finish building the plan first."}, status_code=409)
+    if (wall := _key_wall(s)):
+        return wall
     body = await request.json()
     message = (body.get("message") or "").strip()
     if not message:
@@ -538,13 +666,13 @@ async def api_plan_chat(sid: str, request: Request):
         return JSONResponse({"error": "Keep it under 2000 characters."}, status_code=400)
     history = list(s.get("chat") or [])
     try:
-        with RUN_LOCK:
+        with RUN_LOCK, provider.use(_provider_for(s.get("user"))):
             reply, cost = advisor.chat_reply(s, message, history=history, mock=MOCK)
     except Exception as e:  # noqa: BLE001
         traceback.print_exc()
         return JSONResponse({"error": str(e)}, status_code=500)
     history += [{"role": "user", "content": message}, {"role": "assistant", "content": reply}]
-    usage.record_spend(cost)  # chat is ongoing spend → counts toward the daily kill switch
+    _meter(s.get("user"), cost)  # FILG-key chat counts toward the daily kill switch; BYOK is the user's spend
     store.plan_save(sid, chat=history)
     return {"reply": reply, "messages": history}
 
@@ -607,14 +735,16 @@ async def api_plan_pdf(sid: str, request: Request):
         return JSONResponse({"error": "unknown session"}, status_code=404)
     if s["status"] != "done":
         return JSONResponse({"error": "plan isn't finished yet"}, status_code=400)
+    if (wall := _key_wall(s)):
+        return wall
     try:
-        with RUN_LOCK:
+        with RUN_LOCK, provider.use(_provider_for(s.get("user"))):
             plan, cost = plan_pdf.synthesize(s, mock=MOCK)
             data = plan_pdf.render(plan, style=(request.query_params.get("style") or "filg"))
     except Exception as e:  # noqa: BLE001
         traceback.print_exc()
         return JSONResponse({"error": f"Could not build the PDF: {e}"}, status_code=500)
-    usage.record_spend(cost)
+    _meter(s.get("user"), cost)
     fn = f"{_slug(s.get('idea'))}-business-plan.pdf"
     return Response(data, media_type="application/pdf",
                     headers={"Content-Disposition": f'attachment; filename="{fn}"'})
@@ -623,6 +753,7 @@ async def api_plan_pdf(sid: str, request: Request):
 @app.get("/", response_class=HTMLResponse)
 async def index():
     cfg = json.dumps({"authEnabled": auth.AUTH_ENABLED, "billingEnabled": billing.BILLING_ENABLED,
+                      "byokEnabled": keys.enabled(),
                       "supabaseUrl": os.environ.get("SUPABASE_URL", ""),
                       "supabaseAnon": (os.environ.get("SUPABASE_PUBLISHABLE_KEY")
                                        or os.environ.get("SUPABASE_ANON_KEY", "")),
@@ -649,6 +780,7 @@ h1.logo{font-size:30px;font-weight:800;letter-spacing:-.02em;margin:0}.logo span
 .sub{color:var(--muted);margin:0 0 18px;font-size:17px}
 textarea,input{width:100%;padding:14px 16px;border:1.5px solid var(--line);border-radius:14px;font:inherit;background:#fff;margin-bottom:12px}
 textarea:focus,input:focus{outline:none;border-color:var(--sky)}textarea{min-height:120px;resize:vertical}
+textarea::placeholder,input::placeholder{color:#B7B1BF;opacity:1}
 button{background:var(--coral);color:#fff;border:0;font:inherit;font-weight:800;padding:13px 22px;border-radius:14px;cursor:pointer;transition:transform .06s,filter .15s}
 button:hover{filter:brightness(1.04)}button:active{transform:translateY(1px)}button:disabled{opacity:.55;cursor:default}
 .intake{max-width:680px;margin:28px auto;text-align:center}.intake textarea,.intake input{text-align:left}
@@ -826,6 +958,8 @@ button:hover{filter:brightness(1.04)}button:active{transform:translateY(1px)}but
 .gbtn{display:flex;align-items:center;justify-content:center;gap:10px;background:#fff;color:var(--ink);border:1.5px solid var(--line);font-weight:800}
 .gicon{width:18px;height:18px;flex:none}
 .authgate .or{color:var(--muted);font-size:13px;margin:4px 0 0}
+.keysteps{margin:0 0 12px;padding-left:20px;color:var(--muted);font-size:13px;line-height:1.7}
+.keysteps a{color:var(--sky);font-weight:700}
 .plans{max-width:760px;margin:8px auto}.plans h2{font-size:24px;font-weight:800;margin:8px 0 4px}
 .pcard{display:flex;justify-content:space-between;align-items:center;gap:12px;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px 18px;margin-bottom:12px}
 .pcard .idea{font-weight:700;font-size:15px}.pcard .meta{color:var(--muted);font-size:12px;margin-top:2px}
@@ -915,11 +1049,26 @@ const CFG=window.FILG||{authEnabled:false,billingEnabled:false};
 let sb=null, session=null, me=null;
 function authHeaders(){return session?{'Authorization':'Bearer '+session.access_token}:{};}
 let SID=null;
+// ── BYOK: mandatory after the one free welcome plan ──────────────────────────
+let HAS_KEY=false, WELCOME_PROMPTED=false;
+async function loadKey(){            // refresh whether this user has a saved key
+  if(!CFG.byokEnabled){HAS_KEY=false;return;}
+  try{const r=await fetch('/api/key',{headers:authHeaders()});const d=await r.json();HAS_KEY=!!(d&&d.key);}
+  catch(e){HAS_KEY=false;}
+}
+function requireKey(){               // gate any API-calling button: no key → open the key modal
+  if(CFG.byokEnabled&&!HAS_KEY){keyModal();return false;}
+  return true;
+}
+function maybePromptKey(){           // welcome plan finished → require a key, opening the modal once per load
+  if(WELCOME_PROMPTED||!CFG.byokEnabled||HAS_KEY)return;
+  WELCOME_PROMPTED=true;keyModal();
+}
 async function start(){
   const idea=document.getElementById('idea').value.trim(), email=document.getElementById('email').value.trim();
   const go=document.getElementById('go'), err=document.getElementById('err');
   err.textContent='';document.getElementById('joke').innerHTML='';
-  if(CFG.authEnabled&&!session){gateIntake();return;}   // login required when auth is on
+  if(CFG.authEnabled&&!session){authModal();return;}   // signed-out → prompt them with the sign-in modal
   const body={idea}; if(!session) body.email=email;   // signed in → identity from the token
   if(BOARD.length) body.directors=BOARD;               // optional Board of Directors → vets each step
   go.disabled=true; go.textContent='Researching…'; ACT_RESEARCH=false;
@@ -927,7 +1076,7 @@ async function start(){
     const r=await fetch('/api/plan/start',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify(body)});
     const d=await r.json();
     if(d.gibberish){showJoke(d);go.disabled=false;go.textContent='Build my plan →';return;}  // nonsense → roast, no run
-    if(!r.ok){err.textContent=d.error||'Something went wrong.';if(d.upgrade)err.innerHTML+=' <a href=# onclick="upgrade();return false">Upgrade →</a>';go.disabled=false;go.textContent='Build my plan →';return;}
+    if(!r.ok){err.textContent=d.error||'Something went wrong.';if(d.needKey)err.innerHTML+=' <a href=# onclick="keyModal();return false">Add your key →</a>';else if(d.upgrade)err.innerHTML+=' <a href=# onclick="upgrade();return false">Upgrade →</a>';go.disabled=false;go.textContent='Build my plan →';return;}
     SID=d.id;
     document.getElementById('intake').style.display='none';
     document.getElementById('workspace').style.display='grid';
@@ -961,6 +1110,7 @@ async function poll(){
     Activity.done(s.status==='error'?'Hit a snag.':'Research graded. Building your plan.');ACT_RESEARCH=false;
   }
   render(s);
+  if(s.status!=='error')maybePromptKey();   // welcome plan is in → require a key to go further
 }
 let ACT_RESEARCH=false, ACT_PROG_N=0;
 function render(s){
@@ -1004,6 +1154,7 @@ function chatStart(btn){const t=document.getElementById('chatinput');if(t){t.val
 async function sendChat(){
   if(CHAT_BUSY)return;
   const t=document.getElementById('chatinput'),msg=(t.value||'').trim(); if(!msg)return;
+  if(!requireKey())return;
   const log=document.getElementById('chatlog'),btn=document.getElementById('chatsend'),st=document.getElementById('chatstart');
   CHAT_BUSY=true;btn.disabled=true;t.value='';if(st)st.innerHTML='';
   log.insertAdjacentHTML('beforeend',`<div class="cmsg user">${esc(msg)}</div><div class="cmsg bot md" id=chatthinking><span class=think>Thinking…</span></div>`);
@@ -1103,6 +1254,7 @@ function _aiRun(url,body,steps){
   ]).then(([r])=>r);
 }
 async function nextStep(){
+  if(!requireKey())return;
   const fb=(document.getElementById('feedback')||{}).value||'';
   _navBusy();
   const steps=[]; if(fb.trim())steps.push("Folding in your note");
@@ -1115,6 +1267,7 @@ async function nextStep(){
   }catch(e){Activity.stop(true);fbErr('Network error.');_navFree();}
 }
 async function backStep(){
+  if(!requireKey())return;
   const fb=((document.getElementById('feedback')||{}).value||'').trim();
   if(!fb){fbErr('Add a quick note on what to change, a note is required to go back a step.');const t=document.getElementById('feedback');if(t)t.focus();return;}
   _navBusy();
@@ -1297,6 +1450,7 @@ function uiPrompt(title,label,type,placeholder){
 }
 function _submitPrompt(){const i=document.getElementById('modalinput');_closeModal(i?i.value:null);}
 async function submitDrawer(){
+  if(!requireKey())return;
   const q=document.getElementById('drawerq').value, go=document.getElementById('drawer-go'),
         out=document.getElementById('drawer-out');
   out.style.display='block';
@@ -1367,6 +1521,7 @@ const Activity={
 const RESEARCH_STEPS=["Focusing your idea into one sharp thesis","Spinning up research across the web","Pulling sources on the market and competition","Grading every source for credibility","Flagging vendor-marketing spin","Re-sourcing the headline stats to primary sources","Scoring demand, market, and willingness to pay","Drafting your first offer"];
 const PDF_STEPS=["Applying your board's input","Pulling your graded evidence","Building the decision matrix","Laying out a modern, on-brand design","Typesetting your PDF"];
 async function download(){
+  if(!requireKey())return;
   Activity.start(PDF_STEPS);
   const minShow=new Promise(res=>setTimeout(res,2600));   // let the sequence breathe (covers fast mock runs)
   try{
@@ -1424,29 +1579,89 @@ function renderAuth(){
   if(sb&&session){
     const paid=me&&me.paid; bar.style.display='';
     bar.innerHTML=`<button class=link onclick=showPlans()>My plans</button>`+
+      (CFG.byokEnabled?`<button class=link onclick=keyModal()>🔑 Your key</button>`:'')+
       `<span class=who>${esc(session.user.email)}${paid?' · <b>Operator</b>':''}</span>`+
       (!paid&&CFG.billingEnabled?`<button class="link up" onclick=upgrade()>Upgrade, $39/mo</button>`:'')+
       `<button class=link onclick=signout()>Sign out</button>`;
-  }else if(sb){bar.style.display='';bar.innerHTML=`<button class=link onclick=signinEmail()>Sign in</button>`;}
+  }else if(sb){bar.style.display='';bar.innerHTML=`<button class=link onclick=authModal()>Log in / Sign up</button>`;}
   else{bar.style.display='none';}
   gateIntake();
 }
 function gateIntake(){
+  // Auth options no longer live on the page. The prompt box + Build button always show; a signed-out
+  // user picks an idea, hits Build, and start() opens the sign-in modal. The email field is only for
+  // the auth-off (free/dev) path — when auth is on, identity comes from the token after the modal.
   const gate=document.getElementById('authgate'),email=document.getElementById('email'),go=document.getElementById('go');
-  if(!gate)return;
-  if(CFG.authEnabled&&!session){
-    email.style.display='none';go.style.display='none';
-    gate.innerHTML=`<div class=authgate>`+
-      (CFG.supabaseUrl?`<button class=gbtn onclick=signinGoogle()><svg class=gicon viewBox="0 0 18 18" aria-hidden=true><path fill="#4285F4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.92c1.71-1.57 2.68-3.89 2.68-6.62z"></path><path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.92-2.26c-.81.54-1.84.86-3.04.86-2.34 0-4.32-1.58-5.03-3.7H.96v2.33A9 9 0 0 0 9 18z"></path><path fill="#FBBC05" d="M3.97 10.72a5.4 5.4 0 0 1 0-3.44V4.95H.96a9 9 0 0 0 0 8.1l3.01-2.33z"></path><path fill="#EA4335" d="M9 3.58c1.32 0 2.5.45 3.44 1.35l2.58-2.58C13.46.9 11.43 0 9 0A9 9 0 0 0 .96 4.95l3.01 2.33C4.68 5.16 6.66 3.58 9 3.58z"></path></svg>Continue with Google</button>`:'')+
-      `<button class=gbtn onclick=signinEmail()>✉️ Email me a sign-in link</button>`+
-      `<p class=or>Free to start, sign in so your plans save to your profile.</p></div>`;
-  }else{gate.innerHTML='';go.style.display='';email.style.display=CFG.authEnabled?'none':'';}
+  if(go)go.style.display='';
+  if(email)email.style.display=CFG.authEnabled?'none':'';
+  if(gate)gate.innerHTML='';
+}
+const GOOGLE_SVG=`<svg class=gicon viewBox="0 0 18 18" aria-hidden=true><path fill="#4285F4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.92c1.71-1.57 2.68-3.89 2.68-6.62z"></path><path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.92-2.26c-.81.54-1.84.86-3.04.86-2.34 0-4.32-1.58-5.03-3.7H.96v2.33A9 9 0 0 0 9 18z"></path><path fill="#FBBC05" d="M3.97 10.72a5.4 5.4 0 0 1 0-3.44V4.95H.96a9 9 0 0 0 0 8.1l3.01-2.33z"></path><path fill="#EA4335" d="M9 3.58c1.32 0 2.5.45 3.44 1.35l2.58-2.58C13.46.9 11.43 0 9 0A9 9 0 0 0 .96 4.95l3.01 2.33C4.68 5.16 6.66 3.58 9 3.58z"></path></svg>`;
+function authModal(){
+  saveIdea();   // keep the typed idea through the OAuth redirect / email round-trip
+  document.getElementById('modal-title').textContent='Save your plan';
+  document.getElementById('modal-body').innerHTML=
+    `<p class=or style="margin:0 0 12px">Sign in so your plan saves to your profile. Free to start.</p>`+
+    `<div class=authgate>`+
+    (CFG.supabaseUrl?`<button class=gbtn onclick="authGo('google')">${GOOGLE_SVG}Continue with Google</button>`:'')+
+    `<button class=gbtn onclick="authGo('email')">✉️ Email me a sign-in link</button></div>`;
+  document.getElementById('modal-actions').innerHTML='';
+  _openModal('.authgate button');
+}
+function authGo(kind){_closeModal();if(kind==='google')signinGoogle();else signinEmail();}
+async function keyModal(){
+  if(!CFG.byokEnabled){toast('Bring-your-own-key isn\\u2019t turned on yet.','err');return;}
+  if(CFG.authEnabled&&!session){authModal();return;}   // BYOK is account-scoped → sign in first
+  let d; try{const r=await fetch('/api/key',{headers:authHeaders()});d=await r.json();}catch(e){d={key:null};}
+  if(d&&d.key){
+    document.getElementById('modal-title').textContent='Your API key';
+    document.getElementById('modal-body').innerHTML=
+      `<p class=or style="margin:0 0 12px">You\\u2019re running on your own <b>${esc(d.key.provider)}</b> key (\\u2022\\u2022\\u2022\\u2022${esc(d.key.last4)}). Plans use your key, not ours.</p>`+
+      `<div class=authgate><button class=gbtn onclick="keyForm()">Replace key</button>`+
+      `<button class=gbtn onclick="removeKey()">Remove key</button></div>`;
+    document.getElementById('modal-actions').innerHTML=`<button type=button onclick="_closeModal()">Done</button>`;
+    _openModal('.authgate button');
+  }else{keyForm();}
+}
+function keyForm(){
+  document.getElementById('modal-title').textContent='Bring your own key';
+  document.getElementById('modal-body').innerHTML=
+    `<p class=or style="margin:0 0 10px">That was your free plan. To keep building \\u2014 more plans, branches, the board, chat, PDF \\u2014 connect your own OpenRouter key. One key gives you every model plus cited web search, and you pay OpenRouter directly (usually pennies a plan).</p>`+
+    `<ol class=keysteps>`+
+      `<li><a href="https://openrouter.ai/keys" target=_blank rel=noopener>Open OpenRouter \\u2192 Keys</a> and sign up (free)</li>`+
+      `<li>Click <b>Create Key</b> and copy it</li>`+
+      `<li>Paste it below and save \\u2014 we\\u2019ll test it before storing</li></ol>`+
+    `<label for=keyinput class=sr-only>Your OpenRouter API key</label>`+
+    `<input id=keyinput type=password placeholder="sk-or-v1-\\u2026" autocomplete=off spellcheck=false style="margin:4px 0 2px">`+
+    `<div class=err id=keyerr></div>`;
+  document.getElementById('modal-actions').innerHTML=
+    `<button type=button class=ghost onclick="_closeModal()">Cancel</button>`+
+    `<button type=button id=keysave onclick="saveKey()">Save &amp; validate</button>`;
+  _openModal('#keyinput');
+}
+async function saveKey(){
+  const inp=document.getElementById('keyinput'),btn=document.getElementById('keysave'),er=document.getElementById('keyerr');
+  const key=(inp.value||'').trim(); er.textContent='';
+  if(key.length<8){er.textContent='That doesn\\u2019t look like a key.';return;}
+  btn.disabled=true;btn.textContent='Validating\\u2026';
+  try{
+    const r=await fetch('/api/key',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({provider:'openrouter',key})});
+    const d=await r.json();
+    if(!r.ok){er.textContent=d.error||'Could not save the key.';btn.disabled=false;btn.textContent='Save & validate';return;}
+    HAS_KEY=true;_closeModal();toast('Key saved \\u2014 build as many plans as you want. \\u2713');
+  }catch(e){er.textContent='Network error.';btn.disabled=false;btn.textContent='Save & validate';}
+}
+async function removeKey(){
+  try{const r=await fetch('/api/key/remove',{method:'POST',headers:authHeaders()});
+    if(r.ok){HAS_KEY=false;toast('Key removed.');_closeModal();}else toast('Could not remove the key.','err');
+  }catch(e){toast('Network error.','err');}
 }
 function saveIdea(){try{const v=document.getElementById('idea').value;if(v)localStorage.setItem('filg_idea',v);}catch(e){}}
 function restoreIdea(){try{const v=localStorage.getItem('filg_idea');if(v){document.getElementById('idea').value=v;localStorage.removeItem('filg_idea');}}catch(e){}}
 async function loadMe(){
-  if(!session){me=null;return;}
+  if(!session){me=null;HAS_KEY=false;return;}
   try{const r=await fetch('/api/me',{headers:authHeaders()});me=r.ok?await r.json():null;}catch(e){me=null;}
+  await loadKey();   // refresh BYOK key state alongside identity
 }
 async function signinGoogle(){saveIdea();const {error}=await sb.auth.signInWithOAuth({provider:'google',options:{redirectTo:location.origin}});if(error)toast(error.message,'err');}
 async function signinEmail(){

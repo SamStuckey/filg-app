@@ -23,3 +23,7 @@ app/filg.db
 
 # pytest
 .pytest_cache/
+
+# pipeline.py generated run outputs (not source)
+live_run_artifacts.md
+test_01_live_results_auto.md

@@ -106,6 +106,33 @@ def record_run(user_id: str, cost: float) -> None:
             con.close()
 
 
+def free_used(user_id: str) -> bool:
+    """True iff this user has already taken their one free 'welcome' run (BYOK model: 1 free, then
+    bring your own key). Based on the per-user run counter that record_run bumps."""
+    if not user_id:
+        return False
+    _init()
+    con = _connect()
+    try:
+        row = con.execute("SELECT runs FROM usage_users WHERE user_id=?", (user_id,)).fetchone()
+    finally:
+        con.close()
+    return bool(row and row["runs"] >= 1)
+
+
+def kill_switch_tripped() -> bool:
+    """True iff today's global spend has hit the daily budget — the load-bearing cost guard that
+    still applies to FILG-key (free welcome) runs even in the BYOK model."""
+    _init()
+    con = _connect()
+    try:
+        today = date.today().isoformat()
+        row = con.execute("SELECT spend FROM usage_daily WHERE day=?", (today,)).fetchone()
+    finally:
+        con.close()
+    return (row["spend"] if row else 0.0) >= DAILY_BUDGET
+
+
 def record_spend(cost: float) -> None:
     """Bump only the global daily total (the kill switch) — for spend that isn't a new user run,
     e.g. per-section drafts and add-on calls. Does NOT touch the per-user free-run counter."""

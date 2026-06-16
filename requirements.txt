@@ -1,6 +1,8 @@
 anthropic>=0.109
+openai>=1.40        # BYOK: OpenAI-compatible client for OpenRouter keys (pure-Python, Render-native OK)
 fastapi>=0.115
 uvicorn[standard]>=0.30
 markdown>=3.6
 fpdf2>=2.8           # pure-Python PDF generation for the styled business-plan download (no system deps)
 pyjwt[crypto]>=2.8   # verify Supabase user JWTs against the project's asymmetric JWKS (ES256/RS256)
+cryptography>=42     # Fernet at-rest encryption for BYOK user keys (explicit; also pulled by pyjwt[crypto])
