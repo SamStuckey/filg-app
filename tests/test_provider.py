@@ -1,0 +1,94 @@
+"""BYOK provider seam: pipeline.call() routes to the active provider.
+
+No network: we monkeypatch fake clients and assert the request SHAPE per provider. The default
+(no active provider) must stay byte-for-byte the legacy Anthropic path so the free run + every
+existing test are untouched."""
+
+import types
+
+import pipeline
+import provider
+
+
+# ── fake clients ──────────────────────────────────────────────────────────────
+def _fake_anthropic(capture):
+    def create(**kwargs):
+        capture.update(kwargs)
+        usage = types.SimpleNamespace(input_tokens=10, output_tokens=5, server_tool_use=None)
+        return types.SimpleNamespace(
+            content=[types.SimpleNamespace(type="text", text="anthropic-reply")],
+            usage=usage, stop_reason="end_turn")
+    return types.SimpleNamespace(messages=types.SimpleNamespace(create=create))
+
+
+def _fake_openai(capture):
+    def create(**kwargs):
+        capture.update(kwargs)
+        usage = types.SimpleNamespace(prompt_tokens=20, completion_tokens=8)
+        msg = types.SimpleNamespace(content="openrouter-reply")
+        return types.SimpleNamespace(choices=[types.SimpleNamespace(message=msg)], usage=usage)
+    return types.SimpleNamespace(chat=types.SimpleNamespace(
+        completions=types.SimpleNamespace(create=create)))
+
+
+# ── default path is unchanged Anthropic ───────────────────────────────────────
+def test_default_no_provider_uses_anthropic_globals(monkeypatch):
+    cap = {}
+    monkeypatch.setattr(pipeline, "client", _fake_anthropic(cap))
+    assert provider.active() is None
+    out = pipeline.call("s", pipeline.SONNET, "hi", system="RULES")
+    assert out == "anthropic-reply"
+    assert cap["system"] == "RULES" and cap["model"] == pipeline.SONNET  # legacy shape preserved
+
+
+# ── BYOK / OpenRouter path ────────────────────────────────────────────────────
+def test_openrouter_translates_to_chat_completions(monkeypatch):
+    cap = {}
+    prov = provider.Provider("openrouter", "openai", _fake_openai(cap),
+                             dict(provider.OPENROUTER_MODELS), bills_filg=False)
+    with provider.use(prov):
+        out = pipeline.call("synth", pipeline.SONNET, "draft this", system="VOICE RULES")
+    assert out == "openrouter-reply"
+    # system → leading system message; model → OpenRouter slug
+    assert cap["messages"][0] == {"role": "system", "content": "VOICE RULES"}
+    assert cap["messages"][1]["role"] == "user"
+    assert cap["model"] == provider.OPENROUTER_MODELS[pipeline.SONNET]
+
+
+def test_openrouter_web_search_becomes_web_plugin(monkeypatch):
+    cap = {}
+    prov = provider.Provider("openrouter", "openai", _fake_openai(cap),
+                             dict(provider.OPENROUTER_MODELS))
+    with provider.use(prov):
+        pipeline.call("research", pipeline.HAIKU, "find facts", tools=[pipeline.WEB_SEARCH_TOOL])
+    plugins = cap.get("extra_body", {}).get("plugins")
+    assert plugins and plugins[0]["id"] == "web"
+
+
+def test_byok_run_costs_filg_nothing(monkeypatch):
+    # A BYOK model id isn't in PRICES → resolves to $0 against FILG's budget (user pays).
+    cap = {}
+    prov = provider.Provider("openrouter", "openai", _fake_openai(cap),
+                             dict(provider.OPENROUTER_MODELS), bills_filg=False)
+    start = len(pipeline.LEDGER.rows)
+    with provider.use(prov):
+        pipeline.call("synth", pipeline.SONNET, "hi")
+    assert pipeline.LEDGER.cost_slice(start) == 0.0
+
+
+# ── contextvar plumbing ───────────────────────────────────────────────────────
+def test_bound_rebinds_provider_in_worker_thread():
+    from concurrent.futures import ThreadPoolExecutor
+    prov = provider.Provider("openrouter", "openai", object(), {})
+    with provider.use(prov):
+        worker = provider.bound(lambda _: provider.active())
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            seen = list(ex.map(worker, [1, 2]))
+    assert all(p is prov for p in seen)  # provider survived the thread hop
+
+
+def test_use_resets_to_prior_provider():
+    assert provider.active() is None
+    with provider.use(provider.Provider("openrouter", "openai", object(), {})):
+        assert provider.active() is not None
+    assert provider.active() is None  # cleanly reset

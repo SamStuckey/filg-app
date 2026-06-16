@@ -1,4 +1,5 @@
 anthropic>=0.109
+openai>=1.40        # BYOK: OpenAI-compatible client for OpenRouter keys (pure-Python, Render-native OK)
 fastapi>=0.115
 uvicorn[standard]>=0.30
 markdown>=3.6
