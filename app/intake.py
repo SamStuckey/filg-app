@@ -98,6 +98,17 @@ def vet(idea: str, shaped: dict, research: dict | None = None, mock: bool = Fals
     }, round(LEDGER.cost_slice(start), 4)
 
 
+def revet(idea: str, more: str, research: dict | None = None, mock: bool = False) -> tuple[dict, dict, float]:
+    """Kill-gate rescue: the operator was told their idea is unbuildable and has now added real
+    substance (a skill / asset / who'd pay). Fold `more` into the raw idea, re-shape it into a thesis,
+    and re-run the kill-gate against the existing graded research. Returns (shaped, vetting, cost).
+    A still-`kill` verdict means there's still nothing to build on; pivot/pursue clears the gate."""
+    enriched = f"{idea}\n\nMORE FROM THE OPERATOR (a real skill / asset / who would pay):\n{more}".strip()
+    shaped, c1 = shape(enriched, mock=mock)
+    vetting, c2 = vet(enriched, shaped, research, mock=mock)
+    return shaped, vetting, round(c1 + c2, 4)
+
+
 if __name__ == "__main__":  # self-test (mock, no API)
     grab_bag = "I like basketball, Magic the Gathering, and food, and I'm good at sales"
     shaped, c = shape(grab_bag, mock=True)

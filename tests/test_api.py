@@ -258,6 +258,31 @@ def test_accessibility_essentials_present(client):
     assert "DRAWER_TRIGGER" in html                   # focus restored on drawer close
 
 
+def test_kill_gate_blocks_until_resubstantiated(client):
+    # A killed idea must not roll forward into a full plan. Mock vet always returns 'pursue', so we
+    # force the kill verdict the gate keys off, then prove the hard gate + the /revet rescue path.
+    from app import main
+    sid = client.post("/api/plan/start",
+                      json={"idea": "I want fame and money, help me get some", "email": "kill@x.com"}).json()["id"]
+    wait_status(client, sid)
+    s = main.store.plan_get(sid)
+    v = {**(s.get("vetting") or {}), "verdict": "kill", "biggest_risk": "no skill or buyer named"}
+    sh = {**(s.get("shaped") or {}), "clarifying_question": "What are you genuinely good at?"}
+    main.store.plan_save(sid, vetting=v, shaped=sh)
+
+    r = client.post(f"/api/plan/{sid}/next", json={"feedback": ""})   # hard gate
+    assert r.status_code == 422 and r.json().get("needSubstance") is True
+    assert r.json().get("question")                                   # the clarifying prompt comes back
+
+    assert client.post(f"/api/plan/{sid}/revet", json={"more": "idk"}).status_code == 400   # too thin
+
+    out = client.post(f"/api/plan/{sid}/revet",   # real substance → mock vet clears to pursue
+                      json={"more": "I have run paid ads for SaaS for 4 years and know founders who pay for it"}).json()
+    assert out["vetting"]["verdict"] != "kill"
+    s2 = client.post(f"/api/plan/{sid}/next", json={"feedback": ""}).json()   # builder now advances
+    assert s2.get("step", 0) >= 1
+
+
 def test_clean_plan_url_serves_spa(client):
     # History-API routing: /plan/{id} serves the SPA shell (not a 404), so deep-links/refresh work
     # and there's no '#' in the path. Distinct from /p/{id} (public share) and /r/{id} (teardown).

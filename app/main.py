@@ -48,6 +48,7 @@ import usage     # noqa: E402
 import personas  # noqa: E402 — advisor/director registry (shared by ask-an-expert + the board)
 import board     # noqa: E402 — Board of Directors orchestration
 import gibberish  # noqa: E402 — pre-LLM "is this even an idea?" gate (saves a run, hands back a roast)
+import intake     # noqa: E402 — shape + vet (the kill-gate); /revet re-runs it after added substance
 import plan_pdf   # noqa: E402 — styled PDF generation (synthesis + fpdf2 render)
 import advisor    # noqa: E402 — "chat with your plan" (grounded advisory layer)
 import provider   # noqa: E402 — BYOK: per-run LLM provider (FILG's key vs a user's OpenRouter key)
@@ -101,6 +102,20 @@ def _key_wall(session: dict):
         return JSONResponse(
             {"error": "Add your OpenRouter key to keep building.", "needKey": True}, status_code=402)
     return None
+
+
+def _kill_gate(session: dict):
+    """422 if the session's idea was graded `kill` — the builder must not roll forward into a full
+    plan built on nothing. The operator clears it via /revet (add a real skill/asset/buyer). Returns
+    the gate payload (the vet's clarifying question + risk) or None when the verdict isn't a kill."""
+    v = session.get("vetting") or {}
+    if (v.get("verdict") or "pursue") != "kill":
+        return None
+    sh = session.get("shaped") or {}
+    return JSONResponse({"needSubstance": True, "verdict": "kill",
+        "question": sh.get("clarifying_question")
+            or "Name one real skill, asset, or audience you already have, and who would pay for it.",
+        "risk": v.get("biggest_risk") or "", "reaction": v.get("reaction") or ""}, status_code=422)
 
 
 app = FastAPI(title="FILG")
@@ -568,6 +583,8 @@ async def api_plan_next(sid: str, request: Request):
         return wall
     body = await request.json()
     feedback = (body.get("feedback") or "").strip() or None
+    if (gate := _kill_gate(s)):   # hard gate: a killed idea can't roll forward into a full plan
+        return gate
     tree = _ensure_tree(s)
     active = tree["nodes"][tree["active"]]
     if active["step"] >= planner.N:
@@ -587,6 +604,43 @@ async def api_plan_next(sid: str, request: Request):
     tree["active"] = node["id"]
     _meter(s.get("user"), cost)
     store.plan_save(sid, tree=tree, cost=round((s.get("cost") or 0) + cost, 4), **_mirror(tree))
+    return _plan_state(store.plan_get(sid))
+
+
+@app.post("/api/plan/{sid}/revet")
+async def api_plan_revet(sid: str, request: Request):
+    """Kill-gate rescue: the operator adds real substance (a skill / asset / who'd pay); we re-shape +
+    re-vet. If the verdict clears the kill, we redraft part 1 from the enriched thesis and the builder
+    unlocks. Still `kill` → the new (sharper) diagnostic comes back and the gate holds."""
+    s = store.plan_get(sid)
+    if not s or not _owns(request, s):
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    if (wall := _key_wall(s)):
+        return wall
+    body = await request.json()
+    more = (body.get("more") or "").strip()
+    if len(more) < 8:
+        return JSONResponse(
+            {"error": "Give me a bit more — a real skill or asset, and who'd pay for it."}, status_code=400)
+    try:
+        with _run_slot(s.get("user")):
+            shaped, vetting, cost = intake.revet(s["idea"], more, s.get("research"), mock=MOCK)
+            proposal = None
+            if vetting["verdict"] != "kill":   # cleared → redraft part 1 from the now-substantive thesis
+                proposal, c2 = planner.first_proposal(
+                    shaped["thesis"], s["research"], founder=shaped.get("founder_edge"), mock=MOCK)
+                cost = round(cost + c2, 4)
+    except BusyError as be:
+        return _busy_response(be)
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": str(e)}, status_code=500)
+    updates = {"shaped": shaped, "vetting": vetting}
+    if proposal is not None:
+        root = _new_node(planner.root_node(proposal), None)   # no branches exist yet on a kill, so reseed
+        tree = {"nodes": {root["id"]: root}, "active": root["id"]}
+        updates.update({"proposal": proposal, "step": 0, "tree": tree, **_mirror(tree)})
+    _meter(s.get("user"), cost)
+    store.plan_save(sid, cost=round((s.get("cost") or 0) + cost, 4), **updates)
     return _plan_state(store.plan_get(sid))
 
 
@@ -935,6 +989,12 @@ button:hover{filter:brightness(1.04)}button:active{transform:translateY(1px)}but
 /* always-open feedback box + Next/Back navigation (replaces the 3 verdict buttons) */
 .fbk{margin-top:14px;border:1.5px solid var(--sky);border-radius:14px;padding:14px;background:#fff}
 .fbk textarea{margin-bottom:8px}
+.killgate{margin-top:14px;border:1.5px solid #f0bdbd;border-radius:14px;padding:14px 16px;background:#fdeaea}
+.killgate .kg-head{font-weight:800;color:#c0392b;font-size:15px;margin-bottom:6px}
+.killgate .kg-say{margin:0 0 8px;color:var(--ink)}
+.killgate .kg-risk{margin:0 0 8px;font-size:13px;color:#7a3b32}
+.killgate .kg-q{font-weight:700;margin:0 0 8px}
+.killgate textarea{margin-bottom:8px;min-height:84px}
 .navrow{display:flex;gap:10px;margin-top:10px}
 .navrow button{flex:1}.navrow .b-next{background:var(--sky)}
 .navrow .b-back{background:#fff;color:var(--ink);border:1.5px solid var(--line);flex:0 0 auto;min-width:96px}
@@ -1303,14 +1363,29 @@ function renderNode(s){
   const sec=(s.sections||[]).find(x=>x.title===p.title)||{};
   const intro=s.step===0?`<p class=lead>We build your plan in ${s.total} parts, one at a time, your call on each (watch them fill in on the left). First up:</p>`:'';
   const changeFlag=p.change?`<div class=changeflag><span class=cf-l>↳ Your note shaped this</span>${esc(p.change)}</div>`:'';
-  n.innerHTML=`<div class=node><span class=eyebrow>Your plan · part ${s.step+1} of ${s.total}</span><h3>${esc(p.title)}</h3><p class=h3sub>${esc(sec.sub||'')}</p>`+
-    changeFlag+intro+
-    `<div class="draft md">${mdToHtml(p.draft)}</div>`+
+  const killed=(s.vetting||{}).verdict==='kill';   // hard gate: an unbuildable idea can't roll forward
+  const tail=killed?killGateHtml(s):
     `<div class=fbk><label for=feedback class=sr-only>Your feedback on this part</label>`+
     `<textarea id=feedback rows=2 placeholder="Give optional feedback and roll forward, or push back to start a new decision branch."></textarea>`+
     `<div class=chips>${FB_CHIPS.map(x=>`<button type=button class=chip onclick="addChip('${x}')">${esc(x)}</button>`).join('')}</div>`+
     `<div class=navrow><button type=button class=b-back onclick=backStep()${s.step===0?' disabled title="You\\'re on the first part"':''}>← Not feeling it</button>`+
     `<button type=button class=b-next onclick=nextStep()>I'm with you →</button></div>`+
+    `<div class=ferr id=ferr></div></div>`;
+  n.innerHTML=`<div class=node><span class=eyebrow>Your plan · part ${s.step+1} of ${s.total}</span><h3>${esc(p.title)}</h3><p class=h3sub>${esc(sec.sub||'')}</p>`+
+    changeFlag+intro+
+    `<div class="draft md">${mdToHtml(p.draft)}</div>`+tail;
+}
+function killGateHtml(s){
+  const v=s.vetting||{};
+  const q=esc((s.shaped||{}).clarifying_question||'Name one real skill, asset, or audience you already have, and who would pay for it.');
+  const risk=v.biggest_risk?`<p class=kg-risk><b>The gap:</b> ${esc(v.biggest_risk)}</p>`:'';
+  return `<div class=killgate><div class=kg-head>\\u26d4 Not buildable yet</div>`+
+    `<p class=kg-say>${esc(v.reaction||"There isn't an idea here to build on yet. To keep going, give the gate something real to work with.")}</p>`+
+    risk+`<p class=kg-q>${q}</p>`+
+    `<label for=substance class=sr-only>Add a real skill, asset, or buyer</label>`+
+    `<textarea id=substance rows=3 placeholder="e.g. 'I've run paid ads for SaaS for 4 years and I know founders who need it.' Name a real skill, plus who would pay."></textarea>`+
+    `<div class=navrow><button type=button class=b-back onclick=startOver()>Start over</button>`+
+    `<button type=button class=b-next onclick=reCheck()>Re-check my idea →</button></div>`+
     `<div class=ferr id=ferr></div></div>`;
 }
 const FB_CHIPS=["go bolder","narrower niche","cheaper entry","B2B only","more specific","add an upsell"];
@@ -1339,6 +1414,21 @@ async function nextStep(){
     Activity.done(aid,'Next part ready.');render(s);
   }catch(e){Activity.stop(aid);fbErr('Network error.');_navFree();}
 }
+async function reCheck(){       // kill-gate rescue: re-vet with the substance the operator just added
+  if(!requireKey())return;
+  const more=((document.getElementById('substance')||{}).value||'').trim();
+  if(more.length<8){fbErr('Add a real skill or asset, and who would pay for it.');const t=document.getElementById('substance');if(t)t.focus();return;}
+  _navBusy();
+  const aid=Activity.start(["Re-reading your idea with the new detail","Re-grading it against the research","Re-running the kill gate"],1200);
+  try{
+    const r=await _aiRun('/api/plan/'+SID+'/revet',{more});
+    const s=await r.json();
+    if(!r.ok){Activity.stop(aid);fbErr(s.error||'Something went wrong.');_navFree();return;}
+    const cleared=s.vetting&&s.vetting.verdict!=='kill';
+    Activity.done(aid,cleared?'Cleared. You can build now.':'Still not enough to build on.');render(s);
+  }catch(e){Activity.stop(aid);fbErr('Network error.');_navFree();}
+}
+function startOver(){try{localStorage.removeItem('filg_idea');}catch(e){}location.href='/';}   // clean intake
 async function backStep(){
   if(!requireKey())return;
   const fb=((document.getElementById('feedback')||{}).value||'').trim();
