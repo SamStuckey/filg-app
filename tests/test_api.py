@@ -73,6 +73,26 @@ def test_branching_next_back_goto(client):
     assert s["tree"]["active"] == other and s["step"] == 1
 
 
+def test_redraft_regenerates_current_part_as_sibling(client):
+    # "Not feeling it" regenerates the CURRENT part in place (a sibling at the same step), not a step back.
+    sid = client.post("/api/plan/start",
+                      json={"idea": GRAB_BAG, "email": "redraft@x.com"}).json()["id"]
+    s = wait_status(client, sid)
+    s = client.post(f"/api/plan/{sid}/next", json={"feedback": ""}).json()   # advance to part 2
+    assert s["step"] == 1 and len(s["files"]) == 1
+
+    # redraft without a note → form error (a rework needs steering)
+    assert client.post(f"/api/plan/{sid}/redraft", json={"feedback": ""}).status_code == 400
+
+    # redraft WITH a note → same step, the note steers it, a sibling exists at this step, nothing finalized
+    s = client.post(f"/api/plan/{sid}/redraft", json={"feedback": "go bolder"}).json()
+    assert s["step"] == 1 and len(s["files"]) == 1          # still on part 2, no new file finalized
+    assert "revised" in s["proposal"]["draft"]              # the note steered the regenerate
+    nodes = s["tree"]["nodes"]
+    assert sum(1 for n in nodes if n["step"] == 1) == 2     # original + the regenerated sibling
+    assert s["tree"]["active"] != [n["id"] for n in nodes if n["step"] == 1][0]  # active moved to the new one
+
+
 def test_download_follows_active_branch_no_paywall(client):
     # Build a plan to completion, then branch part 2 and finish again. The download must zip the
     # ACTIVE branch's files (the final decision set) — and no paywall gates it.

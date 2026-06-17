@@ -701,6 +701,45 @@ async def api_plan_back(sid: str, request: Request):
     return _plan_state(store.plan_get(sid))
 
 
+@app.post("/api/plan/{sid}/redraft")
+async def api_plan_redraft(sid: str, request: Request):
+    """Regenerate the CURRENT part with the operator's feedback applied — a fresh sibling of the active
+    node at the SAME step (not a step back; backing up is done via the tree). Feedback required: a
+    rework needs a note to steer it."""
+    s = store.plan_get(sid)
+    if not s or not _owns(request, s):
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    if (wall := _key_wall(s)):
+        return wall
+    body = await request.json()
+    feedback = (body.get("feedback") or "").strip()
+    if not feedback:
+        return JSONResponse(
+            {"error": "Add a quick note on what's not landing — a rework needs something to steer it."},
+            status_code=400)
+    tree = _ensure_tree(s)
+    active = tree["nodes"][tree["active"]]
+    if active["step"] >= planner.N:
+        return JSONResponse({"error": "This plan is already complete."}, status_code=409)
+    try:
+        with _run_slot(s.get("user")):
+            sib, cost = planner.rebranch(planner._working_idea(s), s["research"], active, feedback,
+                                         founder=planner._founder(s), mock=MOCK)
+            toks = pipeline.LEDGER.tokens()
+    except BusyError as be:
+        return _busy_response(be)
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": str(e)}, status_code=500)
+    node = _new_node(sib, active.get("parent"))   # sibling of the active node → same step, new branch
+    tree["nodes"][node["id"]] = node
+    if active.get("parent"):
+        tree["nodes"][active["parent"]].setdefault("children", []).append(node["id"])
+    tree["active"] = node["id"]
+    _meter(s.get("user"), cost)
+    _fold_usage(sid, s, cost, toks, tree=tree, **_mirror(tree))
+    return _plan_state(store.plan_get(sid))
+
+
 @app.post("/api/plan/{sid}/goto")
 async def api_plan_goto(sid: str, request: Request):
     """Hop to an existing node in the decision tree (pure navigation — no new branch, no spend).
@@ -1453,9 +1492,9 @@ function renderNode(s){
   const killed=(s.vetting||{}).verdict==='kill';   // hard gate: an unbuildable idea can't roll forward
   const tail=killed?killGateHtml(s):
     `<div class=fbk><label for=feedback class=sr-only>Your feedback on this part</label>`+
-    `<textarea id=feedback rows=2 placeholder="Give optional feedback and roll forward, or push back to start a new decision branch."></textarea>`+
+    `<textarea id=feedback rows=2 placeholder="Give optional feedback and roll forward, or say what's not landing and regenerate this part."></textarea>`+
     `<div class=chips>${FB_CHIPS.map(x=>`<button type=button class=chip onclick="addChip('${x}')">${esc(x)}</button>`).join('')}</div>`+
-    `<div class=navrow><button type=button class=b-back onclick=backStep()${s.step===0?' disabled title="You\\'re on the first part"':''}>← Not feeling it</button>`+
+    `<div class=navrow><button type=button class=b-back onclick=regenStep() title="Regenerate this part with your feedback (to go back a step, use the decision tree)">\\u21bb Not feeling it</button>`+
     `<button type=button class=b-next onclick=nextStep()>I'm with you →</button></div>`+
     `<div class=ferr id=ferr></div></div>`;
   n.innerHTML=`<div class=node><span class=eyebrow>Your plan · part ${s.step+1} of ${s.total}</span><h3>${esc(p.title)}</h3><p class=h3sub>${esc(sec.sub||'')}</p>`+
@@ -1498,6 +1537,7 @@ async function nextStep(){
     const r=await _aiRun('/api/plan/'+SID+'/next',{feedback:fb});
     const s=await r.json();
     if(!r.ok){Activity.stop(aid);fbErr(s.error||'Something went wrong.');_navFree();return;}
+    REDRAFTS=0;   // advanced past this part — reset the rework counter
     Activity.done(aid,'Next part ready.');render(s);
   }catch(e){Activity.stop(aid);fbErr('Network error.');_navFree();}
 }
@@ -1529,12 +1569,32 @@ async function backStep(){
     Activity.done(aid,'New branch ready.');render(s);
   }catch(e){Activity.stop(aid);fbErr('Network error.');_navFree();}
 }
+let REDRAFTS=0;   // consecutive regenerations of the CURRENT part → escalate to a snark nudge toward the tree
+async function regenStep(){
+  if(!requireKey())return;
+  const fb=((document.getElementById('feedback')||{}).value||'').trim();
+  if(!fb){fbErr("Tell me what's not landing — a rework needs a note to steer it.");const t=document.getElementById('feedback');if(t)t.focus();return;}
+  if(REDRAFTS>=2){   // they keep mashing it — nudge toward backing up via the decision tree
+    const ok=await uiConfirm('Still not feeling it?',"We can regenerate this part all day. If a rework keeps missing, try backing up to an earlier part from the decision tree on the left. Regenerate again?",'Regenerate anyway');
+    if(!ok)return;
+  }
+  _navBusy();
+  const aid=Activity.start(["Re-reading your note","Regenerating this part from a different angle"],1200,'Regenerating this part');
+  try{
+    const r=await _aiRun('/api/plan/'+SID+'/redraft',{feedback:fb});
+    const s=await r.json();
+    if(!r.ok){Activity.stop(aid);fbErr(s.error||'Something went wrong.');_navFree();return;}
+    REDRAFTS++;
+    Activity.done(aid,'Reworked this part.');render(s);
+  }catch(e){Activity.stop(aid);fbErr('Network error.');_navFree();}
+}
 async function gotoNode(id){
   document.getElementById('err2').textContent='';
   try{
     const r=await fetch('/api/plan/'+SID+'/goto',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({node:id})});
     const s=await r.json();
     if(!r.ok){document.getElementById('err2').textContent=s.error||'Could not jump there.';return;}
+    REDRAFTS=0;   // navigated to another node — reset the rework counter
     render(s);
   }catch(e){document.getElementById('err2').textContent='Network error.';}
 }
