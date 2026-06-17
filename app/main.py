@@ -1034,30 +1034,36 @@ __FILG_HEAD__
 .top{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
 .topright{display:flex;align-items:center;gap:14px}
 .meter{display:inline-flex;align-items:center;gap:6px;background:var(--card);border:1.5px solid var(--line);color:var(--muted);font-size:12.5px;font-weight:700;padding:5px 11px;border-radius:999px;cursor:default;font-variant-numeric:tabular-nums}
-.stackdial{display:inline-flex;align-items:center;gap:9px;background:var(--card);border:1.5px solid var(--line);padding:5px 12px;border-radius:999px;cursor:default;transition:border-color .2s}
-.stacklbl{font-weight:700;font-size:12.5px;white-space:nowrap;color:var(--ink);display:inline-flex;align-items:center;gap:4px}
-.stacklbl .sk-star{color:#F0B23E;font-size:11px}
-.stacklbl .sk-key{font-size:11px;filter:grayscale(.1)}
+.stackdial{position:relative;display:inline-flex}
+.stackbtn{display:inline-flex;align-items:center;gap:8px;background:var(--card);border:1.5px solid var(--line);padding:5px 11px;border-radius:999px;cursor:pointer;font:inherit;color:var(--ink);transition:border-color .15s}
+.stackbtn:hover{border-color:var(--sky)}
+.stackbtn .stacklbl{font-weight:700;font-size:12.5px;white-space:nowrap;display:inline-flex;align-items:center;gap:4px;color:var(--ink)}
+.stackbtn .sk-star{color:var(--sun);font-size:11px}
+.stackbtn .sk-key{font-size:11px}
+.stackcaret{font-size:9px;color:var(--muted);transition:transform .15s}
+.stackbtn[aria-expanded=true] .stackcaret{transform:rotate(180deg)}
+.stackbtn.needkey{border-color:#E0A23E}
+.stackbtn.needkey .stacklbl{color:#9a6b00}
 .stack-cost{display:inline-flex;gap:2.5px;align-items:center}
-.stack-cost i{width:5px;height:5px;border-radius:50%;background:var(--line);display:inline-block;transition:background .15s}
+.stack-cost i{width:5px;height:5px;border-radius:50%;background:var(--line);display:inline-block}
 .stack-cost i.on{background:var(--sky)}
-.stackwrap{position:relative;width:128px;height:16px;display:inline-flex;align-items:center}
-.stackrec{position:absolute;top:-7px;font-size:9px;line-height:1;color:#F0B23E;transform:translateX(-50%);pointer-events:none}
-#stackrange{-webkit-appearance:none;appearance:none;width:100%;height:5px;border-radius:999px;background:var(--line);cursor:pointer;outline:none;margin:0}
-#stackrange:focus-visible{box-shadow:0 0 0 3px #2E7CF633}
-#stackrange::-webkit-slider-runnable-track{height:5px;border-radius:999px;background:linear-gradient(90deg,var(--sky) 0,var(--sky) var(--fill,50%),var(--line) var(--fill,50%))}
-#stackrange::-moz-range-track{height:5px;border-radius:999px;background:var(--line)}
-#stackrange::-moz-range-progress{height:5px;border-radius:999px;background:var(--sky)}
-#stackrange::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:14px;height:14px;margin-top:-4.5px;border-radius:50%;background:#fff;border:2.5px solid var(--sky);box-shadow:0 1px 3px #0003;transition:transform .12s}
-#stackrange::-moz-range-thumb{width:14px;height:14px;border-radius:50%;background:#fff;border:2.5px solid var(--sky);box-shadow:0 1px 3px #0003}
-#stackrange:active::-webkit-slider-thumb{transform:scale(1.18)}
-.stackdial.needkey{border-color:#F0B23E88}
-.stackdial.needkey .stacklbl{color:#B6791B}
-.stackdial.needkey .stack-cost i.on{background:#E89C2A}
-.stackdial.needkey #stackrange::-webkit-slider-runnable-track{background:linear-gradient(90deg,#E89C2A 0,#E89C2A var(--fill,50%),var(--line) var(--fill,50%))}
-.stackdial.needkey #stackrange::-webkit-slider-thumb{border-color:#E89C2A}
-.stackdial.needkey #stackrange::-moz-range-progress{background:#E89C2A}
-.stackdial.needkey #stackrange::-moz-range-thumb{border-color:#E89C2A}
+.stackbtn.needkey .stack-cost i.on{background:#E0A23E}
+.stackpop{position:absolute;right:0;top:calc(100% + 8px);z-index:70;width:316px;max-width:86vw;background:var(--card);border:1px solid var(--line);border-radius:14px;box-shadow:0 16px 44px rgba(20,17,14,.22);padding:8px;display:flex;flex-direction:column;gap:4px}
+.stackpop[hidden]{display:none}
+.stackpop-h{font-size:11.5px;color:var(--muted);padding:5px 8px 3px;line-height:1.35}
+.stacktile{text-align:left;background:transparent;border:1.5px solid transparent;border-radius:10px;padding:8px 9px;cursor:pointer;font:inherit;color:var(--ink);display:flex;flex-direction:column;gap:3px;transition:background .12s,border-color .12s}
+.stacktile:hover{background:var(--bg)}
+.stacktile.sel{border-color:var(--sky);background:#2E7CF60D}
+.stacktile:focus-visible{outline:none;border-color:var(--sky);box-shadow:0 0 0 3px #2E7CF626}
+.st-top{display:flex;align-items:center;gap:7px}
+.st-name{font-weight:800;font-size:13px}
+.st-badges{display:inline-flex;gap:5px;align-items:center}
+.st-badge{font-size:9px;font-weight:800;letter-spacing:.03em;text-transform:uppercase;padding:1.5px 6px;border-radius:999px;white-space:nowrap}
+.st-badge.rec{background:#FFC23F33;color:#9a6b00}
+.st-badge.key{background:#E0A23E26;color:#8a5a16}
+.st-top .stack-cost{margin-left:auto}
+.st-desc{font-size:11.5px;color:var(--muted);line-height:1.4}
+.stacktile.sel .st-desc{color:var(--ink)}
 .meter[hidden]{display:none}   /* the author .meter rule would otherwise override the UA [hidden]=display:none, leaking an empty pill */
 .meter .m-dot{width:7px;height:7px;border-radius:50%;background:var(--muted);flex:none;transition:background .3s}
 .meter.live .m-dot{background:var(--ok);animation:mpulse 1.1s ease-in-out infinite}
@@ -1299,7 +1305,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 .tree button.f{width:100%;background:none;border:0;font:inherit;color:inherit;text-align:left;cursor:pointer;padding:0}
 .tree button.f:hover .nm{color:var(--sky)}
 </style></head><body><div class=page>
-<div class=top><h1 class=logo><button type=button class=logobtn onclick=newPlan() aria-label="FILG, start a new idea"><svg class=logomark viewBox="0 0 32 32" aria-hidden=true><rect width=32 height=32 rx=8 fill=#FF6B4A></rect><path d="M16 4c-3.2 2.8-4.3 7.4-4.3 11.8v3.2h8.6v-3.2C20.3 11.4 19.2 6.8 16 4z" fill=#fff></path><circle cx=16 cy=12 r=2.1 fill=#2E7CF6></circle><path d="M11.7 15.5 8.6 20.5l3.1-1.3z" fill=#fff></path><path d="M20.3 15.5 23.4 20.5l-3.1-1.3z" fill=#fff></path><path d="M13.6 19.5h4.8L16 25.5z" fill=#FFC23F></path></svg>FI<span>LG</span></button></h1><div class=topright><label for=stackpick class=sr-only>Model stack</label><div class=stackdial id=stackdial hidden><span class=stacklbl id=stacklbl></span><span class=stack-cost id=stackcost aria-hidden=true></span><label for=stackrange class=sr-only>Model stack: slide from cheap to premium</label><span class=stackwrap><input type=range id=stackrange min=0 max=4 step=1 value=2 oninput="onStackSlide(+this.value)" onchange="commitStack(+this.value)"><span class=stackrec id=stackrec hidden title="Recommended">&#9733;</span></span></div><button type=button class=meter id=meter hidden title="Token usage this session (resets when you reload)"></button><div class=authbar id=authbar></div></div></div>
+<div class=top><h1 class=logo><button type=button class=logobtn onclick=newPlan() aria-label="FILG, start a new idea"><svg class=logomark viewBox="0 0 32 32" aria-hidden=true><rect width=32 height=32 rx=8 fill=#FF6B4A></rect><path d="M16 4c-3.2 2.8-4.3 7.4-4.3 11.8v3.2h8.6v-3.2C20.3 11.4 19.2 6.8 16 4z" fill=#fff></path><circle cx=16 cy=12 r=2.1 fill=#2E7CF6></circle><path d="M11.7 15.5 8.6 20.5l3.1-1.3z" fill=#fff></path><path d="M20.3 15.5 23.4 20.5l-3.1-1.3z" fill=#fff></path><path d="M13.6 19.5h4.8L16 25.5z" fill=#FFC23F></path></svg>FI<span>LG</span></button></h1><div class=topright><div class=stackdial id=stackdial hidden><button type=button class=stackbtn id=stackbtn aria-haspopup=true aria-expanded=false aria-label="Choose your model crew" onclick=toggleStackPop()><span class=stacklbl id=stacklbl></span><span class=stack-cost id=stackcost aria-hidden=true></span><span class=stackcaret aria-hidden=true>&#9662;</span></button><div class=stackpop id=stackpop role=menu aria-label="Choose a model crew" hidden></div></div><button type=button class=meter id=meter hidden title="Token usage this session (resets when you reload)"></button><div class=authbar id=authbar></div></div></div>
 <div class=note-banner id=banner></div>
 <div class=intake id=intake>
 <h2>You've got a business in you. Let's find it. 🚀</h2>
@@ -1443,43 +1449,59 @@ async function poll(){
   if(s.status!=='error')maybePromptKey();   // welcome plan is in → require a key to go further
 }
 let ACT_RESEARCH=false, ACT_PROG_N=0, ACT_ID=null;
-// ── Model stack slider: cheap → premium, one cost/quality dial ───────────────
-const STACKS_UI=[   // order matches the slider 0..4 (cheap → premium)
-  {k:'the-turd-polisher',n:'The turd polisher',b:"Cheap everything. Good for feature-testing, spiking, or spamming the model with nonsense to see how angry you can make it.",o:false},
-  {k:'the-capable-intern',n:'The capable intern',b:"Lots of info with some solid synthesis. You've got to check his work, but you aren't mad about it.",o:false},
-  {k:'the-work-horse',n:'The work horse',b:"Cheap research bots with advanced synthesis and orchestration. A good boss with a well-structured team.",o:false},
-  {k:'the-wonder-kid',n:'The wonder kid',b:"Advanced research with world-class orchestration and synthesis. Best results without the capital burn.",o:true,rec:true},
-  {k:'trust-fund-baby',n:'The trust fund baby',b:"A full stack of the absolute best models for world-class results. Not cheap, but hey, neither are you.",o:true},
+// ── Model crew: pick-a-tile popover; cheap → premium. n = display name, k = engine stack key
+// (keys are STABLE — the engine/tests/DB key on them; only the labels were renamed). ──────────
+let STACK_CUR='the-work-horse';
+const STACKS_UI=[   // cheap → premium
+  {k:'the-turd-polisher',n:'The intern',b:"Cheap and eager. Fast first drafts you'll want to double-check. Fine for spiking, feature-testing, or kicking the tires.",o:false},
+  {k:'the-capable-intern',n:'The work horse',b:"Cheap research, solid synthesis. Gets the bulk of the job done well without much hand-holding.",o:false},
+  {k:'the-work-horse',n:'The closer',b:"Cheap research bots, advanced synthesis and orchestration. Knows how to bring it home.",o:false},
+  {k:'the-wonder-kid',n:'Wonder kid',b:"Advanced research with world-class orchestration and synthesis. Best results without the capital burn.",o:true,rec:true},
+  {k:'trust-fund-baby',n:'Trust fund baby',b:"The absolute best models top to bottom. Not cheap, but hey, neither are you.",o:true},
 ];
 function _stackIdx(key){const i=STACKS_UI.findIndex(x=>x.k===key);return i<0?2:i;}
-function paintStack(i){
-  const u=STACKS_UI[i]||STACKS_UI[2];
-  const needkey=!!(u.o&&!HAS_KEY);   // Opus tier on FILG's free key → flag it (clamped server-side too)
+function _stackCost(i){return [0,1,2,3,4].map(n=>'<i class='+(n<=i?'on':'')+'></i>').join('');}
+function renderStack(s){   // s optional; updates the header button (+ open panel)
+  const d=document.getElementById('stackdial'); if(!d)return; d.hidden=false;
+  if(s&&s.stack)STACK_CUR=s.stack;
+  const i=_stackIdx(STACK_CUR), u=STACKS_UI[i]||STACKS_UI[2], needkey=!!(u.o&&!HAS_KEY);
   const lbl=document.getElementById('stacklbl');
   if(lbl)lbl.innerHTML=esc(u.n)+(u.rec?' <span class=sk-star aria-hidden=true>\\u2605</span>':'')
-    +(needkey?' <span class=sk-key title="Needs your own key" aria-hidden=true>\\uD83D\\uDD11</span>':'');
-  const cost=document.getElementById('stackcost');   // cost pips: tier index+1 of 5, cheap → premium
-  if(cost)cost.innerHTML=[0,1,2,3,4].map(n=>'<i class='+(n<=i?'on':'')+'></i>').join('');
-  const r=document.getElementById('stackrange'); if(r)r.style.setProperty('--fill',(i/4*100)+'%');
-  const d=document.getElementById('stackdial');
-  if(d){d.classList.toggle('needkey',needkey);
-    d.title=u.b+(needkey?'  (needs your own key to actually run)':'');}
+    +(needkey?' <span class=sk-key aria-hidden=true title="Needs your own key">\\uD83D\\uDD11</span>':'');
+  const c=document.getElementById('stackcost'); if(c)c.innerHTML=_stackCost(i);
+  const b=document.getElementById('stackbtn'); if(b)b.classList.toggle('needkey',needkey);
+  const pop=document.getElementById('stackpop'); if(pop&&!pop.hidden)renderStackTiles();
 }
-function renderStack(s){
-  const d=document.getElementById('stackdial'); if(!d)return; d.hidden=false;
-  const i=_stackIdx(s.stack); const r=document.getElementById('stackrange');
-  if(r&&+r.value!==i)r.value=i;
-  const rec=STACKS_UI.findIndex(x=>x.rec); const m=document.getElementById('stackrec');
-  if(m&&rec>=0){m.style.left=(rec/4*100)+'%';m.hidden=false;}   // ★ marks the recommended stop on the track
-  paintStack(i);
+function renderStackTiles(){
+  const pop=document.getElementById('stackpop'); if(!pop)return;
+  const cur=_stackIdx(STACK_CUR);
+  pop.innerHTML='<div class=stackpop-h>Pick your crew. Sets the models behind research, the credibility gate, and the writing you read.</div>'+
+    STACKS_UI.map((u,i)=>{
+      const needkey=!!(u.o&&!HAS_KEY);
+      const badges=(u.rec?'<span class="st-badge rec">Recommended</span>':'')
+        +(needkey?'<span class="st-badge key">\\uD83D\\uDD11 Your key</span>':'');
+      return '<button type=button role=menuitemradio aria-checked='+(i===cur)+' class="stacktile'+(i===cur?' sel':'')+'" onclick=pickStack('+i+')">'+
+        '<span class=st-top><span class=st-name>'+esc(u.n)+'</span><span class=st-badges>'+badges+'</span>'+
+        '<span class=stack-cost aria-hidden=true>'+_stackCost(i)+'</span></span>'+
+        '<span class=st-desc>'+esc(u.b)+'</span></button>';
+    }).join('');
 }
-function onStackSlide(i){paintStack(i);}   // live label/tooltip while dragging
+function toggleStackPop(){
+  const pop=document.getElementById('stackpop'),btn=document.getElementById('stackbtn'); if(!pop)return;
+  const opening=pop.hidden;
+  if(opening)renderStackTiles();
+  pop.hidden=!opening; btn.setAttribute('aria-expanded',opening?'true':'false');
+}
+function closeStackPop(){const pop=document.getElementById('stackpop'),btn=document.getElementById('stackbtn');
+  if(pop&&!pop.hidden){pop.hidden=true;btn.setAttribute('aria-expanded','false');}}
+function pickStack(i){const u=STACKS_UI[i];closeStackPop();if(u&&u.k!==STACK_CUR)commitStack(i);}
 async function commitStack(i){
   const u=STACKS_UI[i]; if(!u||!SID)return;
+  STACK_CUR=u.k; renderStack();   // optimistic; reconciled by render(s) below
   try{
     const r=await fetch('/api/plan/'+SID+'/stack',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({stack:u.k})});
     const s=await r.json();
-    if(r.ok){render(s);toast(u.b+(u.o&&!HAS_KEY?' Add your key to actually run it.':''),'ok');}
+    if(r.ok){render(s);toast(u.n+' is on the job.'+(u.o&&!HAS_KEY?' Add your key to actually run it.':''),'ok');}
   }catch(e){}
 }
 // ── Session usage meter ─────────────────────────────────────────────────────
@@ -2327,10 +2349,15 @@ function routeFromPath(){   // a finished plan lives at /plan/{id} — deep-link
   else if(SID){SID=null;show('intake');renderBoardPick();gateIntake();}   // navigated back to home
 }
 window.addEventListener('popstate',routeFromPath);   // browser back/forward drives the SPA
+document.addEventListener('click',function(e){   // click outside the crew picker closes it
+  const sp=document.getElementById('stackpop');
+  if(sp&&!sp.hidden&&!e.target.closest('#stackdial'))closeStackPop();
+});
 document.addEventListener('keydown',function(e){
   const drawer=document.getElementById('drawer'), modal=document.getElementById('modal');
   const dOpen=drawer&&drawer.classList.contains('open'), mOpen=modal&&modal.classList.contains('open');
-  if(e.key==='Escape'){if(mOpen)_closeModal();else if(dOpen)closeDrawer();}
+  if(e.key==='Escape'){const sp=document.getElementById('stackpop');
+    if(sp&&!sp.hidden){closeStackPop();}else if(mOpen)_closeModal();else if(dOpen)closeDrawer();}
   if((e.metaKey||e.ctrlKey)&&e.key==='Enter'&&e.target&&e.target.id==='drawerq')submitDrawer();
   if(mOpen&&e.key==='Enter'&&e.target&&e.target.id==='modalinput'){e.preventDefault();_submitPrompt();}
   const ov=mOpen?modal:(dOpen?drawer:null);   // trap focus inside whichever overlay is open
