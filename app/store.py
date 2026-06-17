@@ -97,6 +97,7 @@ def init() -> None:
                     "  shared INTEGER NOT NULL DEFAULT 0,"  # 1 → readable at the public /p/{id} share link
                     "  cost REAL NOT NULL DEFAULT 0,"
                     "  tokens INTEGER NOT NULL DEFAULT 0,"  # cumulative input+output tokens (usage meter)
+                    "  stack TEXT NOT NULL DEFAULT 'damn-good',"  # chosen model stack (provider.STACKS)
                     "  error TEXT,"
                     "  created_at TEXT NOT NULL)")
                 # Migration for DBs created before later columns existed (SQLite has no ADD COLUMN IF
@@ -109,6 +110,8 @@ def init() -> None:
                     con.execute("ALTER TABLE plan_sessions ADD COLUMN shared INTEGER NOT NULL DEFAULT 0")
                 if "tokens" not in have:
                     con.execute("ALTER TABLE plan_sessions ADD COLUMN tokens INTEGER NOT NULL DEFAULT 0")
+                if "stack" not in have:
+                    con.execute("ALTER TABLE plan_sessions ADD COLUMN stack TEXT NOT NULL DEFAULT 'damn-good'")
         finally:
             con.close()
         _initialized = True

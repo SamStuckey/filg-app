@@ -45,7 +45,7 @@ from urllib.parse import urlparse
 import anthropic
 
 import provider
-from provider import HAIKU, SONNET  # canonical model ids (defined in provider to avoid a cycle)
+from provider import HAIKU, SONNET, OPUS  # canonical model ids (defined in provider to avoid a cycle)
 
 from source_credibility_gate import (
     classify_domain,
@@ -56,7 +56,7 @@ from source_credibility_gate import (
 # Keyed by FILG's hosted model ids only. BYOK runs use a user's key (provider.bills_filg=False),
 # so their tokens are the user's spend, not FILG's — an unknown model id resolves to $0 here on
 # purpose (PRICES.get below), keeping BYOK runs off FILG's daily kill switch.
-PRICES = {HAIKU: (1.0, 5.0), SONNET: (3.0, 15.0)}
+PRICES = {HAIKU: (1.0, 5.0), SONNET: (3.0, 15.0), OPUS: (5.0, 25.0)}
 WEB_SEARCH_PRICE = 10.0 / 1000  # $10 per 1k searches (Anthropic server tool)
 OPENROUTER_WEB_MAX = 4          # results per request for OpenRouter's web plugin
 
@@ -165,11 +165,12 @@ def bound(fn):
     """Wrap a fan-out worker so it re-binds BOTH the active provider and the per-run ledger inside its
     own thread (ThreadPoolExecutor workers don't inherit contextvars). Captured at submit time."""
     prov = provider.active()
+    stk = provider.active_stack()   # carry the model stack into the fan-out too (threads don't inherit it)
     led = _ledger_var.get()
 
     @functools.wraps(fn)
     def inner(*args, **kwargs):
-        with provider.use(prov):
+        with provider.use(prov), provider.use_stack(stk):
             token = _ledger_var.set(led)
             try:
                 return fn(*args, **kwargs)
@@ -193,6 +194,7 @@ def call(stage: str, model: str, prompt: str, *, max_tokens: int = 1500,
     cache-eligible (prompt caching): the system prefix is identical across every run of a stage,
     so caching it reads at ~0.1× input price after the first call — the cheapest token win we have.
     """
+    model = provider.resolve_model(stage, model)   # the active model stack picks the model for this stage
     prov = provider.active()
     if prov is not None and prov.kind == "openai":
         return _call_openai(prov, stage, model, prompt, max_tokens=max_tokens,

@@ -264,6 +264,19 @@ def test_inline_comment_and_footer_collapse_ui_present(client):
     assert "function forceNext" in html and "function talkItOut" in html  # softened kill-gate off-ramps
 
 
+def test_model_stack_selection(client):
+    # The user can pick a model stack; it persists on the session and unknown values fall back to default.
+    sid = client.post("/api/plan/start", json={"idea": GRAB_BAG, "email": "stack@x.com"}).json()["id"]
+    s = wait_status(client, sid)
+    assert s["stack"] == "damn-good"                                   # default
+    s = client.post(f"/api/plan/{sid}/stack", json={"stack": "trust-fund"}).json()
+    assert s["stack"] == "trust-fund"
+    s = client.post(f"/api/plan/{sid}/stack", json={"stack": "polished-turd"}).json()
+    assert s["stack"] == "polished-turd"
+    s = client.post(f"/api/plan/{sid}/stack", json={"stack": "bogus"}).json()
+    assert s["stack"] == "damn-good"                                   # unknown → default
+
+
 def test_no_native_browser_dialogs(client):
     # The ux-design skill forbids native alert/confirm/prompt for product UI. The whole app must
     # use the styled toast/modal helpers instead. Match call-sites (foo(, not substrings of words).

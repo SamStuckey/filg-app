@@ -149,16 +149,19 @@ def _concurrency_cap(user: str) -> int:
 
 
 @contextlib.contextmanager
-def _run_slot(user: str):
-    """Reserve a concurrency slot for `user`, bind their provider + a fresh per-run cost ledger, then
-    release the slot on exit. Raises BusyError if they're already at their plan's limit."""
+def _run_slot(user: str, stack: str | None = None):
+    """Reserve a concurrency slot for `user`, bind their provider + model stack + a fresh per-run cost
+    ledger, then release the slot on exit. Raises BusyError if they're already at their plan's limit.
+    The premium stack is clamped off FILG's free key so a free run can't spend Opus on FILG's dime."""
     cap = _concurrency_cap(user)
     with _inflight_lock:
         if _inflight.get(user, 0) >= cap:
             raise BusyError(cap)
         _inflight[user] = _inflight.get(user, 0) + 1
     try:
-        with provider.use(_provider_for(user)), pipeline.run_ledger():
+        prov = _provider_for(user)
+        stk = provider.clamp_stack(stack, byok=prov is not None)
+        with provider.use(prov), provider.use_stack(stk), pipeline.run_ledger():
             yield
     finally:
         with _inflight_lock:
@@ -427,6 +430,7 @@ def _plan_state(s: dict) -> dict:
         "chat": s.get("chat") or [], "chatStarters": advisor.STARTERS,
         "progress": s.get("progress") or [],
         "cost": s.get("cost") or 0, "tokens": s.get("tokens") or 0,   # live session usage meter
+        "stack": s.get("stack") or provider.DEFAULT_STACK,            # chosen model stack
     }
 
 
@@ -484,7 +488,9 @@ def _plan_research(session_id: str, idea: str, user: str) -> None:
             store.plan_save(session_id, progress=list(progress),
                             tokens=pipeline.LEDGER.tokens(), cost=round(pipeline.LEDGER.cost(), 4))
         prov = _provider_for(user)   # BYOK: run the whole pre-build pass on the user's key if they have one
-        with provider.use(prov), pipeline.run_ledger():
+        sess0 = store.plan_get(session_id) or {}
+        stk = provider.clamp_stack(sess0.get("stack"), byok=prov is not None)  # premium clamped off FILG's key
+        with provider.use(prov), provider.use_stack(stk), pipeline.run_ledger():
             prep = planner.prepare(idea, mock=MOCK, on_progress=on_progress)  # intake → research → vet → draft
             toks = pipeline.LEDGER.tokens()   # the welcome run's token usage → seeds the session meter
         if prov is None:   # FILG's key → meter the free run; BYOK is the user's spend, not metered
@@ -572,7 +578,7 @@ async def api_plan_respond(sid: str, request: Request):
     if choice not in planner.CHOICES:
         return JSONResponse({"error": "pick yes_and / not_quite / okay_but"}, status_code=400)
     try:
-        with _run_slot(s.get("user")):
+        with _run_slot(s.get("user"), s.get("stack")):
             # If a board is set it vets each finalized section and its takeaway steers the next draft
             # (planner.advance runs the board inline). cost includes any board review.
             upd = planner.advance(s, choice, body.get("note"), mock=MOCK,
@@ -606,7 +612,7 @@ async def api_plan_next(sid: str, request: Request):
     if active["step"] >= planner.N:
         return JSONResponse({"error": "This plan is already complete."}, status_code=409)
     try:
-        with _run_slot(s.get("user")):
+        with _run_slot(s.get("user"), s.get("stack")):
             if killed:   # forced past the gate with no substance → waste-of-time mode (comedic, skips research → ~$0)
                 child, cost = planner.wod_forward(active)
             else:
@@ -643,7 +649,7 @@ async def api_plan_revet(sid: str, request: Request):
         return JSONResponse(
             {"error": "Give me a bit more — a real skill or asset, and who'd pay for it."}, status_code=400)
     try:
-        with _run_slot(s.get("user")):
+        with _run_slot(s.get("user"), s.get("stack")):
             shaped, vetting, cost = intake.revet(s["idea"], more, s.get("research"), mock=MOCK)
             proposal = None
             if vetting["verdict"] != "kill":   # cleared → redraft part 1 from the now-substantive thesis
@@ -688,7 +694,7 @@ async def api_plan_back(sid: str, request: Request):
                             status_code=400)
     prev = tree["nodes"][active["parent"]]   # the previous step's node — the one we re-draft
     try:
-        with _run_slot(s.get("user")):
+        with _run_slot(s.get("user"), s.get("stack")):
             sib, cost = planner.rebranch(planner._working_idea(s), s["research"], prev, feedback,
                                          founder=planner._founder(s), mock=MOCK)
             toks = pipeline.LEDGER.tokens()
@@ -727,7 +733,7 @@ async def api_plan_redraft(sid: str, request: Request):
     if active["step"] >= planner.N:
         return JSONResponse({"error": "This plan is already complete."}, status_code=409)
     try:
-        with _run_slot(s.get("user")):
+        with _run_slot(s.get("user"), s.get("stack")):
             sib, cost = planner.rebranch(planner._working_idea(s), s["research"], active, feedback,
                                          founder=planner._founder(s), mock=MOCK)
             toks = pipeline.LEDGER.tokens()
@@ -742,6 +748,19 @@ async def api_plan_redraft(sid: str, request: Request):
     tree["active"] = node["id"]
     _meter(s.get("user"), cost)
     _fold_usage(sid, s, cost, toks, tree=tree, **_mirror(tree))
+    return _plan_state(store.plan_get(sid))
+
+
+@app.post("/api/plan/{sid}/stack")
+async def api_plan_stack(sid: str, request: Request):
+    """Choose the model stack for this plan (trust-fund / damn-good / polished-turd). Pure setting — no
+    spend. The premium stack is only honored on a BYOK key; on FILG's free key it clamps at run time."""
+    s = store.plan_get(sid)
+    if not s or not _owns(request, s):
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    body = await request.json()
+    want = provider.stack_name(body.get("stack"))
+    store.plan_save(sid, stack=want)
     return _plan_state(store.plan_get(sid))
 
 
@@ -775,7 +794,7 @@ async def api_plan_ask(sid: str, request: Request):
     if archetype not in planner.ARCHETYPE_KEYS:
         return JSONResponse({"error": "pick an advisor"}, status_code=400)
     try:
-        with _run_slot(s.get("user")):
+        with _run_slot(s.get("user"), s.get("stack")):
             res, cost = planner.ask_expert(s["idea"], s.get("files") or {}, archetype,
                                            body.get("question") or "", mock=MOCK)
             toks = pipeline.LEDGER.tokens()
@@ -808,7 +827,7 @@ async def api_plan_board(sid: str, request: Request):
     work_idea = planner._working_idea(s)
     plan_text = planner.bundle_markdown(work_idea, s.get("files") or {})
     try:
-        with _run_slot(s.get("user")):
+        with _run_slot(s.get("user"), s.get("stack")):
             res, cost = board.convene(work_idea, plan_text, question, directors, mock=MOCK)
             toks = pipeline.LEDGER.tokens()
     except BusyError as be:
@@ -840,7 +859,7 @@ async def api_plan_chat(sid: str, request: Request):
         return JSONResponse({"error": "Keep it under 2000 characters."}, status_code=400)
     history = list(s.get("chat") or [])
     try:
-        with _run_slot(s.get("user")):
+        with _run_slot(s.get("user"), s.get("stack")):
             reply, cost = advisor.chat_reply(s, message, history=history, mock=MOCK)
             toks = pipeline.LEDGER.tokens()
     except BusyError as be:
@@ -915,7 +934,7 @@ async def api_plan_pdf(sid: str, request: Request):
     if (wall := _key_wall(s)):
         return wall
     try:
-        with _run_slot(s.get("user")):
+        with _run_slot(s.get("user"), s.get("stack")):
             plan, cost = plan_pdf.synthesize(s, mock=MOCK)
             data = plan_pdf.render(plan, style=(request.query_params.get("style") or "filg"))
             toks = pipeline.LEDGER.tokens()
@@ -971,6 +990,8 @@ __FILG_HEAD__
 .top{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
 .topright{display:flex;align-items:center;gap:14px}
 .meter{display:inline-flex;align-items:center;gap:6px;background:var(--card);border:1.5px solid var(--line);color:var(--muted);font-size:12.5px;font-weight:700;padding:5px 11px;border-radius:999px;cursor:default;font-variant-numeric:tabular-nums}
+.stackpick{background:var(--card);border:1.5px solid var(--line);color:var(--ink);font:inherit;font-size:12.5px;font-weight:700;padding:5px 10px;border-radius:999px;cursor:pointer}
+.stackpick:hover{border-color:var(--sky)}
 .meter[hidden]{display:none}   /* the author .meter rule would otherwise override the UA [hidden]=display:none, leaking an empty pill */
 .meter .m-dot{width:7px;height:7px;border-radius:50%;background:var(--muted);flex:none;transition:background .3s}
 .meter.live .m-dot{background:var(--ok);animation:mpulse 1.1s ease-in-out infinite}
@@ -1212,7 +1233,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 .tree button.f{width:100%;background:none;border:0;font:inherit;color:inherit;text-align:left;cursor:pointer;padding:0}
 .tree button.f:hover .nm{color:var(--sky)}
 </style></head><body><div class=page>
-<div class=top><h1 class=logo><button type=button class=logobtn onclick=newPlan() aria-label="FILG, start a new idea"><svg class=logomark viewBox="0 0 32 32" aria-hidden=true><rect width=32 height=32 rx=8 fill=#FF6B4A></rect><path d="M16 4c-3.2 2.8-4.3 7.4-4.3 11.8v3.2h8.6v-3.2C20.3 11.4 19.2 6.8 16 4z" fill=#fff></path><circle cx=16 cy=12 r=2.1 fill=#2E7CF6></circle><path d="M11.7 15.5 8.6 20.5l3.1-1.3z" fill=#fff></path><path d="M20.3 15.5 23.4 20.5l-3.1-1.3z" fill=#fff></path><path d="M13.6 19.5h4.8L16 25.5z" fill=#FFC23F></path></svg>FI<span>LG</span></button></h1><div class=topright><button type=button class=meter id=meter hidden title="Token usage this session (resets when you reload)"></button><div class=authbar id=authbar></div></div></div>
+<div class=top><h1 class=logo><button type=button class=logobtn onclick=newPlan() aria-label="FILG, start a new idea"><svg class=logomark viewBox="0 0 32 32" aria-hidden=true><rect width=32 height=32 rx=8 fill=#FF6B4A></rect><path d="M16 4c-3.2 2.8-4.3 7.4-4.3 11.8v3.2h8.6v-3.2C20.3 11.4 19.2 6.8 16 4z" fill=#fff></path><circle cx=16 cy=12 r=2.1 fill=#2E7CF6></circle><path d="M11.7 15.5 8.6 20.5l3.1-1.3z" fill=#fff></path><path d="M20.3 15.5 23.4 20.5l-3.1-1.3z" fill=#fff></path><path d="M13.6 19.5h4.8L16 25.5z" fill=#FFC23F></path></svg>FI<span>LG</span></button></h1><div class=topright><label for=stackpick class=sr-only>Model stack</label><select id=stackpick class=stackpick hidden onchange="setStack(this.value)" title="Which models build your plan. Premium runs on your own key."><option value=damn-good>Damn-good stack</option><option value=trust-fund>Trust-fund baby</option><option value=polished-turd>Polished turd</option></select><button type=button class=meter id=meter hidden title="Token usage this session (resets when you reload)"></button><div class=authbar id=authbar></div></div></div>
 <div class=note-banner id=banner></div>
 <div class=intake id=intake>
 <h2>You've got a business in you. Let's find it. 🚀</h2>
@@ -1356,6 +1377,23 @@ async function poll(){
   if(s.status!=='error')maybePromptKey();   // welcome plan is in → require a key to go further
 }
 let ACT_RESEARCH=false, ACT_PROG_N=0, ACT_ID=null;
+// ── Model stack selector (trust-fund / damn-good / polished-turd) ────────────
+function renderStack(s){
+  const el=document.getElementById('stackpick'); if(!el)return;
+  el.hidden=false;
+  if(s.stack&&el.value!==s.stack)el.value=s.stack;
+}
+async function setStack(name){
+  if(!SID)return;
+  const blurb={'trust-fund':'Trust-fund baby: top-of-the-line models on every step (runs on your own key).',
+    'polished-turd':'Polished turd: Haiku only — cheapest, weakest research + grading foundation.',
+    'damn-good':'Damn-good: Sonnet brains (planning, grading, synthesis), Haiku for the bulk reads.'};
+  try{
+    const r=await fetch('/api/plan/'+SID+'/stack',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({stack:name})});
+    const s=await r.json();
+    if(r.ok){render(s);toast(blurb[s.stack]||'Model stack updated.','ok');}
+  }catch(e){}
+}
 // ── Session usage meter ─────────────────────────────────────────────────────
 // In-memory only: tokens + $ spent THIS browser session. Resets on reload, never tracked on the
 // account. Always visible (starts at 0). Each plan's cumulative cost/tokens is observed per response
@@ -1401,7 +1439,7 @@ function render(s){
     document.getElementById('node').innerHTML='<div class=node><h3>Hit a snag</h3><p class=lead>'+esc(s.error)+'</p><button type=button onclick=newPlan()>Start over</button></div>';
     say('Something went wrong: '+(s.error||'')); return;
   }
-  renderResearch(s);renderVet(s);renderAnswer(s);renderTree(s);renderNode(s);renderAddons(s);renderBoard(s);renderBoardRound(s);renderDecisionTree(s);renderChat(s);syncSidebar(s);
+  renderResearch(s);renderVet(s);renderAnswer(s);renderTree(s);renderNode(s);renderAddons(s);renderBoard(s);renderBoardRound(s);renderDecisionTree(s);renderChat(s);renderStack(s);syncSidebar(s);
   if(s.done&&SID&&location.pathname!=='/plan/'+SID)history.pushState({plan:SID},'','/plan/'+SID);   // finished plan gets a clean URL (revisit + bookmark)
   if(s.done)say('Your plan is complete, all '+s.total+' parts ready to download.');
   else if(s.vetting&&s.vetting.verdict)say('Research graded. Verdict: '+s.vetting.verdict+'. Ready to build part '+((s.step||0)+1)+'.');
