@@ -1143,6 +1143,18 @@ button:hover{filter:brightness(1.04)}button:active{transform:translateY(1px)}but
 .modal h3{font-size:19px;font-weight:800;margin:0 0 8px}
 .modal #modal-body{font-size:14.5px;color:var(--muted);margin-bottom:16px}.modal #modal-body p{margin:0}
 .modal-actions{display:flex;justify-content:flex-end;gap:10px}
+.cmtpop{position:absolute;z-index:60;width:288px;background:var(--card);border:1px solid var(--line);border-radius:12px;box-shadow:0 14px 40px rgba(20,17,14,.2);padding:11px 12px;opacity:0;visibility:hidden;transform:translateY(4px);transition:opacity .14s,transform .14s}
+.cmtpop.show{opacity:1;visibility:visible;transform:none}
+.cmtpop .cmtpq{font-size:12px;color:var(--muted);font-style:italic;margin-bottom:7px;max-height:48px;overflow:hidden}
+.cmtpop textarea{width:100%;margin:0 0 8px}
+.cmtpa{display:flex;justify-content:flex-end;gap:8px}
+.draft{cursor:text}
+.cmts{margin:11px 0 2px}
+.cmth{font-size:12px;font-weight:700;color:var(--muted);margin-bottom:7px}
+.cmt{display:flex;align-items:center;gap:9px;padding:7px 9px;border:1px solid var(--line);border-left:3px solid var(--sun);border-radius:8px;margin-bottom:6px;background:var(--card)}
+.cmtq{font-style:italic;color:var(--muted);font-size:12.5px;flex:none;max-width:42%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cmtn{font-size:13px;flex:1}
+.cmtx{background:none;border:0;color:var(--muted);cursor:pointer;font-size:17px;line-height:1;padding:0 2px;flex:none}
 .toasts{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);display:flex;flex-direction:column;gap:8px;z-index:60;align-items:center;pointer-events:none}
 .toast{background:var(--ink);color:#fff;padding:11px 18px;border-radius:12px;font-size:14px;font-weight:700;box-shadow:0 8px 24px rgba(20,17,14,.2);transition:opacity .3s,transform .3s;max-width:90vw}
 .toast.err{background:var(--coral-d)}.toast.out{opacity:0;transform:translateY(8px)}
@@ -1231,6 +1243,11 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <div class=modal-back id=modalback onclick="_closeModal()"></div>
 <div class=modal id=modal role=dialog aria-modal=true aria-labelledby=modal-title aria-hidden=true>
 <h3 id=modal-title></h3><div id=modal-body></div><div class=modal-actions id=modal-actions></div></div>
+<div class=cmtpop id=cmtpop role=dialog aria-label="Add a comment on this part" aria-hidden=true>
+<div class=cmtpq id=cmtquote></div>
+<label for=cmtnote class=sr-only>Your comment on the highlighted text</label>
+<textarea id=cmtnote rows=2 placeholder="Comment on this… (folded in when you regenerate or roll forward)"></textarea>
+<div class=cmtpa><button type=button class=ghost onclick=hideCmtPop()>Cancel</button><button type=button onclick=saveComment()>Comment</button></div></div>
 <div class=toasts id=toasts aria-live=polite></div>
 <div class=activity id=activity aria-live=polite aria-hidden=true><button type=button class=afoot-bar onclick="this.parentNode.classList.toggle('min')" aria-label="Collapse or expand the activity log"><span class=afoot-grip aria-hidden=true></span><span class=afoot-caret aria-hidden=true>\\u25be</span></button><div class=alog id=activity-log></div></div>
 <div class=workspace id=workspace style="display:none">
@@ -1378,6 +1395,8 @@ function paintMeter(){
 }
 function render(s){
   meterTick(s);   // tick the session usage meter off this plan's cumulative cost/tokens
+  CUR_NODE=(s.tree&&s.tree.active)||null;   // #7 key inline comments to the active node
+  hideCmtPop();
   if(s.status==='error'){
     document.getElementById('node').innerHTML='<div class=node><h3>Hit a snag</h3><p class=lead>'+esc(s.error)+'</p><button type=button onclick=newPlan()>Start over</button></div>';
     say('Something went wrong: '+(s.error||'')); return;
@@ -1502,9 +1521,11 @@ function renderNode(s){
     `<div class=navrow><button type=button class=b-back onclick=regenStep() title="Regenerate this part with your feedback (to go back a step, use the decision tree)">\\u21bb Not feeling it</button>`+
     `<button type=button class=b-next onclick=nextStep()>I'm with you →</button></div>`+
     `<div class=ferr id=ferr></div></div>`;
+  const cmtbox=killed?'':`<div class=cmts id=cmtlist></div>`;   // #7 inline comments live under a buildable draft
   n.innerHTML=`<div class=node><span class=eyebrow>Your plan · part ${s.step+1} of ${s.total}</span><h3>${esc(p.title)}</h3><p class=h3sub>${esc(sec.sub||'')}</p>`+
     changeFlag+intro+
-    `<div class="draft md">${mdToHtml(p.draft)}</div>`+tail;
+    `<div class="draft md">${mdToHtml(p.draft)}</div>`+cmtbox+tail;
+  renderComments();
 }
 // The kill gate is now a COACHING LADDER, not a hard wall. First hit = genuine advisement (Coach voice
 // + the off-ramps: add substance / re-check, or talk it through). Forcing past it with no substance rolls
@@ -1556,6 +1577,49 @@ function talkItOut(){   // #8 off-ramp: hash the idea out in the side-chat inste
   const t=document.getElementById('chatinput');
   if(t){if(!t.value)t.value="My idea got flagged as not buildable yet. Help me find a real skill, asset, or buyer I could build this around.";t.focus();}
 }
+// ── #7 Inline comments: select text (or click a line) in the current draft → a popover note. Comments
+// are held per node id and folded into the next regenerate / roll-forward, anchored to the quoted span.
+let COMMENTS={};     // {nodeId:[{quote,note}]}
+let CUR_NODE=null;   // active node id (keys the comments)
+let CMT_QUOTE='';    // the span the open popover targets
+function nodeComments(){return (CUR_NODE&&COMMENTS[CUR_NODE])||[];}
+function commentsSteer(){   // fold inline comments into the feedback string the model receives
+  const cs=nodeComments(); if(!cs.length)return '';
+  return "\\n\\nInline comments on the current draft (address each, anchored to the quoted text):\\n"+
+    cs.map(c=>`- On \\u201c${c.quote}\\u201d: ${c.note}`).join("\\n");
+}
+function renderComments(){
+  const box=document.getElementById('cmtlist'); if(!box)return;
+  const cs=nodeComments();
+  box.innerHTML = cs.length ? (`<div class=cmth>Your notes on this part \\u2014 folded in when you regenerate or roll forward</div>`+
+    cs.map((c,i)=>`<div class=cmt><span class=cmtq>\\u201c${esc(c.quote.length>60?c.quote.slice(0,60)+'\\u2026':c.quote)}\\u201d</span><span class=cmtn>${esc(c.note)}</span><button type=button class=cmtx aria-label="Remove comment" onclick="removeComment(${i})">\\u00d7</button></div>`).join('')) : '';
+}
+function removeComment(i){const cs=nodeComments();cs.splice(i,1);renderComments();}
+function onDraftSelect(e){
+  if(e.target.closest('#cmtpop'))return;             // interactions inside the popover don't re-open it
+  const draft=e.target.closest('.draft'); if(!draft){return;}
+  const sel=window.getSelection(); let quote=(sel&&sel.toString()||'').trim();
+  if(!quote){const blk=e.target.closest('p,li,h3,h4,h5,h6,td');quote=blk?(blk.textContent||'').trim():'';}
+  if(!quote)return;
+  CMT_QUOTE=quote.slice(0,180);
+  const pop=document.getElementById('cmtpop'); if(!pop)return;
+  document.getElementById('cmtquote').textContent='\\u201c'+(CMT_QUOTE.length>90?CMT_QUOTE.slice(0,90)+'\\u2026':CMT_QUOTE)+'\\u201d';
+  document.getElementById('cmtnote').value='';
+  pop.style.left=Math.max(8,Math.min(e.pageX,window.scrollX+window.innerWidth-300))+'px';
+  pop.style.top=(e.pageY+8)+'px';
+  pop.classList.add('show'); pop.setAttribute('aria-hidden','false');
+  setTimeout(()=>{const n=document.getElementById('cmtnote');if(n)n.focus();},30);
+}
+function hideCmtPop(){const p=document.getElementById('cmtpop');if(p){p.classList.remove('show');p.setAttribute('aria-hidden','true');}}
+function saveComment(){
+  const note=((document.getElementById('cmtnote')||{}).value||'').trim();
+  if(!note||!CMT_QUOTE||!CUR_NODE){hideCmtPop();return;}
+  (COMMENTS[CUR_NODE]=COMMENTS[CUR_NODE]||[]).push({quote:CMT_QUOTE,note});
+  CMT_QUOTE=''; hideCmtPop(); renderComments();
+  const s=window.getSelection&&window.getSelection(); if(s&&s.removeAllRanges)s.removeAllRanges();
+}
+document.addEventListener('mouseup',onDraftSelect);
+document.addEventListener('keydown',function(e){if(e.key==='Escape')hideCmtPop();});
 const FB_CHIPS=["go bolder","narrower niche","cheaper entry","B2B only","more specific","add an upsell"];
 function addChip(txt){const t=document.getElementById('feedback'); if(!t)return; t.value=(t.value?t.value.replace(/\\s*$/,'')+', ':'')+txt; t.focus();}
 function _navBusy(){const n=document.getElementById('node');if(n)n.querySelectorAll('button').forEach(b=>b.disabled=true);const f=document.getElementById('ferr');if(f)f.textContent='';document.getElementById('err2').textContent='';}
@@ -1570,13 +1634,14 @@ function _aiRun(url,body){   // fetch + a min-show delay; the caller owns its Ac
 }
 async function nextStep(){
   if(!requireKey())return;
-  const fb=(document.getElementById('feedback')||{}).value||'';
+  const fb=((document.getElementById('feedback')||{}).value||'').trim();
+  const full=(fb+commentsSteer()).trim();   // #7 fold inline comments into the roll-forward
   _navBusy();
-  const steps=[]; if(fb.trim())steps.push("Folding in your note");
+  const steps=[]; if(full)steps.push("Folding in your notes");
   steps.push("Drafting the next part of your plan","Checking it against your graded research");
   const aid=Activity.start(steps,1200,'Building the next part');
   try{
-    const r=await _aiRun('/api/plan/'+SID+'/next',{feedback:fb});
+    const r=await _aiRun('/api/plan/'+SID+'/next',{feedback:full});
     const s=await r.json();
     if(!r.ok){Activity.stop(aid);fbErr(s.error||'Something went wrong.');_navFree();return;}
     REDRAFTS=0;   // advanced past this part — reset the rework counter
@@ -1616,15 +1681,16 @@ let REDRAFTS=0;   // consecutive regenerations of the CURRENT part → escalate 
 async function regenStep(){
   if(!requireKey())return;
   const fb=((document.getElementById('feedback')||{}).value||'').trim();
-  if(!fb){fbErr("Tell me what's not landing — a rework needs a note to steer it.");const t=document.getElementById('feedback');if(t)t.focus();return;}
+  const steer=(fb+commentsSteer()).trim();   // #7 a note OR inline comments can steer the rework
+  if(!steer){fbErr("Tell me what's not landing — add a note or a comment to steer the rework.");const t=document.getElementById('feedback');if(t)t.focus();return;}
   if(REDRAFTS>=2){   // they keep mashing it — nudge toward backing up via the decision tree
     const ok=await uiConfirm('Still not feeling it?',"We can regenerate this part all day. If a rework keeps missing, try backing up to an earlier part from the decision tree on the left. Regenerate again?",'Regenerate anyway');
     if(!ok)return;
   }
   _navBusy();
-  const aid=Activity.start(["Re-reading your note","Regenerating this part from a different angle"],1200,'Regenerating this part');
+  const aid=Activity.start(["Re-reading your notes","Regenerating this part from a different angle"],1200,'Regenerating this part');
   try{
-    const r=await _aiRun('/api/plan/'+SID+'/redraft',{feedback:fb});
+    const r=await _aiRun('/api/plan/'+SID+'/redraft',{feedback:steer});
     const s=await r.json();
     if(!r.ok){Activity.stop(aid);fbErr(s.error||'Something went wrong.');_navFree();return;}
     REDRAFTS++;

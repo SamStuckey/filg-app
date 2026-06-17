@@ -255,6 +255,15 @@ def test_advisor_uses_drawer_not_native_prompt(client):
     assert "prompt('Ask the advisor" not in html and "prompt('Ask your board" not in html
 
 
+def test_inline_comment_and_footer_collapse_ui_present(client):
+    # #7 inline comments + #9 collapsible footer are client-side; guard their wiring stays in the page.
+    html = client.get("/").text
+    assert "id=cmtpop" in html and "function saveComment" in html and "function commentsSteer" in html
+    assert "function onDraftSelect" in html and "function renderComments" in html
+    assert "afoot-bar" in html and "classList.toggle('min')" in html   # footer-level collapse toggle
+    assert "function forceNext" in html and "function talkItOut" in html  # softened kill-gate off-ramps
+
+
 def test_no_native_browser_dialogs(client):
     # The ux-design skill forbids native alert/confirm/prompt for product UI. The whole app must
     # use the styled toast/modal helpers instead. Match call-sites (foo(, not substrings of words).
