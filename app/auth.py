@@ -67,6 +67,26 @@ def user_from_request(request) -> dict | None:
     return {"id": claims.get("sub"), "email": (claims.get("email") or "").strip().lower()}
 
 
+_GMAIL = ("gmail.com", "googlemail.com")
+
+
+def normalize_email(email: str) -> str:
+    """Collapse provider-equivalent addresses to ONE identity (anti-abuse, business_plan §16.1):
+    lowercase, drop a `+suffix` from the local part, and for gmail/googlemail also strip dots and
+    fold googlemail → gmail. Supabase treats `me+1@`/`me.e@`/`me@` as distinct accounts, so we dedupe
+    them ourselves for the free-taste counter (and the $35 PDF unlock). Imperfect by design — separate
+    real accounts slip through; the daily free-taste budget is the real ceiling."""
+    email = (email or "").strip().lower()
+    if "@" not in email:
+        return email
+    local, _, domain = email.partition("@")
+    local = local.split("+", 1)[0]
+    if domain in _GMAIL:
+        local = local.replace(".", "")
+        domain = "gmail.com"
+    return f"{local}@{domain}"
+
+
 if __name__ == "__main__":  # self-test: sign an ES256 token like Supabase would, verify via a fake JWKS
     import time
     import types
@@ -96,4 +116,10 @@ if __name__ == "__main__":  # self-test: sign an ES256 token like Supabase would
     class _Req:
         headers = {"authorization": f"Bearer {good}"}
     assert user_from_request(_Req()) == {"id": "u1", "email": "a@x.com"}
-    print("auth.py self-test OK (ES256/JWKS)")
+    # email normalization (free-taste dedup)
+    assert normalize_email("Me+filg@Gmail.com") == "me@gmail.com"
+    assert normalize_email("m.e.123@googlemail.com") == "me123@gmail.com"
+    assert normalize_email("me+a@fastmail.com") == "me@fastmail.com"   # plus stripped everywhere
+    assert normalize_email("a.b@fastmail.com") == "a.b@fastmail.com"   # dots kept for non-gmail
+    assert normalize_email("  Plain@X.com ") == "plain@x.com"
+    print("auth.py self-test OK (ES256/JWKS + normalize_email)")

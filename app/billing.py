@@ -28,13 +28,19 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from . import store
+from . import auth, store
 
 SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY", "")
 PRICE_ID = os.environ.get("STRIPE_PRICE_ID", "")
 WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
 PUBLIC_URL = os.environ.get("FILG_PUBLIC_URL", "http://localhost:8000").rstrip("/")
-BILLING_ENABLED = bool(SECRET_KEY and PRICE_ID)
+BILLING_ENABLED = bool(SECRET_KEY and PRICE_ID)   # the (dormant) $39/mo subscription
+
+# The LOCKED monetization model (business_plan §16.1): one-time $35 for the polished investor-grade
+# PDF, no subscription yet. The price is built inline (Stripe `price_data`) so no dashboard Price needs
+# to exist — only the secret key. Override the amount with FILG_PDF_PRICE_CENTS.
+PDF_PRICE_CENTS = int(os.environ.get("FILG_PDF_PRICE_CENTS", "3500"))
+PDF_BILLING_ENABLED = bool(SECRET_KEY)
 
 _API = "https://api.stripe.com/v1"
 
@@ -75,6 +81,34 @@ def create_checkout_url(email: str, user_id: str | None = None) -> str:
     return session["url"]
 
 
+def create_pdf_checkout_url(email: str, *, user_id: str | None = None,
+                            plan_id: str | None = None) -> str:
+    """Create a ONE-TIME ($35) Checkout Session for the polished PDF unlock and return its hosted URL.
+    Inline `price_data` so no pre-made Stripe Price is needed. On success Stripe sends a
+    `checkout.session.completed` event with `mode=payment` → handle_event records the purchase."""
+    if not PDF_BILLING_ENABLED:
+        raise StripeError("billing not configured")
+    ret = f"/plan/{plan_id}" if plan_id else "/"
+    session = _post("/checkout/sessions", {
+        "mode": "payment",
+        "line_items[0][price_data][currency]": "usd",
+        "line_items[0][price_data][unit_amount]": PDF_PRICE_CENTS,
+        "line_items[0][price_data][product_data][name]": "FILG investor-grade plan PDF",
+        "line_items[0][quantity]": 1,
+        "customer_email": email,
+        "client_reference_id": user_id or email,
+        "allow_promotion_codes": "true",
+        "success_url": f"{PUBLIC_URL}{ret}?pdf=1",
+        "cancel_url": f"{PUBLIC_URL}{ret}?pdf_canceled=1",
+    })
+    return session["url"]
+
+
+def has_purchased(email: str) -> bool:
+    """True iff this email has bought the one-time $35 PDF unlock (normalized for alias dedup)."""
+    return store.has_purchased(auth.normalize_email(email))
+
+
 def verify_webhook(payload: bytes, sig_header: str, tolerance: int = 300) -> dict | None:
     """Verify a Stripe webhook signature (`Stripe-Signature: t=…,v1=…`) and return the parsed event,
     or None if the secret is unset, the header is malformed, the timestamp is stale, or it fails."""
@@ -105,7 +139,13 @@ def handle_event(event: dict) -> None:
     if typ == "checkout.session.completed":
         email = (obj.get("customer_email")
                  or (obj.get("customer_details") or {}).get("email") or "").strip().lower()
-        if email:
+        if not email:
+            return
+        if obj.get("mode") == "payment":   # the one-time $35 PDF unlock (the live model)
+            store.record_purchase(auth.normalize_email(email),
+                                  stripe_session=obj.get("id"),
+                                  amount_cents=obj.get("amount_total"))
+        else:                              # subscription checkout (dormant $39/mo path)
             store.upsert_subscription(email, customer=obj.get("customer"),
                                       subscription=obj.get("subscription"), status="active")
     elif typ.startswith("customer.subscription."):
@@ -147,4 +187,13 @@ if __name__ == "__main__":  # self-test (no network): webhook verification + eve
               "data": {"object": {"customer": "cus_9", "id": "sub_9"}}}
     handle_event(cancel)
     assert is_paid("buyer@x.com") is False
+
+    # one-time $35 PDF unlock (mode=payment) → recorded as a purchase, not a subscription
+    pdf_ev = {"type": "checkout.session.completed",
+              "data": {"object": {"mode": "payment", "id": "cs_77", "amount_total": 3500,
+                                  "customer_details": {"email": "Pdf+x@Gmail.com"}}}}
+    raw, header = _signed(pdf_ev)
+    handle_event(verify_webhook(raw, header))
+    assert has_purchased("pdf@gmail.com") is True          # normalized alias unlocks
+    assert is_paid("pdf@gmail.com") is False               # not a subscription
     print("billing.py self-test OK")

@@ -37,10 +37,19 @@ On the Render URL (`https://filg-xxxx.onrender.com`):
 Just fill env in **Environment** and save — no redeploy logic changes. See `.env.example` for the full list.
 - **Supabase** (`SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_JWT_SECRET` — Settings → API).
   Add `https://fuckitletsgo.ai` as an Auth redirect URL.
-- **Stripe** (`STRIPE_SECRET_KEY`, `STRIPE_PRICE_ID` for the $39/mo recurring price,
-  `STRIPE_WEBHOOK_SECRET`). Webhook endpoint: `https://fuckitletsgo.ai/api/stripe/webhook`,
-  events `checkout.session.completed` + `customer.subscription.*`.
-- `/healthz` then reports `auth_enabled:true, billing_enabled:true`.
+- **Stripe — the LIVE model is the one-time $35 polished-PDF unlock** (business_plan §16.1). It needs
+  only `STRIPE_SECRET_KEY` + `STRIPE_WEBHOOK_SECRET` (the $35 price is built inline via Stripe
+  `price_data`, so no dashboard Price/`STRIPE_PRICE_ID` is required). Optional `FILG_PDF_PRICE_CENTS`
+  overrides the amount (default `3500`). Webhook endpoint: `https://fuckitletsgo.ai/api/stripe/webhook`,
+  event **`checkout.session.completed`** (the handler routes `mode=payment` → records the per-account
+  PDF unlock). Setting `STRIPE_SECRET_KEY` flips `pdf_billing` on; the polished PDF then needs a purchase,
+  while raw `.zip`/`.md` export stays free.
+- **The $39/mo subscription is DORMANT** (no sub is sold yet — §16.1). Its code path is intact:
+  `STRIPE_PRICE_ID` (recurring) + the `customer.subscription.*` events still drive `is_paid` if you ever
+  re-enable it, and a live sub (or a `FILG_PAID_EMAILS` comp) also unlocks the PDF. The `Upgrade $39/mo`
+  button is hidden in the UI.
+- `/healthz` then reports `auth_enabled:true, billing_enabled:<sub price set>`. The PDF-billing flag and
+  price ride on `GET /api/me` (`pdf_billing`, `pdf_price`, `pdf_unlocked`).
 
 ## 5. NEXT STEP — turn on user profiles (Supabase + Google OAuth)
 Activates accounts + the "My plans" profile (replaces the email box with real login). Until done,

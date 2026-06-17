@@ -15,6 +15,7 @@ then drive states from here.
   python scripts/dev.py spend <amount>        # add to today's spend → test the daily kill-switch / degrade
   python scripts/dev.py usage                 # show today_spend / daily_budget / free-run counters
   python scripts/dev.py plan <email> <plan>   # set an account's entitlement (free|byok|pro)
+  python scripts/dev.py buy <email>           # grant the one-time $35 PDF unlock → test the polished export
 """
 import os
 import sys
@@ -35,6 +36,12 @@ def _store():
 def _usage():
     import usage
     return usage
+
+
+def _norm(email):
+    """Normalize an email the way the app dedupes the free taste + PDF unlock (alias collapse)."""
+    import auth
+    return auth.normalize_email(email)
 
 
 def cmd_serve(args):
@@ -67,7 +74,8 @@ def cmd_state(args):
     print(f"sid={args.sid}")
     print(f"  status={s.get('status')} step={s.get('step')} verdict={verdict} files={len(s.get('files') or {})}")
     print(f"  tree.active={tree.get('active')} nodes={len(tree.get('nodes') or {})}")
-    print(f"  user={user} plan={store.account_plan(user)} free_used={usage.free_used(user)}")
+    print(f"  user={user} plan={store.account_plan(user)} free_used={usage.free_used(_norm(user or ''))}")
+    print(f"  pdf_unlocked={store.has_purchased(_norm(user or ''))}")
     print(f"  today_spend=${snap['today_spend']:.2f} / ${snap['daily_budget']:.0f} budget")
 
 
@@ -112,6 +120,14 @@ def cmd_plan(args):
     print(f"{args.email} → plan={store.account_plan(args.email)}")
 
 
+def cmd_buy(args):
+    store = _store()
+    norm = _norm(args.email)
+    store.record_purchase(norm, stripe_session="dev", amount_cents=3500)
+    print(f"{args.email} (→ {norm}) → pdf_unlocked={store.has_purchased(norm)} "
+          "(the polished PDF now downloads; raw export was always free)")
+
+
 def main():
     import argparse
     p = argparse.ArgumentParser(description="FILG local dev/test harness")
@@ -130,6 +146,9 @@ def main():
     a.add_argument("email")
     a.add_argument("plan")
     a.set_defaults(fn=cmd_plan)
+    a = sub.add_parser("buy")
+    a.add_argument("email")
+    a.set_defaults(fn=cmd_buy)
     args = p.parse_args()
     args.fn(args)
 

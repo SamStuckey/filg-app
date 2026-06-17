@@ -364,6 +364,52 @@ def test_session_usage_meter_fields(client):
     assert "cost" in chat and "tokens" in chat                # side op echoes cumulative for the meter
 
 
+def _finish_plan(client, email):
+    sid = client.post("/api/plan/start", json={"idea": GRAB_BAG, "email": email}).json()["id"]
+    s = wait_status(client, sid)
+    while not s["done"]:
+        s = client.post(f"/api/plan/{sid}/next", json={"feedback": ""}).json()
+    return sid
+
+
+def test_pdf_purchase_gate_raw_stays_free(client, monkeypatch):
+    # The locked model (business_plan §16.1): the polished PDF is the one paid action ($35 one-time),
+    # but the raw export is always free. When PDF billing is live and the user hasn't bought, the PDF
+    # route returns 402 needPurchase; the raw .zip is untouched.
+    from app import main
+    sid = _finish_plan(client, "gate@x.com")
+
+    monkeypatch.setattr(main, "_has_pdf_access", lambda *a, **k: False)   # locked (hasn't bought)
+    r = client.get(f"/api/plan/{sid}/plan.pdf")
+    assert r.status_code == 402 and r.json().get("needPurchase") is True
+    assert client.get(f"/api/plan/{sid}/download").status_code == 200    # raw export still free
+
+    monkeypatch.setattr(main, "_has_pdf_access", lambda *a, **k: True)    # bought → unlocked
+    r = client.get(f"/api/plan/{sid}/plan.pdf")
+    assert r.status_code == 200 and r.content[:5] == b"%PDF-"
+
+
+def test_pdf_open_when_billing_unconfigured(client):
+    # Dev/local (no Stripe key → PDF_BILLING_ENABLED False): the PDF is open so the app still runs.
+    from app import main
+    assert main.billing.PDF_BILLING_ENABLED is False
+    sid = _finish_plan(client, "dev@x.com")
+    assert client.get(f"/api/plan/{sid}/plan.pdf").status_code == 200
+
+
+def test_free_taste_dedup_normalizes_email():
+    # Anti-abuse (§16.2 #2): the free-taste counter dedupes on a normalized email, so +suffix and
+    # gmail-dot aliases of the same person count as one taste, not infinite.
+    import auth
+    import usage
+    a = auth.normalize_email("Taste.Dedup+one@gmail.com")
+    b = auth.normalize_email("tastededup+two@googlemail.com")
+    assert a == b == "tastededup@gmail.com"
+    usage.record_run(a, 0.1)
+    assert usage.free_used(b) is True               # the alias is already counted as used
+    assert usage.free_used("someone-else@x.com") is False
+
+
 def test_clean_plan_url_serves_spa(client):
     # History-API routing: /plan/{id} serves the SPA shell (not a 404), so deep-links/refresh work
     # and there's no '#' in the path. Distinct from /p/{id} (public share) and /r/{id} (teardown).

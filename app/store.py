@@ -68,6 +68,15 @@ def init() -> None:
                 con.execute(
                     "CREATE INDEX IF NOT EXISTS idx_subs_customer "
                     "ON subscriptions (stripe_customer)")
+                # One-time $35 PDF unlock (the locked monetization model — business_plan §16). Keyed on
+                # the NORMALIZED email (see auth.normalize_email) so a buyer's alias addresses all unlock.
+                # Separate from `subscriptions` (which stays dormant — no sub is sold yet).
+                con.execute(
+                    "CREATE TABLE IF NOT EXISTS pdf_purchases ("
+                    "  email TEXT PRIMARY KEY,"
+                    "  stripe_session TEXT,"
+                    "  amount_cents INTEGER,"
+                    "  created_at TEXT NOT NULL)")
                 # Account → plan assignment (entitlements live in code, see app/plans.py). A missing
                 # row means "no explicit plan" → the caller applies the default plan.
                 con.execute(
@@ -221,6 +230,43 @@ def is_paid(email: str) -> bool:
     return not (cpe and time.time() > cpe)
 
 
+# ── One-time PDF purchases ($35 polished export unlock) ──────────────────────
+def record_purchase(email: str, *, stripe_session: str | None = None,
+                    amount_cents: int | None = None) -> None:
+    """Mark this (normalized) email as having bought the $35 polished-PDF unlock. Idempotent —
+    re-delivering the same Stripe event just refreshes the row, never double-charges."""
+    if not email:
+        return
+    init()
+    con = _connect()
+    try:
+        with con:
+            con.execute(
+                "INSERT INTO pdf_purchases (email, stripe_session, amount_cents, created_at) "
+                "VALUES (?,?,?,?) ON CONFLICT(email) DO UPDATE SET "
+                "  stripe_session=COALESCE(excluded.stripe_session, stripe_session),"
+                "  amount_cents=COALESCE(excluded.amount_cents, amount_cents),"
+                "  created_at=excluded.created_at",
+                (email.strip().lower(), stripe_session, amount_cents,
+                 datetime.now(timezone.utc).isoformat()))
+    finally:
+        con.close()
+
+
+def has_purchased(email: str) -> bool:
+    """True iff this (already-normalized) email has bought the one-time PDF unlock."""
+    if not email:
+        return False
+    init()
+    con = _connect()
+    try:
+        row = con.execute("SELECT 1 FROM pdf_purchases WHERE email=?",
+                          (email.strip().lower(),)).fetchone()
+    finally:
+        con.close()
+    return row is not None
+
+
 # ── Accounts (plan assignment) ───────────────────────────────────────────────
 def account_plan(email: str) -> str | None:
     """The plan key assigned to this account, or None (caller defaults via app/plans.py)."""
@@ -363,6 +409,12 @@ if __name__ == "__main__":  # quick self-test (no API)
     assert email_for_customer("cus_1") == "p@x.com"
     upsert_subscription("p@x.com", status="active", current_period_end=1)  # past → expired
     assert is_paid("p@x.com") is False
+    # one-time PDF purchases (the $35 unlock)
+    assert has_purchased("buyer@x.com") is False
+    record_purchase("buyer@x.com", stripe_session="cs_1", amount_cents=3500)
+    assert has_purchased("buyer@x.com") is True
+    record_purchase("buyer@x.com", stripe_session="cs_1")   # idempotent re-delivery
+    assert has_purchased("buyer@x.com") is True
     # accounts (plan assignment)
     assert account_plan("acct@x.com") is None                 # no row → default applies upstream
     set_account_plan("Acct@X.com", "pro")

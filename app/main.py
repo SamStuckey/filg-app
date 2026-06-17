@@ -68,6 +68,15 @@ def _is_paid(email: str, verified: bool) -> bool:
     return (verified and billing.is_paid(email)) or (email in PAID)
 
 
+def _has_pdf_access(email: str, verified: bool) -> bool:
+    """True iff this user may generate/download the polished $35 PDF: they bought the one-time unlock,
+    OR they're a comp/dormant-sub (still honored), OR billing isn't configured (dev/local → open).
+    The locked model (business_plan §16.1): raw export is free, the polished PDF is the one paid action."""
+    if not billing.PDF_BILLING_ENABLED:
+        return True
+    return billing.has_purchased(email) or _is_paid(email, verified)
+
+
 def _is_byok(user: str) -> bool:
     """True iff this user runs on their own key (BYOK configured + a key saved)."""
     return bool(user and keys.enabled() and keys.has_key(user))
@@ -229,9 +238,13 @@ async def api_me(request: Request):
     authed = auth.user_from_request(request)
     if not authed:
         return {"signed_in": False, "auth_enabled": auth.AUTH_ENABLED,
-                "billing_enabled": billing.BILLING_ENABLED}
+                "billing_enabled": billing.BILLING_ENABLED,
+                "pdf_billing": billing.PDF_BILLING_ENABLED,
+                "pdf_price": billing.PDF_PRICE_CENTS}
     return {"signed_in": True, "email": authed["email"],
             "paid": _is_paid(authed["email"], verified=True),
+            "pdf_unlocked": _has_pdf_access(authed["email"], verified=True),
+            "pdf_billing": billing.PDF_BILLING_ENABLED, "pdf_price": billing.PDF_PRICE_CENTS,
             "auth_enabled": auth.AUTH_ENABLED, "billing_enabled": billing.BILLING_ENABLED}
 
 
@@ -247,6 +260,28 @@ async def api_checkout(request: Request):
         return JSONResponse({"error": "You're already on Operator."}, status_code=409)
     try:
         url = billing.create_checkout_url(authed["email"], user_id=authed["id"])
+    except billing.StripeError as e:
+        return JSONResponse({"error": str(e)}, status_code=502)
+    return {"url": url}
+
+
+@app.post("/api/plan/{sid}/buy-pdf")
+async def api_buy_pdf(sid: str, request: Request):
+    """Start the one-time $35 Checkout that unlocks the polished investor-grade PDF (the single paid
+    action). Requires a verified, signed-in owner of a finished plan. Raw export stays free."""
+    authed = auth.user_from_request(request)
+    if not authed or not authed["email"]:
+        return JSONResponse({"error": "Sign in first."}, status_code=401)
+    if not billing.PDF_BILLING_ENABLED:
+        return JSONResponse({"error": "Billing isn't configured yet."}, status_code=503)
+    s = store.plan_get(sid)
+    if not s or not _owns(request, s):
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    if _has_pdf_access(authed["email"], verified=True):
+        return JSONResponse({"error": "You've already unlocked the polished PDF.", "unlocked": True},
+                            status_code=409)
+    try:
+        url = billing.create_pdf_checkout_url(authed["email"], user_id=authed["id"], plan_id=sid)
     except billing.StripeError as e:
         return JSONResponse({"error": str(e)}, status_code=502)
     return {"url": url}
@@ -494,7 +529,8 @@ def _plan_research(session_id: str, idea: str, user: str) -> None:
             prep = planner.prepare(idea, mock=MOCK, on_progress=on_progress)  # intake → research → vet → draft
             toks = pipeline.LEDGER.tokens()   # the welcome run's token usage → seeds the session meter
         if prov is None:   # FILG's key → meter the free run; BYOK is the user's spend, not metered
-            usage.record_run(user, prep["research_cost"])           # the metered free run + daily total
+            # the per-user free-taste counter dedupes on the normalized email (alias anti-abuse)
+            usage.record_run(auth.normalize_email(user), prep["research_cost"])  # free run + daily total
             usage.record_spend(prep["cost"] - prep["research_cost"])  # intake + vet + first draft → daily
         root = _new_node(planner.root_node(prep["proposal"]), None)  # seed the decision tree's root
         tree = {"nodes": {root["id"]: root}, "active": root["id"]}
@@ -517,12 +553,13 @@ async def api_plan_start(request: Request):
     user, verified = _identity(request, body.get("email"))
     if "@" not in user:
         return JSONResponse({"error": "Enter an email so we can save your plan."}, status_code=400)
+    taste_id = auth.normalize_email(user)   # dedupe the free taste across +suffix / gmail-dot aliases
     if _is_byok(user):
         pass   # has a key → unlimited plans on their own spend
     elif keys.enabled():
         # BYOK on, no key: one free welcome plan, then they must bring a key. The daily kill switch
-        # still guards FILG's spend on these free runs.
-        if usage.free_used(user):
+        # still guards FILG's spend on these free runs (and DEGRADES to the key wall, never a dead end).
+        if usage.free_used(taste_id):
             return JSONResponse(
                 {"error": "The first plan is on us. Hook up your OpenRouter key to keep using the full suite of tools.",
                  "needKey": True}, status_code=402)
@@ -532,7 +569,7 @@ async def api_plan_start(request: Request):
                  "needKey": True}, status_code=402)
     else:
         # BYOK off (no FILG_KEY_SECRET — dev/local): keep the legacy free-cap behavior so dev works.
-        allowed, reason = usage.can_run(user, is_paid=_is_paid(user, verified))
+        allowed, reason = usage.can_run(taste_id, is_paid=_is_paid(user, verified))
         if not allowed:
             return JSONResponse({"error": reason, "upgrade": True}, status_code=402)
     directors = [k for k in (body.get("directors") or []) if k in personas.KEYS]  # optional board
@@ -924,15 +961,20 @@ def _slug(text: str) -> str:
 @app.get("/api/plan/{sid}/plan.pdf")
 async def api_plan_pdf(sid: str, request: Request):
     """The core artifact: a styled, branded PDF of the finished plan. Synthesizes an exec summary,
-    lays out the active branch's sections, and appends the graded-research evidence exhibit. No
-    paywall (monetization in flux). Builds from `s["files"]` = the final decision set."""
+    lays out the active branch's sections, and appends the graded-research evidence exhibit. This is
+    the ONE paid action (business_plan §16.1): a one-time $35 unlocks it; raw `.zip`/`.md` export stays
+    free. The $35 covers synthesis, so it runs on FILG's key when the buyer has none. Builds from
+    `s["files"]` = the final decision set."""
     s = store.plan_get(sid)
     if not s or not _owns(request, s):
         return JSONResponse({"error": "unknown session"}, status_code=404)
     if s["status"] != "done":
         return JSONResponse({"error": "plan isn't finished yet"}, status_code=400)
-    if (wall := _key_wall(s)):
-        return wall
+    authed = auth.user_from_request(request)
+    if not _has_pdf_access((authed or {}).get("email", ""), verified=authed is not None):
+        return JSONResponse(
+            {"error": "Unlock the polished, investor-grade PDF for a one-time $35. Your raw export is free.",
+             "needPurchase": True, "price": billing.PDF_PRICE_CENTS}, status_code=402)
     try:
         with _run_slot(s.get("user"), s.get("stack")):
             plan, cost = plan_pdf.synthesize(s, mock=MOCK)
@@ -943,7 +985,8 @@ async def api_plan_pdf(sid: str, request: Request):
     except Exception as e:  # noqa: BLE001
         traceback.print_exc()
         return JSONResponse({"error": f"Could not build the PDF: {e}"}, status_code=500)
-    _meter(s.get("user"), cost)
+    # The $35 covers this render, so it does NOT deplete the free-taste daily budget; the per-session
+    # usage meter still reflects it (display-only).
     nc, nt = _fold_usage(sid, s, cost, toks)   # binary response → echo usage via headers for the meter
     fn = f"{_slug(s.get('idea'))}-business-plan.pdf"
     return Response(data, media_type="application/pdf",
@@ -955,6 +998,7 @@ def _render_page() -> str:
     """The single-page app shell. Served at `/` and at clean deep-link paths like `/plan/{id}` so the
     frontend can use real History-API URLs (no `#`) and direct-load / refresh still works."""
     cfg = json.dumps({"authEnabled": auth.AUTH_ENABLED, "billingEnabled": billing.BILLING_ENABLED,
+                      "pdfBilling": billing.PDF_BILLING_ENABLED, "pdfPrice": billing.PDF_PRICE_CENTS,
                       "byokEnabled": keys.enabled(),
                       "supabaseUrl": os.environ.get("SUPABASE_URL", ""),
                       "supabaseAnon": (os.environ.get("SUPABASE_PUBLISHABLE_KEY")
@@ -1541,7 +1585,9 @@ function renderTree(s){
     if(!s.done&&i===step){return `<li class=active><div class=f><span class=ic aria-hidden=true>✍︎</span>${nm}</div></li>`;}
     return `<li class=pending><div class=f><span class=ic aria-hidden=true>○</span>${nm}</div></li>`;
   }).join('');
-  const dl=document.getElementById('dl'); if(dl)dl.style.display=s.done?'block':'none';
+  const dl=document.getElementById('dl');
+  if(dl){dl.style.display=s.done?'block':'none';
+    dl.innerHTML=pdfUnlocked()?'⬇ Download plan (PDF)':('🔓 Unlock plan PDF, '+pdfPriceStr());}
 }
 function viewSection(file){
   VIEWING=file;
@@ -1558,8 +1604,8 @@ function closeViewer(){VIEWING=null;const v=document.getElementById('viewer');if
 function renderNode(s){
   const n=document.getElementById('node');
   if(s.status==='researching')return;
-  if(s.done){n.innerHTML='<div class=node><div class=done>🎉 <b>Your plan is ready</b>, all '+s.total+' parts. This is your plan\\'s home: <b>download the PDF</b> on the left, <b>chat with your plan</b> in the sidebar to pressure-test it, or share it.</div>'+
-    '<div class=planacts><button type=button onclick=download()>⬇ Download (PDF)</button><button type=button class=ghost onclick="sharePlan(SID)">🔗 Share</button></div></div>';return;}
+  if(s.done){n.innerHTML='<div class=node><div class=done>🎉 <b>Your plan is ready</b>, all '+s.total+' parts. This is your plan\\'s home: grab the <b>polished PDF</b> (or the free raw files), <b>chat with your plan</b> in the sidebar to pressure-test it, or share it.</div>'+
+    '<div class=planacts>'+pdfBtn()+'<button type=button class=ghost onclick=downloadZip()>⬇ Raw files (.zip), free</button><button type=button class=ghost onclick="sharePlan(SID)">🔗 Share</button></div></div>';return;}
   const p=s.proposal; if(!p){n.innerHTML='';return;}
   const sec=(s.sections||[]).find(x=>x.title===p.title)||{};
   const intro=s.step===0?`<p class=lead>We build your plan in ${s.total} parts, one at a time, your call on each (watch them fill in on the left). First up:</p>`:'';
@@ -2006,13 +2052,32 @@ const Activity={
 };
 const RESEARCH_STEPS=["Focusing your idea into one sharp thesis","Spinning up research across the web","Pulling sources on the market and competition","Grading every source for credibility","Flagging vendor-marketing spin","Re-sourcing the headline stats to primary sources","Scoring demand, market, and willingness to pay","Drafting your first offer"];
 const PDF_STEPS=["Applying your board's input","Pulling your graded evidence","Building the decision matrix","Laying out a modern, on-brand design","Typesetting your PDF"];
+// ── The one paid action: polished PDF = one-time $35; raw export stays free ──
+function pdfUnlocked(){ return !CFG.pdfBilling || !!(me&&me.pdf_unlocked); }
+function pdfPriceStr(){ const c=(me&&me.pdf_price)||CFG.pdfPrice||3500; return '$'+Math.round(c/100); }
+function pdfBtn(){ return pdfUnlocked()
+  ? '<button type=button onclick=download()>⬇ Download polished PDF</button>'
+  : '<button type=button onclick=buyPdf()>🔓 Unlock polished PDF, '+pdfPriceStr()+'</button>'; }
+async function buyPdf(){
+  if(CFG.authEnabled&&!session){toast('Sign in to unlock your PDF.');signinEmail();return;}
+  if(!CFG.pdfBilling){toast('Billing isn\\'t set up yet.','err');return;}
+  try{
+    const r=await fetch('/api/plan/'+SID+'/buy-pdf',{method:'POST',headers:authHeaders()});
+    const d=await r.json();
+    if(d.url){location.href=d.url;return;}            // → Stripe Checkout
+    if(d.unlocked){await loadMe();download();return;}  // already paid → just grab it
+    toast(d.error||'Could not start checkout.','err');
+  }catch(e){toast('Network error starting checkout.','err');}
+}
 async function download(){
-  if(!requireKey())return;
+  if(!pdfUnlocked()){buyPdf();return;}     // locked → route to the $35 unlock, not a key prompt
   const aid=Activity.start(PDF_STEPS,1600,'Building your styled PDF');
   const minShow=new Promise(res=>setTimeout(res,2600));   // let the sequence breathe (covers fast mock runs)
   try{
     const [r]=await Promise.all([fetch('/api/plan/'+SID+'/plan.pdf',{headers:authHeaders()}),minShow]);
-    if(!r.ok){let d={};try{d=await r.json();}catch(e){} Activity.stop(aid);toast(d.error||'Could not build the PDF.','err');return;}
+    if(!r.ok){let d={};try{d=await r.json();}catch(e){} Activity.stop(aid);
+      if(d.needPurchase){buyPdf();return;}             // server says locked → open checkout
+      toast(d.error||'Could not build the PDF.','err');return;}
     const blob=await r.blob();
     meterTick({id:SID,cost:r.headers.get('X-FILG-Cost'),tokens:r.headers.get('X-FILG-Tokens')});
     Activity.done(aid,'Your PDF is ready.');
@@ -2070,8 +2135,7 @@ function renderAuth(){
     bar.innerHTML=`<button class=link onclick=showPlans()>My plans</button>`+
       (CFG.byokEnabled?`<button class=link onclick=keyModal()>🔑 Your key</button>`:'')+
       `<span class=who>${esc(session.user.email)}${paid?' · <b>Operator</b>':''}</span>`+
-      (!paid&&CFG.billingEnabled?`<button class="link up" onclick=upgrade()>Upgrade, $39/mo</button>`:'')+
-      `<button class=link onclick=signout()>Sign out</button>`;
+      `<button class=link onclick=signout()>Sign out</button>`;   // no subscription sold yet (§16.1); the $35 PDF unlock lives on the finished plan
   }else if(sb){bar.style.display='';bar.innerHTML=`<button class=link onclick=authModal()>Log in / Sign up</button>`;}
   else{bar.style.display='none';}
   gateIntake();
@@ -2218,6 +2282,8 @@ async function initAuth(){
   const q=new URLSearchParams(location.search);
   if(q.get('upgraded'))banner('🎉 You\\'re on Operator. Your plans + integrations are unlocked.');
   if(q.get('canceled'))banner('Checkout canceled, no charge. You\\'re still on the free tier.');
+  if(q.get('pdf'))banner('🎉 Polished PDF unlocked. Download it from your finished plan.');
+  if(q.get('pdf_canceled'))banner('Checkout canceled, no charge. Your raw export is still free.');
   restoreIdea();renderBoardPick();paintMeter();   // show the session meter at 0 from first paint
   if(!CFG.authEnabled||!window.supabase){renderAuth();routeFromPath();return;}
   sb=window.supabase.createClient(CFG.supabaseUrl,CFG.supabaseAnon);

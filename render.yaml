@@ -42,9 +42,13 @@ services:
       - key: SUPABASE_PUBLISHABLE_KEY  # sb_publishable_… (frontend) — safe in the browser
         sync: false
       # ── Billing (Stripe) — leave blank until you're ready to charge ──
-      - key: STRIPE_SECRET_KEY     # secret — sk_live_… / sk_test_…
+      # LIVE model = one-time $35 polished-PDF unlock: set SECRET_KEY + WEBHOOK_SECRET only (the $35
+      # price is built inline, no Price id needed). STRIPE_PRICE_ID is for the DORMANT $39/mo sub.
+      - key: STRIPE_SECRET_KEY     # secret — sk_live_… / sk_test_… (also turns on the $35 PDF unlock)
         sync: false
-      - key: STRIPE_PRICE_ID       # the $39/mo recurring price id (price_…)
+      - key: STRIPE_PRICE_ID       # the (dormant) $39/mo recurring price id (price_…) — sub not sold yet
+        sync: false
+      - key: FILG_PDF_PRICE_CENTS  # one-time PDF price in cents (default 3500 = $35)
         sync: false
       - key: STRIPE_WEBHOOK_SECRET # secret — whsec_… for POST /api/stripe/webhook
         sync: false
