@@ -1107,6 +1107,11 @@ button:hover{filter:brightness(1.04)}button:active{transform:translateY(1px)}but
    card removes itself when its task finishes; the footer hides once the last one is gone. */
 .activity{position:fixed;left:0;right:0;bottom:0;z-index:80;transform:translateY(115%);transition:transform .28s cubic-bezier(.4,0,.2,1);background:var(--ink);color:#fff;box-shadow:0 -8px 30px rgba(20,17,14,.18)}
 .activity.show{transform:translateY(0)}
+.afoot-bar{display:flex;align-items:center;justify-content:center;gap:9px;width:100%;background:rgba(255,255,255,.05);border:0;border-bottom:1px solid rgba(255,255,255,.1);color:#fff;font:inherit;cursor:pointer;padding:5px 0}
+.afoot-grip{width:34px;height:4px;border-radius:3px;background:rgba(255,255,255,.4)}
+.afoot-caret{font-size:11px;opacity:.65;transition:transform .2s}
+.activity.min .afoot-caret{transform:rotate(180deg)}
+.activity.min .alog{display:none}
 .alog{max-width:1140px;margin:0 auto;padding:10px 22px;display:flex;flex-direction:column;gap:7px;max-height:42vh;overflow-y:auto;scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.3) transparent}
 .alog::-webkit-scrollbar{width:6px}.alog::-webkit-scrollbar-thumb{background:rgba(255,255,255,.25);border-radius:6px}
 .atask{border:1px solid rgba(255,255,255,.13);border-radius:11px;background:rgba(255,255,255,.04);overflow:hidden;transition:opacity .25s}
@@ -1183,7 +1188,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <div class=modal id=modal role=dialog aria-modal=true aria-labelledby=modal-title aria-hidden=true>
 <h3 id=modal-title></h3><div id=modal-body></div><div class=modal-actions id=modal-actions></div></div>
 <div class=toasts id=toasts aria-live=polite></div>
-<div class=activity id=activity aria-live=polite aria-hidden=true><div class=alog id=activity-log></div></div>
+<div class=activity id=activity aria-live=polite aria-hidden=true><button type=button class=afoot-bar onclick="this.parentNode.classList.toggle('min')" aria-label="Collapse or expand the activity log"><span class=afoot-grip aria-hidden=true></span><span class=afoot-caret aria-hidden=true>\\u25be</span></button><div class=alog id=activity-log></div></div>
 <div class=workspace id=workspace style="display:none">
 <aside class=side>
 <div class=sec><h3>Your plan</h3><ul class=tree id=tree></ul>
@@ -1777,7 +1782,7 @@ const Activity={
   },
   _maybeHide(immediate){ if(this.n>0)return; setTimeout(()=>{ if(this.n<=0)this._hide(); }, immediate?0:250); },
   stopAll(){ for(const id in this.tracks){if(this.tracks[id].timer)clearInterval(this.tracks[id].timer);} this.tracks={}; this.n=0; this._hide(); },
-  _hide(){ const a=this._el(); if(a){a.classList.remove('show');a.setAttribute('aria-hidden','true');} const l=this._log(); if(l)l.innerHTML=''; }
+  _hide(){ const a=this._el(); if(a){a.classList.remove('show');a.classList.remove('min');a.setAttribute('aria-hidden','true');} const l=this._log(); if(l)l.innerHTML=''; }
 };
 const RESEARCH_STEPS=["Focusing your idea into one sharp thesis","Spinning up research across the web","Pulling sources on the market and competition","Grading every source for credibility","Flagging vendor-marketing spin","Re-sourcing the headline stats to primary sources","Scoring demand, market, and willingness to pay","Drafting your first offer"];
 const PDF_STEPS=["Applying your board's input","Pulling your graded evidence","Building the decision matrix","Laying out a modern, on-brand design","Typesetting your PDF"];
@@ -1809,6 +1814,8 @@ function mdToHtml(md){
   h=h.replace(/`([^`]+)`/g,'<code>$1</code>');
   h=h.replace(/\\*\\*([^*]+)\\*\\*/g,'<strong>$1</strong>');
   h=h.replace(/\\[([^\\]]+)\\]\\((https?:[^)\\s]+)\\)/g,'<a href="$2" target=_blank rel=noopener>$1</a>');
+  h=h.replace(/\\[(https?:[^\\]\\s]+)\\]/g,'<a href="$1" target=_blank rel=noopener>$1</a>');  // [bare url] → link
+  h=h.replace(/(^|[\\s(])(https?:\\/\\/[^\\s<)]+)/g,'$1<a href="$2" target=_blank rel=noopener>$2</a>');  // raw url → link
   const lines=h.split('\\n'); const out=[]; let inList=false; let i=0;
   const cells=function(r){return r.replace(/^\\s*\\|/,'').replace(/\\|\\s*$/,'').split('|').map(function(c){return c.trim();});};
   const isRow=function(s){return /^\\s*\\|.*\\|\\s*$/.test(s);};
