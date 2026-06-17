@@ -18,8 +18,12 @@ dist/
 # runtime usage store + sqlite db (and its WAL sidecars)
 app/usage.json
 app/filg.db
+*.db
 *.db-wal
 *.db-shm
+
+# local dev/test harness DB (scripts/dev.py)
+.dev/
 
 # pytest
 .pytest_cache/
