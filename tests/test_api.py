@@ -265,16 +265,18 @@ def test_inline_comment_and_footer_collapse_ui_present(client):
 
 
 def test_model_stack_selection(client):
-    # The user can pick a model stack; it persists on the session and unknown values fall back to default.
+    # The user can pick a model stack; it persists, unknown values fall back, legacy names alias forward.
     sid = client.post("/api/plan/start", json={"idea": GRAB_BAG, "email": "stack@x.com"}).json()["id"]
     s = wait_status(client, sid)
-    assert s["stack"] == "damn-good"                                   # default
-    s = client.post(f"/api/plan/{sid}/stack", json={"stack": "trust-fund"}).json()
-    assert s["stack"] == "trust-fund"
-    s = client.post(f"/api/plan/{sid}/stack", json={"stack": "polished-turd"}).json()
-    assert s["stack"] == "polished-turd"
+    assert s["stack"] == "the-work-horse"                              # default = best Opus-free tier
+    s = client.post(f"/api/plan/{sid}/stack", json={"stack": "trust-fund-baby"}).json()
+    assert s["stack"] == "trust-fund-baby"
+    s = client.post(f"/api/plan/{sid}/stack", json={"stack": "the-wonder-kid"}).json()
+    assert s["stack"] == "the-wonder-kid"
+    s = client.post(f"/api/plan/{sid}/stack", json={"stack": "damn-good"}).json()   # legacy alias
+    assert s["stack"] == "the-work-horse"
     s = client.post(f"/api/plan/{sid}/stack", json={"stack": "bogus"}).json()
-    assert s["stack"] == "damn-good"                                   # unknown → default
+    assert s["stack"] == "the-work-horse"                              # unknown → default
 
 
 def test_no_native_browser_dialogs(client):

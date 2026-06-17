@@ -990,8 +990,9 @@ __FILG_HEAD__
 .top{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
 .topright{display:flex;align-items:center;gap:14px}
 .meter{display:inline-flex;align-items:center;gap:6px;background:var(--card);border:1.5px solid var(--line);color:var(--muted);font-size:12.5px;font-weight:700;padding:5px 11px;border-radius:999px;cursor:default;font-variant-numeric:tabular-nums}
-.stackpick{background:var(--card);border:1.5px solid var(--line);color:var(--ink);font:inherit;font-size:12.5px;font-weight:700;padding:5px 10px;border-radius:999px;cursor:pointer}
-.stackpick:hover{border-color:var(--sky)}
+.stackdial{display:inline-flex;align-items:center;gap:8px;background:var(--card);border:1.5px solid var(--line);padding:4px 11px;border-radius:999px;cursor:default}
+.stacklbl{font-weight:700;font-size:12.5px;white-space:nowrap;color:var(--ink)}
+#stackrange{width:104px;accent-color:var(--sky);cursor:pointer}
 .meter[hidden]{display:none}   /* the author .meter rule would otherwise override the UA [hidden]=display:none, leaking an empty pill */
 .meter .m-dot{width:7px;height:7px;border-radius:50%;background:var(--muted);flex:none;transition:background .3s}
 .meter.live .m-dot{background:var(--ok);animation:mpulse 1.1s ease-in-out infinite}
@@ -1233,7 +1234,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 .tree button.f{width:100%;background:none;border:0;font:inherit;color:inherit;text-align:left;cursor:pointer;padding:0}
 .tree button.f:hover .nm{color:var(--sky)}
 </style></head><body><div class=page>
-<div class=top><h1 class=logo><button type=button class=logobtn onclick=newPlan() aria-label="FILG, start a new idea"><svg class=logomark viewBox="0 0 32 32" aria-hidden=true><rect width=32 height=32 rx=8 fill=#FF6B4A></rect><path d="M16 4c-3.2 2.8-4.3 7.4-4.3 11.8v3.2h8.6v-3.2C20.3 11.4 19.2 6.8 16 4z" fill=#fff></path><circle cx=16 cy=12 r=2.1 fill=#2E7CF6></circle><path d="M11.7 15.5 8.6 20.5l3.1-1.3z" fill=#fff></path><path d="M20.3 15.5 23.4 20.5l-3.1-1.3z" fill=#fff></path><path d="M13.6 19.5h4.8L16 25.5z" fill=#FFC23F></path></svg>FI<span>LG</span></button></h1><div class=topright><label for=stackpick class=sr-only>Model stack</label><select id=stackpick class=stackpick hidden onchange="setStack(this.value)" title="Which models build your plan. Premium runs on your own key."><option value=damn-good>Damn-good stack</option><option value=trust-fund>Trust-fund baby</option><option value=polished-turd>Polished turd</option></select><button type=button class=meter id=meter hidden title="Token usage this session (resets when you reload)"></button><div class=authbar id=authbar></div></div></div>
+<div class=top><h1 class=logo><button type=button class=logobtn onclick=newPlan() aria-label="FILG, start a new idea"><svg class=logomark viewBox="0 0 32 32" aria-hidden=true><rect width=32 height=32 rx=8 fill=#FF6B4A></rect><path d="M16 4c-3.2 2.8-4.3 7.4-4.3 11.8v3.2h8.6v-3.2C20.3 11.4 19.2 6.8 16 4z" fill=#fff></path><circle cx=16 cy=12 r=2.1 fill=#2E7CF6></circle><path d="M11.7 15.5 8.6 20.5l3.1-1.3z" fill=#fff></path><path d="M20.3 15.5 23.4 20.5l-3.1-1.3z" fill=#fff></path><path d="M13.6 19.5h4.8L16 25.5z" fill=#FFC23F></path></svg>FI<span>LG</span></button></h1><div class=topright><label for=stackpick class=sr-only>Model stack</label><div class=stackdial id=stackdial hidden><span class=stacklbl id=stacklbl></span><label for=stackrange class=sr-only>Model stack: slide from cheap to premium</label><input type=range id=stackrange min=0 max=4 step=1 value=2 oninput="onStackSlide(+this.value)" onchange="commitStack(+this.value)"></div><button type=button class=meter id=meter hidden title="Token usage this session (resets when you reload)"></button><div class=authbar id=authbar></div></div></div>
 <div class=note-banner id=banner></div>
 <div class=intake id=intake>
 <h2>You've got a business in you. Let's find it. 🚀</h2>
@@ -1377,21 +1378,33 @@ async function poll(){
   if(s.status!=='error')maybePromptKey();   // welcome plan is in → require a key to go further
 }
 let ACT_RESEARCH=false, ACT_PROG_N=0, ACT_ID=null;
-// ── Model stack selector (trust-fund / damn-good / polished-turd) ────────────
-function renderStack(s){
-  const el=document.getElementById('stackpick'); if(!el)return;
-  el.hidden=false;
-  if(s.stack&&el.value!==s.stack)el.value=s.stack;
+// ── Model stack slider: cheap → premium, one cost/quality dial ───────────────
+const STACKS_UI=[   // order matches the slider 0..4 (cheap → premium)
+  {k:'the-turd-polisher',n:'The turd polisher',b:"Cheap everything. Good for feature-testing, spiking, or spamming the model with nonsense to see how angry you can make it.",o:false},
+  {k:'the-capable-intern',n:'The capable intern',b:"Lots of info with some solid synthesis. You've got to check his work, but you aren't mad about it.",o:false},
+  {k:'the-work-horse',n:'The work horse',b:"Cheap research bots with advanced synthesis and orchestration. A good boss with a well-structured team.",o:false},
+  {k:'the-wonder-kid',n:'The wonder kid',b:"Advanced research with world-class orchestration and synthesis. Best results without the capital burn.",o:true,rec:true},
+  {k:'trust-fund-baby',n:'The trust fund baby',b:"A full stack of the absolute best models for world-class results. Not cheap, but hey, neither are you.",o:true},
+];
+function _stackIdx(key){const i=STACKS_UI.findIndex(x=>x.k===key);return i<0?2:i;}
+function paintStack(i){
+  const u=STACKS_UI[i]||STACKS_UI[2];
+  const lbl=document.getElementById('stacklbl'); if(lbl)lbl.textContent=u.n+(u.rec?' \\u2605':'');
+  const d=document.getElementById('stackdial'); if(d)d.title=u.b+(u.o&&!HAS_KEY?'  (needs your own key to actually run)':'');
 }
-async function setStack(name){
-  if(!SID)return;
-  const blurb={'trust-fund':'Trust-fund baby: top-of-the-line models on every step (runs on your own key).',
-    'polished-turd':'Polished turd: Haiku only — cheapest, weakest research + grading foundation.',
-    'damn-good':'Damn-good: Sonnet brains (planning, grading, synthesis), Haiku for the bulk reads.'};
+function renderStack(s){
+  const d=document.getElementById('stackdial'); if(!d)return; d.hidden=false;
+  const i=_stackIdx(s.stack); const r=document.getElementById('stackrange');
+  if(r&&+r.value!==i)r.value=i;
+  paintStack(i);
+}
+function onStackSlide(i){paintStack(i);}   // live label/tooltip while dragging
+async function commitStack(i){
+  const u=STACKS_UI[i]; if(!u||!SID)return;
   try{
-    const r=await fetch('/api/plan/'+SID+'/stack',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({stack:name})});
+    const r=await fetch('/api/plan/'+SID+'/stack',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({stack:u.k})});
     const s=await r.json();
-    if(r.ok){render(s);toast(blurb[s.stack]||'Model stack updated.','ok');}
+    if(r.ok){render(s);toast(u.b+(u.o&&!HAS_KEY?' Add your key to actually run it.':''),'ok');}
   }catch(e){}
 }
 // ── Session usage meter ─────────────────────────────────────────────────────

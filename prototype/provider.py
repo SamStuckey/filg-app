@@ -51,20 +51,27 @@ OPENROUTER_MODELS = {
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 # ── Model stacks ──────────────────────────────────────────────────────────────
-# A "stack" is the per-stage model assignment for a run, chosen by the user. The engine has four
-# stages: `plan` (the research planner / orchestrator), `research` (the web_search fan-out), `grade`
-# (the source-credibility gate — invariant #1, the moat), and `synth` (everything the user reads).
-# Historically ALL of these ran on Haiku, so the moat + research foundation ran on the cheapest model
-# while only the prose was Sonnet. The stacks let the user pick the quality/cost trade-off (BYOK = their
-# spend, the meter shows it). `web_search` works on all three Claude tiers; Opus/Sonnet add dynamic
-# result filtering, so upgrading research is a quality bonus, not a compatibility risk.
+# A "stack" is the per-stage model assignment for a run, chosen by the user (a cost↔quality dial). The
+# engine has four stages: `plan` (the research planner / orchestrator), `research` (the web_search
+# fan-out), `grade` (the source-credibility gate — invariant #1, the moat), and `synth` (everything the
+# user reads). Historically ALL ran on Haiku, so the moat + research foundation used the cheapest model
+# while only the prose was Sonnet. The ladder is MONOTONIC (slide toward premium → a stage never
+# downgrades). `web_search` works on all three Claude tiers; Opus/Sonnet add dynamic result filtering, so
+# upgrading research is a quality bonus, not a compatibility risk.
 STACKS = {
-    "trust-fund":    {"plan": OPUS,   "research": OPUS,   "grade": OPUS,   "synth": OPUS},    # all top-of-the-line
-    "damn-good":     {"plan": SONNET, "research": HAIKU,  "grade": SONNET, "synth": SONNET},  # Sonnet brains, Haiku legs
-    "polished-turd": {"plan": HAIKU,  "research": HAIKU,  "grade": HAIKU,  "synth": HAIKU},   # Haiku only (cheapest)
+    "trust-fund-baby":   {"plan": OPUS,   "research": OPUS,   "grade": OPUS,   "synth": OPUS},
+    "the-wonder-kid":        {"plan": OPUS,   "research": SONNET, "grade": OPUS,   "synth": OPUS},
+    "the-work-horse":    {"plan": SONNET, "research": HAIKU,  "grade": SONNET, "synth": SONNET},
+    "the-capable-intern":{"plan": HAIKU,  "research": HAIKU,  "grade": SONNET, "synth": SONNET},
+    "the-turd-polisher": {"plan": HAIKU,  "research": HAIKU,  "grade": HAIKU,  "synth": HAIKU},
 }
-DEFAULT_STACK = "damn-good"
-PREMIUM_STACK = "trust-fund"   # not allowed on FILG's free key (see clamp_stack) — BYOK only
+# Cheap → premium order (the slider runs left→right along this), the default, and the BYOK-recommended pick.
+STACK_ORDER = ["the-turd-polisher", "the-capable-intern", "the-work-horse", "the-wonder-kid", "trust-fund-baby"]
+DEFAULT_STACK = "the-work-horse"      # the best Opus-free tier — safe for FILG's free taste
+RECOMMENDED_STACK = "the-wonder-kid"      # best results without the full capital burn (BYOK)
+
+# Back-compat: the first cut shipped 3 differently-named stacks; map them so old session rows resolve.
+_ALIASES = {"damn-good": "the-work-horse", "trust-fund": "trust-fund-baby", "polished-turd": "the-turd-polisher"}
 
 
 def _role(stage: str) -> str:
@@ -79,14 +86,19 @@ def _role(stage: str) -> str:
 
 
 def stack_name(name: str | None) -> str:
+    name = _ALIASES.get(name, name)
     return name if name in STACKS else DEFAULT_STACK
 
 
+def uses_opus(name: str | None) -> bool:
+    return OPUS in STACKS.get(stack_name(name), {}).values()
+
+
 def clamp_stack(name: str | None, *, byok: bool) -> str:
-    """The premium stack runs Opus on every stage — never on FILG's free key. Off BYOK, clamp it down so
-    a free run can't spend Opus money on FILG's dime (invariant #3: meter before you open the tap)."""
+    """Any Opus-using stack is BYOK-only — never run Opus on FILG's free key (invariant #3: meter before
+    you open the tap). Off BYOK, clamp such a stack down to the best Opus-free tier (the default)."""
     name = stack_name(name)
-    if not byok and name == PREMIUM_STACK:
+    if not byok and uses_opus(name):
         return DEFAULT_STACK
     return name
 
@@ -188,15 +200,20 @@ if __name__ == "__main__":  # self-test (no API, no network)
     assert captured() is p                   # bound re-binds even outside the original scope
     assert p.model_id(OPUS) == "anthropic/claude-opus-4.8"
     # stacks: same call stage resolves to different models per active stack
-    assert active_stack() == DEFAULT_STACK
-    with use_stack("trust-fund"):
+    assert active_stack() == DEFAULT_STACK == "the-work-horse" and len(STACK_ORDER) == len(STACKS) == 5
+    with use_stack("trust-fund-baby"):
         assert resolve_model("judge", HAIKU) == OPUS and resolve_model("research", HAIKU) == OPUS
-    with use_stack("damn-good"):
-        assert resolve_model("judge", HAIKU) == SONNET      # the moat upgraded
-        assert resolve_model("research", SONNET) == HAIKU   # bulk reads stay cheap
+    with use_stack("the-wonder-kid"):
+        assert resolve_model("judge", HAIKU) == OPUS         # moat + orchestration + synth on Opus
+        assert resolve_model("research", HAIKU) == SONNET    # ...but research stays Sonnet (no capital burn)
+    with use_stack("the-work-horse"):
+        assert resolve_model("judge", HAIKU) == SONNET       # the moat upgraded
+        assert resolve_model("research", SONNET) == HAIKU    # bulk reads stay cheap
         assert resolve_model("plan_brief", HAIKU) == SONNET  # section draft = synth role
-    with use_stack("polished-turd"):
+    with use_stack("the-turd-polisher"):
         assert resolve_model("judge", SONNET) == HAIKU
-    assert clamp_stack("trust-fund", byok=False) == DEFAULT_STACK   # no Opus on FILG's free key
-    assert clamp_stack("trust-fund", byok=True) == "trust-fund"
-    print("provider.py self-test OK — providers: anthropic, openrouter; stacks:", *STACKS)
+    assert stack_name("damn-good") == "the-work-horse"       # legacy alias still resolves
+    assert clamp_stack("the-wonder-kid", byok=False) == DEFAULT_STACK   # Opus tiers off FILG's free key
+    assert clamp_stack("the-wonder-kid", byok=True) == "the-wonder-kid"
+    assert not uses_opus("the-work-horse") and uses_opus("the-wonder-kid")
+    print("provider.py self-test OK — providers: anthropic, openrouter; stacks:", *STACK_ORDER)
