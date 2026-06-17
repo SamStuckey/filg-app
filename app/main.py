@@ -1034,9 +1034,30 @@ __FILG_HEAD__
 .top{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
 .topright{display:flex;align-items:center;gap:14px}
 .meter{display:inline-flex;align-items:center;gap:6px;background:var(--card);border:1.5px solid var(--line);color:var(--muted);font-size:12.5px;font-weight:700;padding:5px 11px;border-radius:999px;cursor:default;font-variant-numeric:tabular-nums}
-.stackdial{display:inline-flex;align-items:center;gap:8px;background:var(--card);border:1.5px solid var(--line);padding:4px 11px;border-radius:999px;cursor:default}
-.stacklbl{font-weight:700;font-size:12.5px;white-space:nowrap;color:var(--ink)}
-#stackrange{width:104px;accent-color:var(--sky);cursor:pointer}
+.stackdial{display:inline-flex;align-items:center;gap:9px;background:var(--card);border:1.5px solid var(--line);padding:5px 12px;border-radius:999px;cursor:default;transition:border-color .2s}
+.stacklbl{font-weight:700;font-size:12.5px;white-space:nowrap;color:var(--ink);display:inline-flex;align-items:center;gap:4px}
+.stacklbl .sk-star{color:#F0B23E;font-size:11px}
+.stacklbl .sk-key{font-size:11px;filter:grayscale(.1)}
+.stack-cost{display:inline-flex;gap:2.5px;align-items:center}
+.stack-cost i{width:5px;height:5px;border-radius:50%;background:var(--line);display:inline-block;transition:background .15s}
+.stack-cost i.on{background:var(--sky)}
+.stackwrap{position:relative;width:128px;height:16px;display:inline-flex;align-items:center}
+.stackrec{position:absolute;top:-7px;font-size:9px;line-height:1;color:#F0B23E;transform:translateX(-50%);pointer-events:none}
+#stackrange{-webkit-appearance:none;appearance:none;width:100%;height:5px;border-radius:999px;background:var(--line);cursor:pointer;outline:none;margin:0}
+#stackrange:focus-visible{box-shadow:0 0 0 3px #2E7CF633}
+#stackrange::-webkit-slider-runnable-track{height:5px;border-radius:999px;background:linear-gradient(90deg,var(--sky) 0,var(--sky) var(--fill,50%),var(--line) var(--fill,50%))}
+#stackrange::-moz-range-track{height:5px;border-radius:999px;background:var(--line)}
+#stackrange::-moz-range-progress{height:5px;border-radius:999px;background:var(--sky)}
+#stackrange::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:14px;height:14px;margin-top:-4.5px;border-radius:50%;background:#fff;border:2.5px solid var(--sky);box-shadow:0 1px 3px #0003;transition:transform .12s}
+#stackrange::-moz-range-thumb{width:14px;height:14px;border-radius:50%;background:#fff;border:2.5px solid var(--sky);box-shadow:0 1px 3px #0003}
+#stackrange:active::-webkit-slider-thumb{transform:scale(1.18)}
+.stackdial.needkey{border-color:#F0B23E88}
+.stackdial.needkey .stacklbl{color:#B6791B}
+.stackdial.needkey .stack-cost i.on{background:#E89C2A}
+.stackdial.needkey #stackrange::-webkit-slider-runnable-track{background:linear-gradient(90deg,#E89C2A 0,#E89C2A var(--fill,50%),var(--line) var(--fill,50%))}
+.stackdial.needkey #stackrange::-webkit-slider-thumb{border-color:#E89C2A}
+.stackdial.needkey #stackrange::-moz-range-progress{background:#E89C2A}
+.stackdial.needkey #stackrange::-moz-range-thumb{border-color:#E89C2A}
 .meter[hidden]{display:none}   /* the author .meter rule would otherwise override the UA [hidden]=display:none, leaking an empty pill */
 .meter .m-dot{width:7px;height:7px;border-radius:50%;background:var(--muted);flex:none;transition:background .3s}
 .meter.live .m-dot{background:var(--ok);animation:mpulse 1.1s ease-in-out infinite}
@@ -1278,7 +1299,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 .tree button.f{width:100%;background:none;border:0;font:inherit;color:inherit;text-align:left;cursor:pointer;padding:0}
 .tree button.f:hover .nm{color:var(--sky)}
 </style></head><body><div class=page>
-<div class=top><h1 class=logo><button type=button class=logobtn onclick=newPlan() aria-label="FILG, start a new idea"><svg class=logomark viewBox="0 0 32 32" aria-hidden=true><rect width=32 height=32 rx=8 fill=#FF6B4A></rect><path d="M16 4c-3.2 2.8-4.3 7.4-4.3 11.8v3.2h8.6v-3.2C20.3 11.4 19.2 6.8 16 4z" fill=#fff></path><circle cx=16 cy=12 r=2.1 fill=#2E7CF6></circle><path d="M11.7 15.5 8.6 20.5l3.1-1.3z" fill=#fff></path><path d="M20.3 15.5 23.4 20.5l-3.1-1.3z" fill=#fff></path><path d="M13.6 19.5h4.8L16 25.5z" fill=#FFC23F></path></svg>FI<span>LG</span></button></h1><div class=topright><label for=stackpick class=sr-only>Model stack</label><div class=stackdial id=stackdial hidden><span class=stacklbl id=stacklbl></span><label for=stackrange class=sr-only>Model stack: slide from cheap to premium</label><input type=range id=stackrange min=0 max=4 step=1 value=2 oninput="onStackSlide(+this.value)" onchange="commitStack(+this.value)"></div><button type=button class=meter id=meter hidden title="Token usage this session (resets when you reload)"></button><div class=authbar id=authbar></div></div></div>
+<div class=top><h1 class=logo><button type=button class=logobtn onclick=newPlan() aria-label="FILG, start a new idea"><svg class=logomark viewBox="0 0 32 32" aria-hidden=true><rect width=32 height=32 rx=8 fill=#FF6B4A></rect><path d="M16 4c-3.2 2.8-4.3 7.4-4.3 11.8v3.2h8.6v-3.2C20.3 11.4 19.2 6.8 16 4z" fill=#fff></path><circle cx=16 cy=12 r=2.1 fill=#2E7CF6></circle><path d="M11.7 15.5 8.6 20.5l3.1-1.3z" fill=#fff></path><path d="M20.3 15.5 23.4 20.5l-3.1-1.3z" fill=#fff></path><path d="M13.6 19.5h4.8L16 25.5z" fill=#FFC23F></path></svg>FI<span>LG</span></button></h1><div class=topright><label for=stackpick class=sr-only>Model stack</label><div class=stackdial id=stackdial hidden><span class=stacklbl id=stacklbl></span><span class=stack-cost id=stackcost aria-hidden=true></span><label for=stackrange class=sr-only>Model stack: slide from cheap to premium</label><span class=stackwrap><input type=range id=stackrange min=0 max=4 step=1 value=2 oninput="onStackSlide(+this.value)" onchange="commitStack(+this.value)"><span class=stackrec id=stackrec hidden title="Recommended">&#9733;</span></span></div><button type=button class=meter id=meter hidden title="Token usage this session (resets when you reload)"></button><div class=authbar id=authbar></div></div></div>
 <div class=note-banner id=banner></div>
 <div class=intake id=intake>
 <h2>You've got a business in you. Let's find it. 🚀</h2>
@@ -1433,13 +1454,23 @@ const STACKS_UI=[   // order matches the slider 0..4 (cheap → premium)
 function _stackIdx(key){const i=STACKS_UI.findIndex(x=>x.k===key);return i<0?2:i;}
 function paintStack(i){
   const u=STACKS_UI[i]||STACKS_UI[2];
-  const lbl=document.getElementById('stacklbl'); if(lbl)lbl.textContent=u.n+(u.rec?' \\u2605':'');
-  const d=document.getElementById('stackdial'); if(d)d.title=u.b+(u.o&&!HAS_KEY?'  (needs your own key to actually run)':'');
+  const needkey=!!(u.o&&!HAS_KEY);   // Opus tier on FILG's free key → flag it (clamped server-side too)
+  const lbl=document.getElementById('stacklbl');
+  if(lbl)lbl.innerHTML=esc(u.n)+(u.rec?' <span class=sk-star aria-hidden=true>\\u2605</span>':'')
+    +(needkey?' <span class=sk-key title="Needs your own key" aria-hidden=true>\\uD83D\\uDD11</span>':'');
+  const cost=document.getElementById('stackcost');   // cost pips: tier index+1 of 5, cheap → premium
+  if(cost)cost.innerHTML=[0,1,2,3,4].map(n=>'<i class='+(n<=i?'on':'')+'></i>').join('');
+  const r=document.getElementById('stackrange'); if(r)r.style.setProperty('--fill',(i/4*100)+'%');
+  const d=document.getElementById('stackdial');
+  if(d){d.classList.toggle('needkey',needkey);
+    d.title=u.b+(needkey?'  (needs your own key to actually run)':'');}
 }
 function renderStack(s){
   const d=document.getElementById('stackdial'); if(!d)return; d.hidden=false;
   const i=_stackIdx(s.stack); const r=document.getElementById('stackrange');
   if(r&&+r.value!==i)r.value=i;
+  const rec=STACKS_UI.findIndex(x=>x.rec); const m=document.getElementById('stackrec');
+  if(m&&rec>=0){m.style.left=(rec/4*100)+'%';m.hidden=false;}   // ★ marks the recommended stop on the track
   paintStack(i);
 }
 function onStackSlide(i){paintStack(i);}   // live label/tooltip while dragging
