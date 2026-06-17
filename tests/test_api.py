@@ -300,6 +300,31 @@ def test_kill_gate_blocks_until_resubstantiated(client):
                       json={"more": "I have run paid ads for SaaS for 4 years and know founders who pay for it"}).json()
     assert out["vetting"]["verdict"] != "kill"
     s2 = client.post(f"/api/plan/{sid}/next", json={"feedback": ""}).json()   # builder now advances
+
+
+def test_kill_gate_softened_force_builds_waste_of_time(client):
+    # The gate is a coaching ladder, not a wall: a non-forced advance still gets the advisement, but the
+    # operator can FORCE past it with no substance → comedic "waste of time" mode (zero spend, never a
+    # credible plan), and the kill verdict persists so the snark keeps escalating.
+    from app import main
+    sid = client.post("/api/plan/start",
+                      json={"idea": "I want fame and money, help me get some", "email": "wod@x.com"}).json()["id"]
+    wait_status(client, sid)
+    s = main.store.plan_get(sid)
+    main.store.plan_save(sid, vetting={**(s.get("vetting") or {}), "verdict": "kill",
+                                       "biggest_risk": "no skill or buyer named"})
+
+    # non-forced → still the advisement (off-ramp = /revet)
+    assert client.post(f"/api/plan/{sid}/next", json={"feedback": ""}).status_code == 422
+
+    # forced → builds a self-aware comedic placeholder, advances a step, costs ~$0
+    before = main.store.plan_get(sid).get("cost") or 0.0
+    s2 = client.post(f"/api/plan/{sid}/next", json={"feedback": "", "force": True}).json()
+    assert s2["step"] == 1 and len(s2["files"]) == 1
+    setup = next(f["content"] for f in s2["files"] if f["path"] == "1-the-setup.md")
+    assert "button" in setup.lower()                               # the comedic copy, not a real plan
+    assert s2["vetting"]["verdict"] == "kill"                       # gate persists → escalation continues
+    assert (main.store.plan_get(sid).get("cost") or 0.0) == before  # waste-of-time mode skips the pipeline
     assert s2.get("step", 0) >= 1
 
 

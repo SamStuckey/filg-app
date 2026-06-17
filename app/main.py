@@ -597,17 +597,22 @@ async def api_plan_next(sid: str, request: Request):
         return wall
     body = await request.json()
     feedback = (body.get("feedback") or "").strip() or None
-    if (gate := _kill_gate(s)):   # hard gate: a killed idea can't roll forward into a full plan
-        return gate
+    force = bool(body.get("force"))   # operator chose "build it anyway" past the kill gate (no substance)
+    killed = (s.get("vetting") or {}).get("verdict") == "kill"
+    if killed and not force:   # soft gate: a non-forced advance still gets the advisement (off-ramp = /revet)
+        return _kill_gate(s)
     tree = _ensure_tree(s)
     active = tree["nodes"][tree["active"]]
     if active["step"] >= planner.N:
         return JSONResponse({"error": "This plan is already complete."}, status_code=409)
     try:
         with _run_slot(s.get("user")):
-            child, cost = planner.forward(planner._working_idea(s), s["research"], active, feedback,
-                                          directors=s.get("directors") or None,
-                                          founder=planner._founder(s), mock=MOCK)
+            if killed:   # forced past the gate with no substance → waste-of-time mode (comedic, skips research → ~$0)
+                child, cost = planner.wod_forward(active)
+            else:
+                child, cost = planner.forward(planner._working_idea(s), s["research"], active, feedback,
+                                              directors=s.get("directors") or None,
+                                              founder=planner._founder(s), mock=MOCK)
             toks = pipeline.LEDGER.tokens()
     except BusyError as be:
         return _busy_response(be)
@@ -1501,18 +1506,55 @@ function renderNode(s){
     changeFlag+intro+
     `<div class="draft md">${mdToHtml(p.draft)}</div>`+tail;
 }
+// The kill gate is now a COACHING LADDER, not a hard wall. First hit = genuine advisement (Coach voice
+// + the off-ramps: add substance / re-check, or talk it through). Forcing past it with no substance rolls
+// into comedic "waste of time" mode, and the top line escalates in snark with each push (Roast voice).
+const WOD_SNARK=[
+ "There isn't an idea here to build on yet. Give the gate one real skill or asset, and who'd pay, and this becomes a real plan.",
+ "Giving some feedback might make this a viable idea. Still want to just keep going?",
+ "Another wise investment of tokens. Still nothing to sell here.",
+ "You're a generational genius. You clearly don't need our help.",
+ "We can do this all day. The button works great. The business does not.",
+];
+let WOD_PUSHES=0;
 function killGateHtml(s){
   const v=s.vetting||{};
   const q=esc((s.shaped||{}).clarifying_question||'Name one real skill, asset, or audience you already have, and who would pay for it.');
-  const risk=v.biggest_risk?`<p class=kg-risk><b>The gap:</b> ${esc(v.biggest_risk)}</p>`:'';
-  return `<div class=killgate><div class=kg-head>\\u26d4 Not buildable yet</div>`+
-    `<p class=kg-say>${esc(v.reaction||"There isn't an idea here to build on yet. To keep going, give the gate something real to work with.")}</p>`+
+  const risk=(WOD_PUSHES===0&&v.biggest_risk)?`<p class=kg-risk><b>The gap:</b> ${esc(v.biggest_risk)}</p>`:'';
+  const say=WOD_PUSHES>0?WOD_SNARK[Math.min(WOD_PUSHES,WOD_SNARK.length-1)]:(v.reaction||WOD_SNARK[0]);
+  const head=WOD_PUSHES>0?'\\u26d4 Still nothing to sell':'\\u26d4 Not buildable yet';
+  return `<div class=killgate><div class=kg-head>${head}</div>`+
+    `<p class=kg-say>${esc(say)}</p>`+
     risk+`<p class=kg-q>${q}</p>`+
     `<label for=substance class=sr-only>Add a real skill, asset, or buyer</label>`+
     `<textarea id=substance rows=3 placeholder="e.g. 'I've run paid ads for SaaS for 4 years and I know founders who need it.' Name a real skill, plus who would pay."></textarea>`+
     `<div class=navrow><button type=button class=b-back onclick=startOver()>Start over</button>`+
+    `<button type=button class=ghost onclick=talkItOut()>Talk it through</button>`+
+    `<button type=button class=ghost onclick=forceNext()>Build it anyway →</button>`+
     `<button type=button class=b-next onclick=reCheck()>Re-check my idea →</button></div>`+
     `<div class=ferr id=ferr></div></div>`;
+}
+async function forceNext(){   // operator pushes past the gate with no substance → comedic waste-of-time mode
+  if(!requireKey())return;
+  if(WOD_PUSHES===0){  // first forced push → one encouraging chance to reconsider (Coach voice)
+    const ok=await uiConfirm('Want to give it a real shot?',"Giving some feedback might make this a viable idea. Sure you want to just keep going?",'Keep going anyway');
+    if(!ok){const t=document.getElementById('substance');if(t)t.focus();return;}
+  }
+  _navBusy();
+  const aid=Activity.start(["Building this part","Against our better judgment"],1200,'Building anyway');
+  try{
+    const r=await _aiRun('/api/plan/'+SID+'/next',{feedback:'',force:true});
+    const s=await r.json();
+    if(!r.ok){Activity.stop(aid);fbErr(s.error||'Something went wrong.');_navFree();return;}
+    WOD_PUSHES++;
+    Activity.done(aid,'Done, for what it is.');render(s);
+  }catch(e){Activity.stop(aid);fbErr('Network error.');_navFree();}
+}
+function talkItOut(){   // #8 off-ramp: hash the idea out in the side-chat instead of walking the steps
+  const sec=document.getElementById('chatsec');
+  if(sec){sec.style.display='';setOpen('chatsec',true);sec.scrollIntoView({behavior:'smooth',block:'start'});}
+  const t=document.getElementById('chatinput');
+  if(t){if(!t.value)t.value="My idea got flagged as not buildable yet. Help me find a real skill, asset, or buyer I could build this around.";t.focus();}
 }
 const FB_CHIPS=["go bolder","narrower niche","cheaper entry","B2B only","more specific","add an upsell"];
 function addChip(txt){const t=document.getElementById('feedback'); if(!t)return; t.value=(t.value?t.value.replace(/\\s*$/,'')+', ':'')+txt; t.focus();}
@@ -1552,6 +1594,7 @@ async function reCheck(){       // kill-gate rescue: re-vet with the substance t
     const s=await r.json();
     if(!r.ok){Activity.stop(aid);fbErr(s.error||'Something went wrong.');_navFree();return;}
     const cleared=s.vetting&&s.vetting.verdict!=='kill';
+    WOD_PUSHES=0;   // they engaged with real substance — reset the snark escalation
     Activity.done(aid,cleared?'Cleared. You can build now.':'Still not enough to build on.');render(s);
   }catch(e){Activity.stop(aid);fbErr('Network error.');_navFree();}
 }
