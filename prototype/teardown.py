@@ -114,10 +114,12 @@ def page_shell(title: str, desc: str, body: str) -> str:
 
 # ─── Evidence assembly (deterministic, the gate's labels are authoritative) ──
 def build_evidence(idea: str, headlines: int):
-    from pipeline import plan, research_lane, gate_claims, research_primary  # lazy: --rebuild needs no API
+    from pipeline import plan, research_lane, gate_claims, research_primary, bound  # lazy: --rebuild needs no API
     lanes = plan(idea)
+    # bound() re-binds the active provider/stack/ledger inside each worker — threads don't inherit
+    # contextvars, so without it the fan-out runs on FILG's default key, not the user's BYOK key.
     with ThreadPoolExecutor(max_workers=3) as ex:
-        lane_claims = list(ex.map(lambda ln: research_lane(idea, ln), lanes))
+        lane_claims = list(ex.map(bound(lambda ln: research_lane(idea, ln)), lanes))
     # remember which lane each claim came from, so the UI can show who researched what (persona-owned
     # lanes are assigned app-side; this just carries the provenance through the gate).
     claim_lane = {id(c): lanes[li] for li, lane in enumerate(lane_claims) for c in lane}
@@ -131,7 +133,7 @@ def build_evidence(idea: str, headlines: int):
     rescues = []
     if to_chase:
         with ThreadPoolExecutor(max_workers=3) as ex:
-            rescues = list(ex.map(lambda v: research_primary(v.claim), to_chase))
+            rescues = list(ex.map(bound(lambda v: research_primary(v.claim)), to_chase))
         for v, r in zip(to_chase, rescues):
             r.original = v
 

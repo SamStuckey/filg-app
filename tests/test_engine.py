@@ -6,8 +6,17 @@ API (pipeline.call / the anthropic client are monkeypatched)."""
 import types
 
 import pipeline
+import provider
 from pipeline import Claim, gate_claim, judge_batch
 from source_credibility_gate import TIER_VENDOR
+
+
+def _bound(cap):
+    """A bound anthropic provider wrapping a fake client — FILG is user-key-only, so every real call
+    routes through a bound provider (no global FILG client to monkeypatch)."""
+    prov = provider.Provider("anthropic", "anthropic", _fake_client(cap),
+                             {pipeline.SONNET: pipeline.SONNET})
+    return provider.use(prov)
 
 
 def _claim(url, text="42% of X improves Y", quant=True, promotes=None):
@@ -61,20 +70,27 @@ def _fake_client(capture):
     return types.SimpleNamespace(messages=types.SimpleNamespace(create=create))
 
 
-def test_call_marks_system_block_cacheable(monkeypatch):
+def test_call_marks_system_block_cacheable():
     cap = {}
-    monkeypatch.setattr(pipeline, "client", _fake_client(cap))
-    pipeline.call("s", pipeline.SONNET, "hi", system="STABLE RULES", cache=True)
+    with _bound(cap):
+        pipeline.call("s", pipeline.SONNET, "hi", system="STABLE RULES", cache=True)
     assert isinstance(cap["system"], list)
     assert cap["system"][0]["cache_control"] == {"type": "ephemeral"}
     assert cap["system"][0]["text"] == "STABLE RULES"
 
 
-def test_call_plain_system_when_uncached(monkeypatch):
+def test_call_plain_system_when_uncached():
     cap = {}
-    monkeypatch.setattr(pipeline, "client", _fake_client(cap))
-    pipeline.call("s", pipeline.SONNET, "hi", system="RULES")
+    with _bound(cap):
+        pipeline.call("s", pipeline.SONNET, "hi", system="RULES")
     assert cap["system"] == "RULES"
+
+
+def test_call_without_a_bound_provider_raises():
+    import pytest
+    assert provider.active() is None
+    with pytest.raises(RuntimeError):   # user-key-only: no provider bound is a hard error, not a fallback
+        pipeline.call("s", pipeline.SONNET, "hi")
 
 
 def test_as_year_coerces_and_bounds():

@@ -2391,7 +2391,14 @@ async function upgrade(){
   }catch(e){toast('Network error starting checkout.','err');}
 }
 function show(id){['intake','workspace','profile'].forEach(x=>{const e=document.getElementById(x);if(e)e.style.display=(x===id?(x==='workspace'?'grid':'block'):'none');});}
-function newPlan(){SIDEBAR_PHASE=null;ACT_RESEARCH=false;VET_OPEN=true;VET_STEPPED=false;DTREE_STEP=-99;Activity.stopAll();closeViewer();SID=null;if(location.pathname!=='/')history.pushState({},'','/');show('intake');renderBoardPick();gateIntake();}
+function newPlan(){SIDEBAR_PHASE=null;ACT_RESEARCH=false;VET_OPEN=true;VET_STEPPED=false;DTREE_STEP=-99;Activity.stopAll();closeViewer();SID=null;
+  // render a FRESH intake — clear any in-flight button/idea/error left over from a prior build or sign-out
+  const g=document.getElementById('go'); if(g){g.disabled=false;g.textContent='Build my plan →';}
+  const idea=document.getElementById('idea'); if(idea)idea.value='';
+  const err=document.getElementById('err'); if(err)err.textContent='';
+  const joke=document.getElementById('joke'); if(joke)joke.innerHTML='';
+  try{localStorage.removeItem('filg_idea');}catch(e){}
+  if(location.pathname!=='/')history.pushState({},'','/');show('intake');renderBoardPick();gateIntake();}
 async function showPlans(){
   let d; try{const r=await fetch('/api/plans',{headers:authHeaders()});if(!r.ok){toast('Sign in to see your plans.','err');return;}d=await r.json();}catch(e){toast('Network error.','err');return;}
   show('profile');renderPlans(d);

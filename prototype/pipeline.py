@@ -64,7 +64,8 @@ OPENROUTER_WEB_MAX = 4          # results per request for OpenRouter's web plugi
 WEB_SEARCH_TOOL = {"type": "web_search_20260209", "name": "web_search",
                    "max_uses": 4, "allowed_callers": ["direct"]}
 
-client = anthropic.Anthropic()
+# FILG is user-key-only: there is NO hosted FILG client. Every real call runs on a provider bound
+# from the user's BYOK key (provider.use(...) on the run thread + pipeline.bound() into fan-outs).
 
 
 # --- Cost ledger -------------------------------------------------------------
@@ -205,9 +206,14 @@ def call(stage: str, model: str, prompt: str, *, max_tokens: int = 1500,
 
 def _call_anthropic(prov, stage: str, model: str, prompt: str, *, max_tokens: int,
                     tools: list | None, system: str | None, cache: bool) -> str:
-    """The Anthropic path (Messages API). prov=None → the module-global client (legacy default)."""
-    cl = prov.client if prov is not None else client
-    model = prov.model_id(model) if prov is not None else model
+    """The Anthropic path (Messages API). FILG is user-key-only — there is no FILG fallback key, so a
+    real call MUST have a provider bound. A None here means a fan-out worker lost the provider
+    contextvar (it needs pipeline.bound()); fail loudly rather than silently using an unfunded key."""
+    if prov is None:
+        raise RuntimeError("No API key bound for this call. Every run uses the user's own key — "
+                           "fan-out workers must be wrapped with pipeline.bound().")
+    cl = prov.client
+    model = prov.model_id(model)
     messages = [{"role": "user", "content": prompt}]
     text_parts: list[str] = []
     for _ in range(6):  # cap resume hops

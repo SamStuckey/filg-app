@@ -31,14 +31,22 @@ def _fake_openai(capture):
         completions=types.SimpleNamespace(create=create)))
 
 
-# ── default path is unchanged Anthropic ───────────────────────────────────────
-def test_default_no_provider_uses_anthropic_globals(monkeypatch):
+# ── Anthropic path routes through the BOUND user provider (no FILG fallback) ───
+def test_anthropic_byok_routes_through_bound_client():
     cap = {}
-    monkeypatch.setattr(pipeline, "client", _fake_anthropic(cap))
-    assert provider.active() is None
-    out = pipeline.call("s", pipeline.SONNET, "hi", system="RULES")
+    prov = provider.Provider("anthropic", "anthropic", _fake_anthropic(cap),
+                             {pipeline.SONNET: pipeline.SONNET}, bills_filg=False)
+    with provider.use(prov):
+        out = pipeline.call("s", pipeline.SONNET, "hi", system="RULES")
     assert out == "anthropic-reply"
-    assert cap["system"] == "RULES" and cap["model"] == pipeline.SONNET  # legacy shape preserved
+    assert cap["system"] == "RULES" and cap["model"] == pipeline.SONNET
+
+
+def test_no_bound_provider_raises():
+    import pytest
+    assert provider.active() is None   # user-key-only: there is no FILG fallback client
+    with pytest.raises(RuntimeError):
+        pipeline.call("s", pipeline.SONNET, "hi", system="RULES")
 
 
 # ── BYOK / OpenRouter path ────────────────────────────────────────────────────

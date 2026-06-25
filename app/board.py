@@ -156,11 +156,14 @@ def convene(idea: str, plan_text: str, focus: str, director_keys: list[str] | No
                   "disclaimer": personas.DISCLAIMER}
         return result, 0.0
 
+    from pipeline import bound   # re-bind the user's provider/stack/ledger into the fan-out threads
     cost = 0.0
     # fan-out: the subagent pattern. The skeptic runs alongside the directors in the same wave.
+    # bound() is load-bearing — without it these workers don't inherit the run's provider contextvar
+    # and the calls would have no key bound (there is no FILG fallback key).
     with ThreadPoolExecutor(max_workers=min(5, len(keys) + 1)) as ex:
-        dfut = [ex.submit(_director_take, idea, plan_text, focus, k) for k in keys]
-        sfut = ex.submit(_skeptic_take, idea, plan_text, focus) if skeptic else None
+        dfut = [ex.submit(bound(_director_take), idea, plan_text, focus, k) for k in keys]
+        sfut = ex.submit(bound(_skeptic_take), idea, plan_text, focus) if skeptic else None
         results = [f.result() for f in dfut]
         sk, sc = sfut.result() if sfut else (None, 0.0)
     directors = [r for r, _ in results]
