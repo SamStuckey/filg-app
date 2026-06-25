@@ -1122,6 +1122,7 @@ button:hover{background:#e8e8e8}button:disabled{opacity:.5;cursor:default}
 .lanesh{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:7px}
 .lanerow{font-size:12.5px;padding:4px 0;border-top:1px dashed var(--line)}.lanerow:first-of-type{border-top:0}
 .laneown{font-weight:700;color:var(--ink)}.lanesub{color:var(--muted)}
+.gate{display:inline-block;margin-top:3px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;color:var(--muted)}
 .badge{font-size:10px;font-weight:700;padding:0 5px;border:1px solid var(--line)}.b-ok{color:var(--ok);border-color:var(--ok)}.b-warn{color:var(--warn);border-color:var(--warn)}
 .tree{list-style:none;padding:0;margin:0}.tree li{padding:9px 0;border-top:1px solid var(--line)}.tree li:first-child{border-top:0}
 .tree .f{display:flex;align-items:center;gap:10px;font-size:14px}
@@ -1628,10 +1629,13 @@ function renderResearch(s){
   // who researched what — the fan-out, surfaced as persona-owned lanes
   const lanesHtml=owned.length?('<div class="lanes techonly"><div class=lanesh>Who looked into what</div>'+
     owned.map(o=>`<div class=lanerow><span class=laneown>${esc(o.owner_first||o.owner_name||'Research')}</span> dug into <span class=lanesub>${esc(o.lane)}</span></div>`).join('')+'</div>'):'';
+  const JLAB={TRUST:'trusted',CROSS_CHECK:'cross-check',FLAG_SELF_INTERESTED:'flagged: sells the result'};
   const rowsHtml=rows.length?('<ul class=ev>'+rows.map(x=>{
     const o=ownerOf[x.lane];
     const by=o?` <span class=techonly>· found by ${esc(o.owner_first||o.owner_name)}</span>`:'';
-    return `<li>${x.mark==='ok'?'✅':'⚠️'} ${esc(x.text)} <span class="badge ${x.mark==='ok'?'b-ok':'b-warn'}">${x.mark==='ok'?'cited':'vendor'}</span><br><span class=note>${esc(host(x.url))}, ${esc(x.note)}${by}</span></li>`;
+    const jl=JLAB[x.judge]||'';
+    const gate=(x.tier||jl)?`<br><span class="gate techonly">⚙ gate: ${esc((x.tier||'').toLowerCase())}${jl?' · '+esc(jl):''}</span>`:'';
+    return `<li>${x.mark==='ok'?'✅':'⚠️'} ${esc(x.text)} <span class="badge ${x.mark==='ok'?'b-ok':'b-warn'}">${x.mark==='ok'?'cited':'vendor'}</span><br><span class=note>${esc(host(x.url))}, ${esc(x.note)}${by}</span>${gate}</li>`;
   }).join('')+'</ul>'):'';
   el.innerHTML=lanesHtml+rowsHtml;
 }

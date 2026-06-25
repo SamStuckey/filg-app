@@ -136,23 +136,29 @@ def build_evidence(idea: str, headlines: int):
             r.original = v
 
     rows = []
+    # tier + judge are the gate's per-claim reasoning — carried through so the UI can show HOW the
+    # moat graded each number (surfaced in 'see how it works' mode), not just the ok/warn outcome.
     for v in cleared:
         rows.append({"mark": "ok", "text": v.claim.text, "url": v.claim.source_url,
                      "note": f"{v.tier.lower()} source, passed the gate",
+                     "tier": v.tier, "judge": v.judge,
                      "lane": claim_lane.get(id(v.claim), "")})
     for r in rescues:
         if r.rescued and r.new_url:
             rows.append({"mark": "ok", "text": r.original.claim.text, "url": r.new_url,
                          "note": "re-sourced to a primary/neutral cite by the gate",
+                         "tier": r.original.tier, "judge": r.original.judge,
                          "lane": claim_lane.get(id(r.original.claim), "")})
         else:
             v = r.original
             rows.append({"mark": "warn", "text": v.claim.text, "url": v.claim.source_url,
                          "note": "no neutral source found, treat as a vendor marketing claim",
+                         "tier": v.tier, "judge": v.judge,
                          "lane": claim_lane.get(id(v.claim), "")})
     for v in to_label:
         rows.append({"mark": "warn", "text": v.claim.text, "url": v.claim.source_url,
                      "note": "flagged self-interested/vendor source, unverified",
+                     "tier": v.tier, "judge": v.judge,
                      "lane": claim_lane.get(id(v.claim), "")})
 
     n_clean = sum(1 for r in rows if r["mark"] == "ok")
@@ -194,10 +200,12 @@ MOCK_RESULT = {
     "rows": [
         {"mark": "ok", "text": "~2.5M home-service businesses operate in the US", "url":
             "https://www.census.gov/", "note": "primary source, passed the gate",
+            "tier": "PRIMARY", "judge": "TRUST",
             "lane": "What is the market size and number of target buyers?"},
         {"mark": "warn", "text": "62% of calls to small businesses go unanswered", "url":
             "https://www.getaira.io/blog/missed-business-calls-statistics", "note":
             "flagged self-interested/vendor source, unverified",
+            "tier": "VENDOR", "judge": "FLAG_SELF_INTERESTED",
             "lane": "What is the buyer's most acute, expensive pain point?"},
     ],
     "stats": {"checked": 2, "cleared": 1, "flagged": 1},
