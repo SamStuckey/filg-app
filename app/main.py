@@ -1030,6 +1030,14 @@ a{color:var(--link)}
 .page{max-width:980px;margin:0 auto;padding:16px 16px 64px}
 .top{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
 .topright{display:flex;align-items:center;gap:12px}
+.modesw{display:inline-flex;border:1px solid #888}
+.modesw button{background:#fff;color:var(--muted);border:0;border-right:1px solid var(--line);font:inherit;font-size:11.5px;font-weight:700;padding:4px 9px;cursor:pointer}
+.modesw button:last-child{border-right:0}
+.modesw button.on{background:#444;color:#fff}
+.modehint{font-size:11px;color:var(--muted);margin:0 0 12px}
+/* mode gating: 'build a business' hides the engine internals; 'see how it works' shows everything */
+body[data-mode=build] .techonly{display:none!important}
+body[data-mode=build] #meter{display:none!important}
 .meter{display:inline-flex;align-items:center;gap:6px;background:#fff;border:1px solid var(--line);color:var(--muted);font-size:12px;font-weight:700;padding:3px 8px;cursor:default;font-variant-numeric:tabular-nums}
 .stackdial{position:relative;display:inline-flex}
 .stackbtn{display:inline-flex;align-items:center;gap:7px;background:#f4f4f4;border:1px solid #888;padding:3px 8px;cursor:pointer;font:inherit;color:var(--ink)}
@@ -1294,7 +1302,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 .tree button.f{width:100%;background:none;border:0;font:inherit;color:inherit;text-align:left;cursor:pointer;padding:0}
 .tree button.f:hover .nm{color:var(--link)}
 </style></head><body><div class=page>
-<div class=top><h1 class=logo><button type=button class=logobtn onclick=newPlan() aria-label="FILG, start a new idea"><svg class=logomark viewBox="0 0 32 32" aria-hidden=true><rect width=32 height=32 rx=8 fill=#FF6B4A></rect><path d="M16 4c-3.2 2.8-4.3 7.4-4.3 11.8v3.2h8.6v-3.2C20.3 11.4 19.2 6.8 16 4z" fill=#fff></path><circle cx=16 cy=12 r=2.1 fill=#2E7CF6></circle><path d="M11.7 15.5 8.6 20.5l3.1-1.3z" fill=#fff></path><path d="M20.3 15.5 23.4 20.5l-3.1-1.3z" fill=#fff></path><path d="M13.6 19.5h4.8L16 25.5z" fill=#FFC23F></path></svg>FI<span>LG</span></button></h1><div class=topright><div class=stackdial id=stackdial hidden><button type=button class=stackbtn id=stackbtn aria-haspopup=true aria-expanded=false aria-label="Choose your model crew" onclick=toggleStackPop()><span class=stacklbl id=stacklbl></span><span class=stack-cost id=stackcost aria-hidden=true></span><span class=stackcaret aria-hidden=true>&#9662;</span></button><div class=stackpop id=stackpop role=menu aria-label="Choose a model crew" hidden></div></div><button type=button class=meter id=meter hidden title="Token usage this session (resets when you reload)"></button><div class=authbar id=authbar></div></div></div>
+<div class=top><h1 class=logo><button type=button class=logobtn onclick=newPlan() aria-label="FILG, start a new idea"><svg class=logomark viewBox="0 0 32 32" aria-hidden=true><rect width=32 height=32 rx=8 fill=#FF6B4A></rect><path d="M16 4c-3.2 2.8-4.3 7.4-4.3 11.8v3.2h8.6v-3.2C20.3 11.4 19.2 6.8 16 4z" fill=#fff></path><circle cx=16 cy=12 r=2.1 fill=#2E7CF6></circle><path d="M11.7 15.5 8.6 20.5l3.1-1.3z" fill=#fff></path><path d="M20.3 15.5 23.4 20.5l-3.1-1.3z" fill=#fff></path><path d="M13.6 19.5h4.8L16 25.5z" fill=#FFC23F></path></svg>FI<span>LG</span></button></h1><div class=topright><div class=modesw id=modesw role=group aria-label="View mode"></div><div class=stackdial id=stackdial hidden><button type=button class=stackbtn id=stackbtn aria-haspopup=true aria-expanded=false aria-label="Choose your model crew" onclick=toggleStackPop()><span class=stacklbl id=stacklbl></span><span class=stack-cost id=stackcost aria-hidden=true></span><span class=stackcaret aria-hidden=true>&#9662;</span></button><div class=stackpop id=stackpop role=menu aria-label="Choose a model crew" hidden></div></div><button type=button class=meter id=meter hidden title="Token usage this session (resets when you reload)"></button><div class=authbar id=authbar></div></div></div>
 <div class=note-banner id=banner></div>
 <div class=intake id=intake>
 <h2>You've got a business in you. Let's find it. 🚀</h2>
@@ -1618,11 +1626,11 @@ function renderResearch(s){
   if(!rows.length&&!owned.length){el.innerHTML='<p style="color:var(--muted);font-size:13px;margin:0">Grading sources…</p>';return;}
   const ownerOf={}; owned.forEach(o=>{ownerOf[o.lane]=o;});
   // who researched what — the fan-out, surfaced as persona-owned lanes
-  const lanesHtml=owned.length?('<div class=lanes><div class=lanesh>Who looked into what</div>'+
+  const lanesHtml=owned.length?('<div class="lanes techonly"><div class=lanesh>Who looked into what</div>'+
     owned.map(o=>`<div class=lanerow><span class=laneown>${esc(o.owner_first||o.owner_name||'Research')}</span> dug into <span class=lanesub>${esc(o.lane)}</span></div>`).join('')+'</div>'):'';
   const rowsHtml=rows.length?('<ul class=ev>'+rows.map(x=>{
     const o=ownerOf[x.lane];
-    const by=o?` · found by ${esc(o.owner_first||o.owner_name)}`:'';
+    const by=o?` <span class=techonly>· found by ${esc(o.owner_first||o.owner_name)}</span>`:'';
     return `<li>${x.mark==='ok'?'✅':'⚠️'} ${esc(x.text)} <span class="badge ${x.mark==='ok'?'b-ok':'b-warn'}">${x.mark==='ok'?'cited':'vendor'}</span><br><span class=note>${esc(host(x.url))}, ${esc(x.note)}${by}</span></li>`;
   }).join('')+'</ul>'):'';
   el.innerHTML=lanesHtml+rowsHtml;
@@ -2341,12 +2349,23 @@ async function sharePlan(id){
   }catch(e){toast('Network error.','err');}
 }
 function banner(msg){const b=document.getElementById('banner');b.textContent=msg;b.style.display='block';}
+// ── View mode: 'build' (hide the engine internals) vs 'tech' (see how it works). Persisted; a
+// surfacing level over one engine, not a separate product. Default to 'build'.
+let MODE=(function(){try{return localStorage.getItem('filg_mode')||'build';}catch(e){return 'build';}})();
+function renderModeSwitch(){
+  const el=document.getElementById('modesw'); if(!el)return;
+  el.innerHTML=[['build','Build a business'],['tech','See how it works']].map(([m,label])=>
+    `<button type=button data-m=${m} class=${MODE===m?'on':''} aria-pressed=${MODE===m} onclick="setMode('${m}')">${label}</button>`).join('');
+}
+function applyMode(){document.body.dataset.mode=MODE;renderModeSwitch();}
+function setMode(m){MODE=(m==='tech')?'tech':'build';try{localStorage.setItem('filg_mode',MODE);}catch(e){}applyMode();}
 async function initAuth(){
   const q=new URLSearchParams(location.search);
   if(q.get('upgraded'))banner('🎉 You\\'re on Operator. Your plans + integrations are unlocked.');
   if(q.get('canceled'))banner('Checkout canceled, no charge. You\\'re still on the free tier.');
   if(q.get('pdf'))banner('🎉 Polished PDF unlocked. Download it from your finished plan.');
   if(q.get('pdf_canceled'))banner('Checkout canceled, no charge. Your raw export is still free.');
+  applyMode();   // set the view mode (build vs see-how-it-works) before first paint
   restoreIdea();renderBoardPick();paintMeter();   // show the session meter at 0 from first paint
   if(!CFG.authEnabled||!window.supabase){renderAuth();routeFromPath();return;}
   sb=window.supabase.createClient(CFG.supabaseUrl,CFG.supabaseAnon);
