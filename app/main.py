@@ -111,13 +111,13 @@ def _fold_usage(sid: str, s: dict, cost: float, toks: int, **extra) -> tuple[flo
 
 def _needs_key(user: str) -> bool:
     """BYOK model: when BYOK is on and this user has no saved key, they're behind the wall — every
-    API action past the one free welcome plan requires their own key."""
+    API action, including the very first plan, requires their own key."""
     return bool(keys.enabled() and not _is_byok(user))
 
 
 def _key_wall(session: dict):
     """402 if the session owner must bring a key before this (API-calling) action; else None.
-    The one free welcome plan is granted at /api/plan/start, so every later engine call is walled."""
+    BYOK is required from the first submit (/api/plan/start), so every engine call is walled."""
     if _needs_key(session.get("user")):
         return JSONResponse(
             {"error": "Add your OpenRouter key to keep building.", "needKey": True}, status_code=402)
@@ -557,16 +557,12 @@ async def api_plan_start(request: Request):
     if _is_byok(user):
         pass   # has a key → unlimited plans on their own spend
     elif keys.enabled():
-        # BYOK on, no key: one free welcome plan, then they must bring a key. The daily kill switch
-        # still guards FILG's spend on these free runs (and DEGRADES to the key wall, never a dead end).
-        if usage.free_used(taste_id):
-            return JSONResponse(
-                {"error": "The first plan is on us. Hook up your OpenRouter key to keep using the full suite of tools.",
-                 "needKey": True}, status_code=402)
-        if usage.kill_switch_tripped():
-            return JSONResponse(
-                {"error": "FILG's free-run budget for today is maxed. Add your key to run now.",
-                 "needKey": True}, status_code=402)
+        # BYOK on, no key: require a key from the very first submit. FILG covers no runs now —
+        # the free "welcome" plan is gone (Sam 2026-06-25); even the first query is on the user's key.
+        return JSONResponse(
+            {"error": "Add your OpenRouter key to build your plan. It's free to create, and you pay "
+                      "OpenRouter directly (usually pennies a plan).",
+             "needKey": True}, status_code=402)
     else:
         # BYOK off (no FILG_KEY_SECRET — dev/local): keep the legacy free-cap behavior so dev works.
         allowed, reason = usage.can_run(taste_id, is_paid=_is_paid(user, verified))
@@ -985,7 +981,7 @@ async def api_plan_pdf(sid: str, request: Request):
     except Exception as e:  # noqa: BLE001
         traceback.print_exc()
         return JSONResponse({"error": f"Could not build the PDF: {e}"}, status_code=500)
-    # The $35 covers this render, so it does NOT deplete the free-taste daily budget; the per-session
+    # The $35 covers this render, so it does NOT deplete FILG's daily free-run budget; the per-session
     # usage meter still reflects it (display-only).
     nc, nt = _fold_usage(sid, s, cost, toks)   # binary response → echo usage via headers for the meter
     fn = f"{_slug(s.get('idea'))}-business-plan.pdf"
@@ -1384,8 +1380,8 @@ const CFG=window.FILG||{authEnabled:false,billingEnabled:false};
 let sb=null, session=null, me=null;
 function authHeaders(){return session?{'Authorization':'Bearer '+session.access_token}:{};}
 let SID=null;
-// ── BYOK: mandatory after the one free welcome plan ──────────────────────────
-let HAS_KEY=false, WELCOME_PROMPTED=false;
+// ── BYOK: mandatory from the first submit (no free welcome plan) ─────────────
+let HAS_KEY=false;
 async function loadKey(){            // refresh whether this user has a saved key
   if(!CFG.byokEnabled){HAS_KEY=false;return;}
   try{const r=await fetch('/api/key',{headers:authHeaders()});const d=await r.json();HAS_KEY=!!(d&&d.key);}
@@ -1395,15 +1391,12 @@ function requireKey(){               // gate any API-calling button: no key → 
   if(CFG.byokEnabled&&!HAS_KEY){keyModal();return false;}
   return true;
 }
-function maybePromptKey(){           // welcome plan finished → require a key, opening the modal once per load
-  if(WELCOME_PROMPTED||!CFG.byokEnabled||HAS_KEY)return;
-  WELCOME_PROMPTED=true;keyModal();
-}
 async function start(){
   const idea=document.getElementById('idea').value.trim(), email=document.getElementById('email').value.trim();
   const go=document.getElementById('go'), err=document.getElementById('err');
   err.textContent='';document.getElementById('joke').innerHTML='';
   if(CFG.authEnabled&&!session){authModal();return;}   // signed-out → prompt them with the sign-in modal
+  if(!requireKey())return;                              // no key → open the key modal; we cover no runs now
   const body={idea}; if(!session) body.email=email;   // signed in → identity from the token
   if(BOARD.length) body.directors=BOARD;               // optional Board of Directors → vets each step
   go.disabled=true; go.textContent='Researching…'; ACT_RESEARCH=false;
@@ -1446,7 +1439,6 @@ async function poll(){
     Activity.done(ACT_ID,s.status==='error'?'Hit a snag.':'Research graded. Building your plan.');ACT_RESEARCH=false;ACT_ID=null;
   }
   render(s);
-  if(s.status!=='error')maybePromptKey();   // welcome plan is in → require a key to go further
 }
 let ACT_RESEARCH=false, ACT_PROG_N=0, ACT_ID=null;
 // ── Model crew: pick-a-tile popover; cheap → premium. n = display name, k = engine stack key
@@ -2232,7 +2224,7 @@ async function keyModal(){
 function keyForm(){
   document.getElementById('modal-title').textContent='Bring your own key';
   document.getElementById('modal-body').innerHTML=
-    `<p class=or style="margin:0 0 10px">The first plan is on us. Hook up your own OpenRouter key to keep using the full suite of tools: more plans, branches, the board, chat, and PDF export. One key gives you every model plus cited web search, and you pay OpenRouter directly (usually pennies a plan).</p>`+
+    `<p class=or style="margin:0 0 10px">Hook up your own OpenRouter key to build your plan and use the full suite of tools: plans, branches, the board, chat, and PDF export. One key gives you every model plus cited web search, and you pay OpenRouter directly (usually pennies a plan).</p>`+
     `<ol class=keysteps>`+
       `<li><a href="https://openrouter.ai/keys" target=_blank rel=noopener>Open OpenRouter \\u2192 Keys</a> and sign up (free)</li>`+
       `<li>Click <b>Create Key</b> and copy it</li>`+

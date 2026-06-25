@@ -58,33 +58,17 @@ from app import main  # noqa: E402
 _IDEA = {"idea": "a real idea about coaching small dental practices", "email": "x@y.com"}
 
 
-def test_start_allows_one_free_welcome(client, monkeypatch):
+def test_start_walls_without_key_on_first_submit(client, monkeypatch):
+    # No free welcome plan anymore: BYOK on + no key → the very first submit needs a key.
     monkeypatch.setattr(main.keys, "enabled", lambda: True)
-    monkeypatch.setattr(main.usage, "free_used", lambda u: False)        # first plan
-    monkeypatch.setattr(main.usage, "kill_switch_tripped", lambda: False)
+    monkeypatch.setattr(main.keys, "has_key", lambda u: False)
     r = client.post("/api/plan/start", json=_IDEA)
-    assert r.status_code == 200 and "id" in r.json()                     # welcome plan is free
-
-
-def test_start_walls_after_free_used(client, monkeypatch):
-    monkeypatch.setattr(main.keys, "enabled", lambda: True)
-    monkeypatch.setattr(main.usage, "free_used", lambda u: True)         # already used the welcome
-    r = client.post("/api/plan/start", json=_IDEA)
-    assert r.status_code == 402 and r.json()["needKey"] is True          # must BYOK now
-
-
-def test_start_walls_when_kill_switch_tripped(client, monkeypatch):
-    monkeypatch.setattr(main.keys, "enabled", lambda: True)
-    monkeypatch.setattr(main.usage, "free_used", lambda u: False)
-    monkeypatch.setattr(main.usage, "kill_switch_tripped", lambda: True)  # FILG budget maxed
-    r = client.post("/api/plan/start", json=_IDEA)
-    assert r.status_code == 402 and r.json()["needKey"] is True
+    assert r.status_code == 402 and r.json()["needKey"] is True          # must BYOK from the start
 
 
 def test_byok_user_has_no_cap(client, monkeypatch):
     monkeypatch.setattr(main.keys, "enabled", lambda: True)
     monkeypatch.setattr(main.keys, "has_key", lambda u: True)            # user has a saved key
-    monkeypatch.setattr(main.usage, "free_used", lambda u: True)         # would block a no-key user
     r = client.post("/api/plan/start", json=_IDEA)
     assert r.status_code == 200 and "id" in r.json()                     # key holders are unlimited
 
@@ -117,10 +101,11 @@ def test_key_wall_off_when_byok_disabled(monkeypatch):
 
 def test_next_is_walled_without_key(client, monkeypatch):
     monkeypatch.setattr(main.keys, "enabled", lambda: True)
-    monkeypatch.setattr(main.usage, "free_used", lambda u: False)
-    monkeypatch.setattr(main.usage, "kill_switch_tripped", lambda: False)
-    sid = client.post("/api/plan/start", json=_IDEA).json()["id"]   # free welcome ok
-    r = client.post("/api/plan/" + sid + "/next", json={})          # building further needs a key
+    has = {"v": True}
+    monkeypatch.setattr(main.keys, "has_key", lambda u: has["v"])
+    sid = client.post("/api/plan/start", json=_IDEA).json()["id"]   # create the plan as a key holder
+    has["v"] = False                                                # key gone → wall closes
+    r = client.post("/api/plan/" + sid + "/next", json={})          # building needs a key
     assert r.status_code == 402 and r.json().get("needKey") is True
 
 

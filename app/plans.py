@@ -9,7 +9,7 @@ the DB (`store.account_plan`). Everything that gates behavior reads it through h
 feature-gating models/tiers there's exactly one place to do it.
 
 v1 plans:
-  - free : the pre-key state (one welcome plan; minimal concurrency).
+  - free : the pre-key state (no covered runs — a key is required to build; minimal concurrency).
   - byok : the default once a user brings a key (unlimited plans; N concurrent ops).
   - pro  : reserved for a future paid/comp tier (higher limits).
 
