@@ -117,3 +117,13 @@ def test_use_resets_to_prior_provider():
     with provider.use(provider.Provider("openrouter", "openai", object(), {})):
         assert provider.active() is not None
     assert provider.active() is None  # cleanly reset
+
+
+def test_anthropic_provider_user_key_supports_opus_and_bills_user(monkeypatch):
+    import types, sys
+    monkeypatch.setitem(sys.modules, "anthropic",
+                        types.SimpleNamespace(Anthropic=lambda **k: object()))
+    p = provider.anthropic_provider("sk-ant-xyz", bills_filg=False)
+    assert p.name == "anthropic" and p.kind == "anthropic" and p.bills_filg is False
+    assert p.model_id(provider.OPUS) == provider.OPUS        # Opus available on a direct key
+    assert p.model_id(provider.SONNET) == provider.SONNET    # identity map (logical id IS anthropic id)

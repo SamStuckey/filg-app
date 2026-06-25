@@ -139,11 +139,14 @@ class Provider:
         return self.models.get(logical, logical)
 
 
-def anthropic_provider(api_key: str | None = None) -> Provider:
-    """The hosted/free path. With no key, builds from ANTHROPIC_API_KEY (current behavior)."""
+def anthropic_provider(api_key: str | None = None, bills_filg: bool = True) -> Provider:
+    """Anthropic direct. No key → FILG's hosted ANTHROPIC_API_KEY (bills_filg=True, the free path).
+    A user's OWN Anthropic key → pass bills_filg=False (they pay; all Claude tiers incl. Opus). The
+    logical ids ARE the Anthropic ids, so the model map is identity."""
     import anthropic
     cl = anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic()
-    return Provider("anthropic", "anthropic", cl, {HAIKU: HAIKU, SONNET: SONNET}, bills_filg=True)
+    return Provider("anthropic", "anthropic", cl, {HAIKU: HAIKU, SONNET: SONNET, OPUS: OPUS},
+                    bills_filg=bills_filg)
 
 
 def openrouter_provider(api_key: str) -> Provider:

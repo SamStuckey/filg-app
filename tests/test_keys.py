@@ -118,3 +118,19 @@ def test_meter_skips_byok_runs(monkeypatch):
     monkeypatch.setattr(main, "_is_byok", lambda u: False)
     main._meter("x@y.com", 0.5)
     assert calls == [0.5]                                           # FILG-key run still metered
+
+
+def test_save_and_read_anthropic_key(monkeypatch):
+    monkeypatch.setenv("FILG_KEY_SECRET", Fernet.generate_key().decode())
+    monkeypatch.setattr(keys, "_fernet", None)
+    monkeypatch.setattr(keys, "_initialized", False)
+    keys.save_key("dev@x.com", "anthropic", "sk-ant-api03-abcd1234wxyz")
+    assert keys.get_key("dev@x.com") == "sk-ant-api03-abcd1234wxyz"
+    assert keys.key_meta("dev@x.com") == {"provider": "anthropic", "last4": "wxyz"}
+
+
+def test_main_auto_detects_provider_from_key_prefix():
+    from app import main
+    assert main._key_provider_kind("sk-ant-api03-foo") == "anthropic"
+    assert main._key_provider_kind("sk-or-v1-foo") == "openrouter"
+    assert main._key_provider_kind("  sk-ant-bar  ") == "anthropic"   # tolerates whitespace

@@ -82,13 +82,29 @@ def _is_byok(user: str) -> bool:
     return bool(user and keys.enabled() and keys.has_key(user))
 
 
+def _key_provider_kind(api_key: str) -> str:
+    """Which backend a pasted key is for, by prefix: sk-ant-… → Anthropic direct, else OpenRouter."""
+    return "anthropic" if api_key.strip().startswith("sk-ant-") else "openrouter"
+
+
+def _build_provider(kind: str, key: str):
+    """Build the per-run provider for a stored user key — Anthropic direct or OpenRouter. Either way
+    the user pays (bills_filg=False), so it never counts against FILG's daily budget."""
+    if kind == "anthropic":
+        return provider.anthropic_provider(key, bills_filg=False)
+    return provider.openrouter_provider(key)
+
+
 def _provider_for(user: str):
-    """The provider a session should run on: the user's saved OpenRouter key, else None (FILG's key).
-    provider.use(None) is a no-op, so callers can wrap unconditionally — with BYOK off this is inert."""
+    """The provider a session should run on: the user's saved key (OpenRouter or Anthropic), else None
+    (FILG's key). provider.use(None) is a no-op, so callers can wrap unconditionally."""
     if not (user and keys.enabled()):
         return None
     key = keys.get_key(user)
-    return provider.openrouter_provider(key) if key else None
+    if not key:
+        return None
+    kind = (keys.key_meta(user) or {}).get("provider") or "openrouter"
+    return _build_provider(kind, key)
 
 
 def _meter(user: str, cost: float) -> None:
@@ -120,7 +136,8 @@ def _key_wall(session: dict):
     BYOK is required from the first submit (/api/plan/start), so every engine call is walled."""
     if _needs_key(session.get("user")):
         return JSONResponse(
-            {"error": "Add your OpenRouter key to keep building.", "needKey": True}, status_code=402)
+            {"error": "Add your API key (OpenRouter or Anthropic) to keep building.",
+             "needKey": True}, status_code=402)
     return None
 
 
@@ -201,7 +218,7 @@ def _humanize_error(e: Exception) -> tuple[str, bool]:
               or "user not found" in low or "invalid api key" in low or "incorrect api key" in low
               or "no auth credentials" in low or ("expired" in low and "key" in low))
     if is_key:
-        return ("Your OpenRouter key was rejected — it looks expired or invalid. Update your key "
+        return ("Your API key was rejected — it looks expired or invalid. Update your key "
                 "with the 🔑 button up top, then try again."), True
     if "402" in low or "insufficient" in low or ("credit" in low and "openrouter" in low):
         return ("Your OpenRouter account looks out of credits. Top it up at openrouter.ai, then try "
@@ -331,7 +348,7 @@ def _validate_key(provider_name: str, api_key: str) -> tuple[bool, str]:
     try:
         import provider as prov_mod
         import pipeline
-        with prov_mod.use(prov_mod.openrouter_provider(api_key)):
+        with prov_mod.use(_build_provider(provider_name, api_key)):
             out = pipeline.call("key_validate", pipeline.HAIKU, "Reply with: OK", max_tokens=5)
         return (True, "ok") if out else (False, "The key didn't return a response.")
     except Exception:  # noqa: BLE001 — never surface provider internals to the client
@@ -359,8 +376,8 @@ async def api_key_save(request: Request):
     if not authed or not authed["email"]:
         return JSONResponse({"error": "Sign in first."}, status_code=401)
     body = await request.json()
-    provider_name = (body.get("provider") or "openrouter").strip()
     api_key = (body.get("key") or "").strip()
+    provider_name = _key_provider_kind(api_key)   # auto-detect from the key prefix (sk-ant- vs sk-or-)
     ok, why = _validate_key(provider_name, api_key)
     if not ok:
         return JSONResponse({"error": why}, status_code=400)
@@ -593,8 +610,9 @@ async def api_plan_start(request: Request):
         # BYOK on, no key: require a key from the very first submit. FILG covers no runs now —
         # the free "welcome" plan is gone (Sam 2026-06-25); even the first query is on the user's key.
         return JSONResponse(
-            {"error": "Add your OpenRouter key to build your plan. It's free to create, and you pay "
-                      "OpenRouter directly (usually pennies a plan).",
+            {"error": "Add your API key to build your plan — an OpenRouter key (any model) or your "
+                      "own Anthropic key (Claude direct). You pay the provider directly, usually "
+                      "pennies a plan.",
              "needKey": True}, status_code=402)
     else:
         # BYOK off (no FILG_KEY_SECRET — dev/local): keep the legacy free-cap behavior so dev works.
@@ -2298,13 +2316,13 @@ async function keyModal(){
 function keyForm(){
   document.getElementById('modal-title').textContent='Bring your own key';
   document.getElementById('modal-body').innerHTML=
-    `<p class=or style="margin:0 0 10px">Hook up your own OpenRouter key to build your plan and use the full suite of tools: plans, branches, the board, chat, and PDF export. One key gives you every model plus cited web search, and you pay OpenRouter directly (usually pennies a plan).</p>`+
+    `<p class=or style="margin:0 0 10px">Hook up your own key to build your plan and use the full suite of tools: plans, branches, the board, chat, and PDF export. Use an <b>OpenRouter</b> key (one key fronts every model + cited web search) or your own <b>Anthropic</b> key (Claude direct). We auto-detect which from the key, and you pay the provider directly (usually pennies a plan).</p>`+
     `<ol class=keysteps>`+
-      `<li><a href="https://openrouter.ai/keys" target=_blank rel=noopener>Open OpenRouter \\u2192 Keys</a> and sign up (free)</li>`+
-      `<li>Click <b>Create Key</b> and copy it</li>`+
+      `<li>Get a key: <a href="https://openrouter.ai/keys" target=_blank rel=noopener>OpenRouter \\u2192 Keys</a> (any model) or <a href="https://console.anthropic.com/settings/keys" target=_blank rel=noopener>Anthropic \\u2192 API keys</a> (Claude direct)</li>`+
+      `<li>Create a key and copy it</li>`+
       `<li>Paste it below and save \\u2014 we\\u2019ll test it before storing</li></ol>`+
-    `<label for=keyinput class=sr-only>Your OpenRouter API key</label>`+
-    `<input id=keyinput type=password placeholder="sk-or-v1-\\u2026" autocomplete=off spellcheck=false style="margin:4px 0 2px">`+
+    `<label for=keyinput class=sr-only>Your OpenRouter or Anthropic API key</label>`+
+    `<input id=keyinput type=password placeholder="sk-or-v1-\\u2026 or sk-ant-\\u2026" autocomplete=off spellcheck=false style="margin:4px 0 2px">`+
     `<div class=err id=keyerr></div>`;
   document.getElementById('modal-actions').innerHTML=
     `<button type=button class=ghost onclick="_closeModal()">Cancel</button>`+
@@ -2317,7 +2335,7 @@ async function saveKey(){
   if(key.length<8){er.textContent='That doesn\\u2019t look like a key.';return;}
   btn.disabled=true;btn.textContent='Validating\\u2026';
   try{
-    const r=await fetch('/api/key',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({provider:'openrouter',key})});
+    const r=await fetch('/api/key',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({key})});  // provider auto-detected server-side from the key prefix
     const d=await r.json();
     if(!r.ok){er.textContent=d.error||'Could not save the key.';btn.disabled=false;btn.textContent='Save & validate';return;}
     HAS_KEY=true;_closeModal();toast('Key saved \\u2014 build as many plans as you want. \\u2713');

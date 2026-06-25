@@ -28,8 +28,9 @@ from datetime import datetime, timezone
 _HERE = os.path.dirname(os.path.abspath(__file__))
 DB = os.environ.get("FILG_DB") or os.path.join(_HERE, "filg.db")
 
-# Providers we accept a key for. v1 = OpenRouter only (one key fronts any model + cited web search).
-PROVIDERS = ("openrouter",)
+# Providers we accept a key for. OpenRouter (one key fronts any model + cited web search) or a user's
+# own Anthropic key (Claude direct). The provider is auto-detected from the key prefix at save time.
+PROVIDERS = ("openrouter", "anthropic")
 
 _init_lock = threading.Lock()
 _initialized = False
