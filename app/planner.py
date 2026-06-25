@@ -151,6 +151,22 @@ def _host(url: str) -> str:
     return (m.group(1).replace("www.", "") if m else (url or "")).strip() or "a source"
 
 
+def _own_lanes(lanes: list[str]) -> list[dict]:
+    """Assign each auto-planned research lane a persona OWNER (who 'asks' that question), so the
+    fan-out surfaces as 'Nia is digging into distribution' instead of an anonymous web search. Uses
+    the persona router (skill-set overlap); the skeptic is a standing seat and never owns a lane."""
+    pool = [k for k in personas.KEYS if not (personas.get(k) or {}).get("standing")]
+    owned, used = [], set()
+    for ln in lanes:
+        ranked = personas.route(ln, k=len(pool))          # full ranking, best fit first
+        key = next((k for k in ranked if k not in used), ranked[0])  # distinct owners when possible
+        used.add(key)
+        p = personas.get(key) or {}
+        owned.append({"lane": ln, "owner": key, "owner_name": p.get("name"),
+                      "owner_first": p.get("first")})
+    return owned
+
+
 def prepare(idea: str, mock: bool = False, on_progress=None) -> dict:
     """Full pre-build pass for a new session: intake (shape the grab-bag into one thesis) → research
     the thesis → vet it (kill-gate) → draft section 0. Returns everything the session needs to start
@@ -167,8 +183,13 @@ def prepare(idea: str, mock: bool = False, on_progress=None) -> dict:
     emit("Focusing your idea into one sharp thesis")
     shaped, c_shape = intake.shape(idea, mock=mock)
     thesis = shaped["thesis"]
-    emit("Researching the market and competition")
+    emit("Planning the research fan-out")
     research_data = research(thesis, mock=mock)
+    owned = _own_lanes(research_data.get("lanes") or [])
+    research_data["owned_lanes"] = owned                # who researched what — surfaced in the UI
+    for o in owned:                                     # the fan-out, as persona-owned lanes
+        who = o.get("owner_first") or o.get("owner_name") or "A researcher"
+        emit(f"🔎 {who} ({o.get('owner_name')}) is digging into: {o['lane']}")
     rows = research_data.get("rows") or []
     for r in rows:                                   # the receipts — the gate's verdict per source
         emit((f"✓ cited {_host(r.get('url',''))}" if r.get("mark") == "ok"

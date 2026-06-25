@@ -1110,6 +1110,10 @@ button:hover{background:#e8e8e8}button:disabled{opacity:.5;cursor:default}
 .chatstart button:hover{border-color:#444}
 .chatsend{width:100%}
 .ev .note{color:var(--muted);font-size:12px}
+.lanes{border:1px solid var(--line);padding:9px 11px;margin:0 0 12px}
+.lanesh{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:7px}
+.lanerow{font-size:12.5px;padding:4px 0;border-top:1px dashed var(--line)}.lanerow:first-of-type{border-top:0}
+.laneown{font-weight:700;color:var(--ink)}.lanesub{color:var(--muted)}
 .badge{font-size:10px;font-weight:700;padding:0 5px;border:1px solid var(--line)}.b-ok{color:var(--ok);border-color:var(--ok)}.b-warn{color:var(--warn);border-color:var(--warn)}
 .tree{list-style:none;padding:0;margin:0}.tree li{padding:9px 0;border-top:1px solid var(--line)}.tree li:first-child{border-top:0}
 .tree .f{display:flex;align-items:center;gap:10px;font-size:14px}
@@ -1608,9 +1612,20 @@ function renderBoardRound(s){
     `<div class=takeaway><div class=tl>Board takeaway</div>${esc(r.verdict||'')}${split}</div></div>`;
 }
 function renderResearch(s){
-  const rows=(s.research&&s.research.rows)||[];
-  if(!rows.length){document.getElementById('research').innerHTML='<p style="color:var(--muted);font-size:13px;margin:0">Grading sources…</p>';return;}
-  document.getElementById('research').innerHTML='<ul class=ev>'+rows.map(x=>`<li>${x.mark==='ok'?'✅':'⚠️'} ${esc(x.text)} <span class="badge ${x.mark==='ok'?'b-ok':'b-warn'}">${x.mark==='ok'?'cited':'vendor'}</span><br><span class=note>${esc(host(x.url))}, ${esc(x.note)}</span></li>`).join('')+'</ul>';
+  const R=s.research||{};
+  const rows=R.rows||[], owned=R.owned_lanes||[];
+  const el=document.getElementById('research');
+  if(!rows.length&&!owned.length){el.innerHTML='<p style="color:var(--muted);font-size:13px;margin:0">Grading sources…</p>';return;}
+  const ownerOf={}; owned.forEach(o=>{ownerOf[o.lane]=o;});
+  // who researched what — the fan-out, surfaced as persona-owned lanes
+  const lanesHtml=owned.length?('<div class=lanes><div class=lanesh>Who looked into what</div>'+
+    owned.map(o=>`<div class=lanerow><span class=laneown>${esc(o.owner_first||o.owner_name||'Research')}</span> dug into <span class=lanesub>${esc(o.lane)}</span></div>`).join('')+'</div>'):'';
+  const rowsHtml=rows.length?('<ul class=ev>'+rows.map(x=>{
+    const o=ownerOf[x.lane];
+    const by=o?` · found by ${esc(o.owner_first||o.owner_name)}`:'';
+    return `<li>${x.mark==='ok'?'✅':'⚠️'} ${esc(x.text)} <span class="badge ${x.mark==='ok'?'b-ok':'b-warn'}">${x.mark==='ok'?'cited':'vendor'}</span><br><span class=note>${esc(host(x.url))}, ${esc(x.note)}${by}</span></li>`;
+  }).join('')+'</ul>'):'';
+  el.innerHTML=lanesHtml+rowsHtml;
 }
 function renderAnswer(s){
   const p=s.research&&s.research.prose; if(!p)return;

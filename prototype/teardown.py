@@ -118,6 +118,9 @@ def build_evidence(idea: str, headlines: int):
     lanes = plan(idea)
     with ThreadPoolExecutor(max_workers=3) as ex:
         lane_claims = list(ex.map(lambda ln: research_lane(idea, ln), lanes))
+    # remember which lane each claim came from, so the UI can show who researched what (persona-owned
+    # lanes are assigned app-side; this just carries the provenance through the gate).
+    claim_lane = {id(c): lanes[li] for li, lane in enumerate(lane_claims) for c in lane}
     quant = [c for lane in lane_claims for c in lane if c.quantitative]
 
     verdicts = gate_claims(quant)  # one batched judge call for all claims (token win)
@@ -135,22 +138,26 @@ def build_evidence(idea: str, headlines: int):
     rows = []
     for v in cleared:
         rows.append({"mark": "ok", "text": v.claim.text, "url": v.claim.source_url,
-                     "note": f"{v.tier.lower()} source, passed the gate"})
+                     "note": f"{v.tier.lower()} source, passed the gate",
+                     "lane": claim_lane.get(id(v.claim), "")})
     for r in rescues:
         if r.rescued and r.new_url:
             rows.append({"mark": "ok", "text": r.original.claim.text, "url": r.new_url,
-                         "note": "re-sourced to a primary/neutral cite by the gate"})
+                         "note": "re-sourced to a primary/neutral cite by the gate",
+                         "lane": claim_lane.get(id(r.original.claim), "")})
         else:
             v = r.original
             rows.append({"mark": "warn", "text": v.claim.text, "url": v.claim.source_url,
-                         "note": "no neutral source found, treat as a vendor marketing claim"})
+                         "note": "no neutral source found, treat as a vendor marketing claim",
+                         "lane": claim_lane.get(id(v.claim), "")})
     for v in to_label:
         rows.append({"mark": "warn", "text": v.claim.text, "url": v.claim.source_url,
-                     "note": "flagged self-interested/vendor source, unverified"})
+                     "note": "flagged self-interested/vendor source, unverified",
+                     "lane": claim_lane.get(id(v.claim), "")})
 
     n_clean = sum(1 for r in rows if r["mark"] == "ok")
     stats = {"checked": len(rows), "cleared": n_clean, "flagged": len(rows) - n_clean}
-    return rows, stats
+    return rows, stats, lanes
 
 
 def write_prose(idea: str, rows) -> dict:
@@ -186,12 +193,17 @@ MOCK_RESULT = {
     },
     "rows": [
         {"mark": "ok", "text": "~2.5M home-service businesses operate in the US", "url":
-            "https://www.census.gov/", "note": "primary source, passed the gate"},
+            "https://www.census.gov/", "note": "primary source, passed the gate",
+            "lane": "What is the market size and number of target buyers?"},
         {"mark": "warn", "text": "62% of calls to small businesses go unanswered", "url":
             "https://www.getaira.io/blog/missed-business-calls-statistics", "note":
-            "flagged self-interested/vendor source, unverified"},
+            "flagged self-interested/vendor source, unverified",
+            "lane": "What is the buyer's most acute, expensive pain point?"},
     ],
     "stats": {"checked": 2, "cleared": 1, "flagged": 1},
+    "lanes": ["What is the market size and number of target buyers?",
+              "Who are the competitors and what are the pricing norms?",
+              "What is the buyer's most acute, expensive pain point?"],
     "cost": 0.0,
 }
 
@@ -203,9 +215,9 @@ def generate(idea: str, headlines: int = HEADLINES_TO_RESEARCH, mock: bool = Fal
         return {**MOCK_RESULT, "prose": dict(MOCK_RESULT["prose"])}
     from pipeline import LEDGER
     start = len(LEDGER.rows)
-    rows, stats = build_evidence(idea, headlines)
+    rows, stats, lanes = build_evidence(idea, headlines)
     prose = write_prose(idea, rows)
-    return {"prose": prose, "rows": rows, "stats": stats,
+    return {"prose": prose, "rows": rows, "stats": stats, "lanes": lanes,
             "cost": round(LEDGER.cost_slice(start), 4)}
 
 
@@ -233,7 +245,7 @@ def generate_full(idea: str, headlines: int = HEADLINES_TO_RESEARCH, mock: bool 
         return {**MOCK_FULL}
     from pipeline import LEDGER, call, SONNET
     start = len(LEDGER.rows)
-    rows, stats = build_evidence(idea, headlines)
+    rows, stats, _lanes = build_evidence(idea, headlines)
     cited = "\n".join(f"- {r['text']} [{r['url']}]" for r in rows if r["mark"] == "ok") or "- (none)"
     flagged = "\n".join(f"- {r['text']} [{r['url']}]" for r in rows if r["mark"] == "warn") or "- (none)"
     artifacts = call("synth_full", SONNET, max_tokens=3500, prompt=(

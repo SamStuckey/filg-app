@@ -10,6 +10,16 @@ def test_prepare_shapes_researches_and_vets():
     assert prep["proposal"]["section"] == "brief" and prep["cost"] == 0.0
 
 
+def test_research_lanes_get_distinct_persona_owners():
+    prep = planner.prepare("guitar coaching for adults", mock=True)
+    owned = prep["research"]["owned_lanes"]
+    assert owned and all(o["lane"] and o["owner"] and o["owner_name"] for o in owned)
+    # the fan-out surfaces as different people, not one anonymous searcher
+    assert len({o["owner"] for o in owned}) == len(owned)
+    # the standing skeptic is never a lane owner
+    assert "skeptic" not in {o["owner"] for o in owned}
+
+
 def test_working_idea_prefers_thesis():
     assert planner._working_idea({"idea": "raw", "shaped": {"thesis": "focused"}}) == "focused"
     assert planner._working_idea({"idea": "raw"}) == "raw"  # back-compat
