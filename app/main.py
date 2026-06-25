@@ -1636,12 +1636,17 @@ function renderResearch(s){
   const lanesHtml=owned.length?('<div class="lanes techonly"><div class=lanesh>Who looked into what</div>'+
     owned.map(o=>`<div class=lanerow><span class=laneown>${esc(o.owner_first||o.owner_name||'Research')}</span> dug into <span class=lanesub>${esc(o.lane)}</span></div>`).join('')+'</div>'):'';
   const JLAB={TRUST:'trusted',CROSS_CHECK:'cross-check',FLAG_SELF_INTERESTED:'flagged: sells the result'};
+  const YR=new Date().getFullYear();
   const rowsHtml=rows.length?('<ul class=ev>'+rows.map(x=>{
     const o=ownerOf[x.lane];
     const by=o?` <span class=techonly>· found by ${esc(o.owner_first||o.owner_name)}</span>`:'';
     const jl=JLAB[x.judge]||'';
-    const gate=(x.tier||jl)?`<br><span class="gate techonly">⚙ gate: ${esc((x.tier||'').toLowerCase())}${jl?' · '+esc(jl):''}</span>`:'';
-    return `<li>${x.mark==='ok'?'✅':'⚠️'} ${esc(x.text)} <span class="badge ${x.mark==='ok'?'b-ok':'b-warn'}">${x.mark==='ok'?'cited':'vendor'}</span><br><span class=note>${esc(host(x.url))}, ${esc(x.note)}${by}</span>${gate}</li>`;
+    // staleness — labeled, never chased (shown in both modes; it's decision-relevant)
+    const stale=x.as_of?` · as of ${x.as_of}${(YR-x.as_of>=3)?' (stale)':''}`:'';
+    // single-source vs corroborated — structural, no extra research (tech mode)
+    const tri=(x.mark==='ok')?(x.corroborated?` · ${x.sources||2} sources`:' · single source'):'';
+    const gate=(x.tier||jl||tri)?`<br><span class="gate techonly">⚙ gate: ${esc((x.tier||'').toLowerCase())}${jl?' · '+esc(jl):''}${esc(tri)}</span>`:'';
+    return `<li>${x.mark==='ok'?'✅':'⚠️'} ${esc(x.text)} <span class="badge ${x.mark==='ok'?'b-ok':'b-warn'}">${x.mark==='ok'?'cited':'vendor'}</span><br><span class=note>${esc(host(x.url))}, ${esc(x.note)}${esc(stale)}${by}</span>${gate}</li>`;
   }).join('')+'</ul>'):'';
   el.innerHTML=lanesHtml+rowsHtml;
 }

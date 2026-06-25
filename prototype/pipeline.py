@@ -383,6 +383,7 @@ class Claim:
     source_url: str
     quantitative: bool
     promotes_category: str | None
+    as_of: int | None = None   # the year the stat refers to (for staleness labeling); None if unstated
 
 
 def research_lane(idea: str, lane: str) -> list[Claim]:
@@ -394,7 +395,10 @@ def research_lane(idea: str, lane: str) -> list[Claim]:
         "After researching, reply with ONLY a JSON array of up to 5 claims:\n"
         '[{"text": "the claim incl. the number", "source_url": "https://...", '
         '"quantitative": true, "promotes_category": "the thing this number makes look '
-        'good, e.g. \'outsourced X\', or null if neutral"}]'
+        'good, e.g. \'outsourced X\', or null if neutral", '
+        '"as_of": 2024}]\n'
+        "as_of = the year the statistic actually refers to (NOT today’s date), or null if the "
+        "source states no year. This is used to flag stale numbers."
     ))
     data = extract_json(out) or []
     claims = []
@@ -405,8 +409,18 @@ def research_lane(idea: str, lane: str) -> list[Claim]:
                 source_url=str(c["source_url"]).strip(),
                 quantitative=bool(c.get("quantitative", True)),
                 promotes_category=(c.get("promotes_category") or None),
+                as_of=_as_year(c.get("as_of")),
             ))
     return claims
+
+
+def _as_year(v) -> int | None:
+    """Coerce a model-reported as_of into a plausible 4-digit year, else None."""
+    try:
+        y = int(str(v).strip()[:4])
+    except (TypeError, ValueError):
+        return None
+    return y if 1900 <= y <= 2100 else None
 
 
 # --- Stage 3: SYNTH ----------------------------------------------------------
@@ -502,7 +516,7 @@ def research_primary(c: Claim) -> Rescue | None:
         return Rescue(None, None, "NONE", "?", False)  # placeholder, fixed by caller
     new_url = str(data["source_url"]).strip()
     new_tier, _ = classify_domain(new_url)
-    new_claim = Claim(c.text, new_url, c.quantitative, c.promotes_category)
+    new_claim = Claim(c.text, new_url, c.quantitative, c.promotes_category, c.as_of)
     new_judge = judge(new_claim)
     return Rescue(None, new_url, new_tier, new_judge, survives(new_tier, new_judge))
 

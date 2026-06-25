@@ -75,3 +75,24 @@ def test_call_plain_system_when_uncached(monkeypatch):
     monkeypatch.setattr(pipeline, "client", _fake_client(cap))
     pipeline.call("s", pipeline.SONNET, "hi", system="RULES")
     assert cap["system"] == "RULES"
+
+
+def test_as_year_coerces_and_bounds():
+    assert pipeline._as_year(2024) == 2024
+    assert pipeline._as_year("2021") == 2021
+    assert pipeline._as_year("n/a") is None
+    assert pipeline._as_year(1500) is None   # implausible year rejected
+
+
+def test_label_triangulation_marks_single_vs_corroborated():
+    import teardown
+    rows = [
+        {"mark": "ok", "url": "https://census.gov/x", "lane": "market"},
+        {"mark": "ok", "url": "https://bls.gov/y", "lane": "market"},      # different host, same lane
+        {"mark": "ok", "url": "https://mgma.com/z", "lane": "pricing"},    # alone in its lane
+        {"mark": "warn", "url": "https://vendor.com/w", "lane": "pricing"},
+    ]
+    teardown._label_triangulation(rows)
+    assert rows[0]["corroborated"] is True and rows[1]["corroborated"] is True
+    assert rows[2]["corroborated"] is False and rows[2]["sources"] == 1
+    assert "corroborated" not in rows[3]   # flagged rows are not labeled (already unverified)

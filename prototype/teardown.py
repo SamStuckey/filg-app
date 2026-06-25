@@ -141,29 +141,52 @@ def build_evidence(idea: str, headlines: int):
     for v in cleared:
         rows.append({"mark": "ok", "text": v.claim.text, "url": v.claim.source_url,
                      "note": f"{v.tier.lower()} source, passed the gate",
-                     "tier": v.tier, "judge": v.judge,
+                     "tier": v.tier, "judge": v.judge, "as_of": v.claim.as_of,
                      "lane": claim_lane.get(id(v.claim), "")})
     for r in rescues:
         if r.rescued and r.new_url:
             rows.append({"mark": "ok", "text": r.original.claim.text, "url": r.new_url,
                          "note": "re-sourced to a primary/neutral cite by the gate",
                          "tier": r.original.tier, "judge": r.original.judge,
+                         "as_of": r.original.claim.as_of,
                          "lane": claim_lane.get(id(r.original.claim), "")})
         else:
             v = r.original
             rows.append({"mark": "warn", "text": v.claim.text, "url": v.claim.source_url,
                          "note": "no neutral source found, treat as a vendor marketing claim",
-                         "tier": v.tier, "judge": v.judge,
+                         "tier": v.tier, "judge": v.judge, "as_of": v.claim.as_of,
                          "lane": claim_lane.get(id(v.claim), "")})
     for v in to_label:
         rows.append({"mark": "warn", "text": v.claim.text, "url": v.claim.source_url,
                      "note": "flagged self-interested/vendor source, unverified",
-                     "tier": v.tier, "judge": v.judge,
+                     "tier": v.tier, "judge": v.judge, "as_of": v.claim.as_of,
                      "lane": claim_lane.get(id(v.claim), "")})
 
+    _label_triangulation(rows)   # cheap surface-only: mark cleared claims single-source vs corroborated
     n_clean = sum(1 for r in rows if r["mark"] == "ok")
     stats = {"checked": len(rows), "cleared": n_clean, "flagged": len(rows) - n_clean}
     return rows, stats, lanes
+
+
+def _row_host(url: str) -> str:
+    m = re.search(r"https?://([^/]+)", url or "")
+    return (m.group(1).replace("www.", "") if m else (url or "")).strip().lower()
+
+
+def _label_triangulation(rows: list) -> None:
+    """No extra research calls (label-don't-chase, invariant #2). A cleared claim is 'corroborated'
+    only if another cleared claim in the SAME lane cites a DIFFERENT host; otherwise it rests on a
+    single source. We just label it — we never go re-search to force a second cite."""
+    by_lane: dict = {}
+    for r in rows:
+        if r["mark"] == "ok":
+            by_lane.setdefault(r.get("lane", ""), []).append(_row_host(r["url"]))
+    for r in rows:
+        if r["mark"] != "ok":
+            continue
+        hosts = by_lane.get(r.get("lane", ""), [])
+        r["sources"] = len(set(hosts))
+        r["corroborated"] = len({h for h in hosts if h and h != _row_host(r["url"])}) >= 1
 
 
 def write_prose(idea: str, rows) -> dict:
@@ -200,12 +223,13 @@ MOCK_RESULT = {
     "rows": [
         {"mark": "ok", "text": "~2.5M home-service businesses operate in the US", "url":
             "https://www.census.gov/", "note": "primary source, passed the gate",
-            "tier": "PRIMARY", "judge": "TRUST",
+            "tier": "PRIMARY", "judge": "TRUST", "as_of": 2022,
+            "sources": 1, "corroborated": False,
             "lane": "What is the market size and number of target buyers?"},
         {"mark": "warn", "text": "62% of calls to small businesses go unanswered", "url":
             "https://www.getaira.io/blog/missed-business-calls-statistics", "note":
             "flagged self-interested/vendor source, unverified",
-            "tier": "VENDOR", "judge": "FLAG_SELF_INTERESTED",
+            "tier": "VENDOR", "judge": "FLAG_SELF_INTERESTED", "as_of": None,
             "lane": "What is the buyer's most acute, expensive pain point?"},
     ],
     "stats": {"checked": 2, "cleared": 1, "flagged": 1},
