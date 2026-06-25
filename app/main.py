@@ -377,7 +377,8 @@ async def api_key_save(request: Request):
         return JSONResponse({"error": "Sign in first."}, status_code=401)
     body = await request.json()
     api_key = (body.get("key") or "").strip()
-    provider_name = _key_provider_kind(api_key)   # auto-detect from the key prefix (sk-ant- vs sk-or-)
+    sel = (body.get("provider") or "").strip()    # the provider the user picked in the modal
+    provider_name = sel if sel in keys.PROVIDERS else _key_provider_kind(api_key)  # fall back to prefix
     ok, why = _validate_key(provider_name, api_key)
     if not ok:
         return JSONResponse({"error": why}, status_code=400)
@@ -1119,6 +1120,7 @@ body[data-mode=build] #meter{display:none!important}
 .meter .m-dot{width:7px;height:7px;background:var(--muted);flex:none}
 .meter.live .m-dot{background:var(--ok)}
 .meter b{color:var(--ink);font-weight:700}
+.meter .m-est{font-weight:400;font-size:10.5px;color:var(--muted);opacity:.8}
 h1.logo{font-size:22px;font-weight:700;letter-spacing:-.01em;margin:0}.logo span{color:var(--ink)}
 .logobtn{display:inline-flex;align-items:center;gap:6px;background:none;border:0;padding:0;margin:0;font:inherit;color:inherit;letter-spacing:inherit;cursor:pointer}.logobtn:hover{text-decoration:underline}
 .logomark{display:none}
@@ -1436,11 +1438,11 @@ let sb=null, session=null, me=null;
 function authHeaders(){return session?{'Authorization':'Bearer '+session.access_token}:{};}
 let SID=null;
 // ── BYOK: mandatory from the first submit (no free welcome plan) ─────────────
-let HAS_KEY=false;
+let HAS_KEY=false, KEY_PROVIDER=null;   // which backend the saved key runs on ('openrouter'|'anthropic')
 async function loadKey(){            // refresh whether this user has a saved key
-  if(!CFG.byokEnabled){HAS_KEY=false;return;}
-  try{const r=await fetch('/api/key',{headers:authHeaders()});const d=await r.json();HAS_KEY=!!(d&&d.key);}
-  catch(e){HAS_KEY=false;}
+  if(!CFG.byokEnabled){HAS_KEY=false;KEY_PROVIDER=null;return;}
+  try{const r=await fetch('/api/key',{headers:authHeaders()});const d=await r.json();HAS_KEY=!!(d&&d.key);KEY_PROVIDER=(d&&d.key)?d.key.provider:null;if(typeof paintMeter==='function')paintMeter();}
+  catch(e){HAS_KEY=false;KEY_PROVIDER=null;}
 }
 function requireKey(){               // gate any API-calling button: no key → open the key modal
   if(CFG.byokEnabled&&!HAS_KEY){keyModal();return false;}
@@ -1584,7 +1586,9 @@ function paintMeter(){
   const cost=_mShown.cost, tok=_mShown.tokens, d=cost<1?(cost<0.01?4:3):2;
   el.hidden=false;
   el.className=(typeof Activity!=='undefined'&&Activity.n>0)?'meter live':'meter';
-  el.innerHTML=`<span class=m-dot></span><b>${fmtTokens(tok)}</b> tokens · <b>$${cost.toFixed(d)}</b>`;
+  // Anthropic doesn't report per-call USD, so the $ is estimated from the price table (tokens are exact).
+  const est=(KEY_PROVIDER==='anthropic')?'<span class=m-est> (estimated)</span>':'';
+  el.innerHTML=`<span class=m-dot></span><b>${fmtTokens(tok)}</b> tokens · <b>$${cost.toFixed(d)}</b>${est}`;
 }
 function render(s){
   meterTick(s);   // tick the session usage meter off this plan's cumulative cost/tokens
@@ -2313,20 +2317,31 @@ async function keyModal(){
     _openModal('.authgate button');
   }else{keyForm();}
 }
+let KEY_PROV='openrouter';   // provider chosen in the key modal ('openrouter'|'anthropic')
+function setKeyProv(p){
+  KEY_PROV=(p==='anthropic')?'anthropic':'openrouter';
+  const wrap=document.getElementById('keyprov');
+  if(wrap)wrap.querySelectorAll('button').forEach(b=>b.classList.toggle('on',b.dataset.p===KEY_PROV));
+  const inp=document.getElementById('keyinput'); if(inp)inp.placeholder=(KEY_PROV==='anthropic')?'sk-ant-\\u2026':'sk-or-v1-\\u2026';
+  const help=document.getElementById('keyprovhelp');
+  if(help)help.innerHTML=(KEY_PROV==='anthropic')
+    ?'Get it at <a href="https://console.anthropic.com/settings/keys" target=_blank rel=noopener>Anthropic \\u2192 API keys</a> (Claude direct, all tiers, billed by Anthropic).'
+    :'Get it at <a href="https://openrouter.ai/keys" target=_blank rel=noopener>OpenRouter \\u2192 Keys</a> (one key fronts every model + cited web search).';
+}
+function keyPrefixDetect(v){v=(v||'').trim();if(v.indexOf('sk-ant-')===0)setKeyProv('anthropic');else if(v.indexOf('sk-or-')===0)setKeyProv('openrouter');}
 function keyForm(){
   document.getElementById('modal-title').textContent='Bring your own key';
   document.getElementById('modal-body').innerHTML=
-    `<p class=or style="margin:0 0 10px">Hook up your own key to build your plan and use the full suite of tools: plans, branches, the board, chat, and PDF export. Use an <b>OpenRouter</b> key (one key fronts every model + cited web search) or your own <b>Anthropic</b> key (Claude direct). We auto-detect which from the key, and you pay the provider directly (usually pennies a plan).</p>`+
-    `<ol class=keysteps>`+
-      `<li>Get a key: <a href="https://openrouter.ai/keys" target=_blank rel=noopener>OpenRouter \\u2192 Keys</a> (any model) or <a href="https://console.anthropic.com/settings/keys" target=_blank rel=noopener>Anthropic \\u2192 API keys</a> (Claude direct)</li>`+
-      `<li>Create a key and copy it</li>`+
-      `<li>Paste it below and save \\u2014 we\\u2019ll test it before storing</li></ol>`+
-    `<label for=keyinput class=sr-only>Your OpenRouter or Anthropic API key</label>`+
-    `<input id=keyinput type=password placeholder="sk-or-v1-\\u2026 or sk-ant-\\u2026" autocomplete=off spellcheck=false style="margin:4px 0 2px">`+
+    `<p class=or style="margin:0 0 10px">Hook up your own key to build your plan and use the full suite of tools: plans, branches, the board, chat, and PDF export. Pick your provider, paste a key, and you pay them directly (usually pennies a plan).</p>`+
+    `<div class=modesw id=keyprov role=group aria-label="Key provider" style="margin:0 0 12px"><button type=button data-p=openrouter onclick="setKeyProv('openrouter')">OpenRouter</button><button type=button data-p=anthropic onclick="setKeyProv('anthropic')">Anthropic</button></div>`+
+    `<ol class=keysteps><li><span id=keyprovhelp></span></li><li>Create a key and copy it</li><li>Paste it below and save \\u2014 we\\u2019ll test it before storing</li></ol>`+
+    `<label for=keyinput class=sr-only>Your API key</label>`+
+    `<input id=keyinput type=password placeholder="sk-or-v1-\\u2026" autocomplete=off spellcheck=false oninput="keyPrefixDetect(this.value)" style="margin:4px 0 2px">`+
     `<div class=err id=keyerr></div>`;
   document.getElementById('modal-actions').innerHTML=
     `<button type=button class=ghost onclick="_closeModal()">Cancel</button>`+
     `<button type=button id=keysave onclick="saveKey()">Save &amp; validate</button>`;
+  setKeyProv(KEY_PROV);   // sync the toggle + placeholder + help line
   _openModal('#keyinput');
 }
 async function saveKey(){
@@ -2335,7 +2350,7 @@ async function saveKey(){
   if(key.length<8){er.textContent='That doesn\\u2019t look like a key.';return;}
   btn.disabled=true;btn.textContent='Validating\\u2026';
   try{
-    const r=await fetch('/api/key',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({key})});  // provider auto-detected server-side from the key prefix
+    const r=await fetch('/api/key',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({provider:KEY_PROV,key})});  // chosen provider (server falls back to prefix detection)
     const d=await r.json();
     if(!r.ok){er.textContent=d.error||'Could not save the key.';btn.disabled=false;btn.textContent='Save & validate';return;}
     HAS_KEY=true;_closeModal();toast('Key saved \\u2014 build as many plans as you want. \\u2713');
