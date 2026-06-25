@@ -1317,6 +1317,18 @@ button:hover{background:#e8e8e8}button:disabled{opacity:.5;cursor:default}
 .cmtq{font-style:italic;color:var(--muted);font-size:12.5px;flex:none;max-width:42%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .cmtn{font-size:13px;flex:1}
 .cmtx{background:none;border:0;color:var(--muted);cursor:pointer;font-size:17px;line-height:1;padding:0 2px;flex:none}
+/* inline comment highlight + balloon marker (theme-agnostic tints work on light or dark) */
+.draft .hascmt{background:rgba(255,194,63,.13);box-shadow:inset 3px 0 0 var(--warn);border-radius:2px}
+.draft .cmt-target{background:rgba(46,124,246,.16);box-shadow:inset 3px 0 0 var(--link);border-radius:2px}
+.cmtmark{margin-left:7px;white-space:nowrap;user-select:none;font-size:12px}
+.cmtmark button{background:none;border:0;cursor:pointer;font-size:12px;line-height:1;padding:0 2px;color:var(--muted)}
+.cmtmark .cmtmark-e:hover{color:var(--ink)}.cmtmark .cmtmark-x:hover{color:var(--kill)}
+/* suggested-feedback (the engine's open questions) above the per-part feedback box */
+.sfb{margin:0 0 11px;border-bottom:1px dashed var(--line);padding-bottom:9px}
+.sfbh{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:5px}
+.sfbl{margin:0;padding-left:18px}.sfbl li{margin:4px 0}
+.sfbl button{background:none;border:0;color:var(--link);cursor:pointer;text-align:left;font:inherit;padding:0;text-decoration:underline}
+.sfbl button:hover{color:var(--ink)}
 .toasts{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);display:flex;flex-direction:column;gap:8px;z-index:60;align-items:center;pointer-events:none}
 .toast{background:var(--ink);color:#fff;padding:10px 16px;font-size:14px;font-weight:700;transition:opacity .25s;max-width:90vw}
 .toast.err{background:var(--kill)}.toast.out{opacity:0}
@@ -1753,8 +1765,10 @@ function renderNode(s){
   const intro=s.step===0?`<p class=lead>We build your plan in ${s.total} parts, one at a time, your call on each (watch them fill in on the left). First up:</p>`:'';
   const changeFlag=p.change?`<div class=changeflag><span class=cf-l>↳ Your note shaped this</span>${esc(p.change)}</div>`:'';
   const killed=(s.vetting||{}).verdict==='kill';   // hard gate: an unbuildable idea can't roll forward
+  const qs=killed?[]:suggestedFb(s);   // the engine's open questions, surfaced as clickable feedback
+  const sfb=qs.length?`<div class=sfb><div class=sfbh>Suggested feedback — the engine's open questions</div><ul class=sfbl>${qs.map(q=>`<li><button type=button data-q="${esc(q)}" onclick="useFb(this.dataset.q)">${esc(q)}</button></li>`).join('')}</ul></div>`:'';
   const tail=killed?killGateHtml(s):
-    `<div class=fbk><label for=feedback class=sr-only>Your feedback on this part</label>`+
+    `<div class=fbk>${sfb}<label for=feedback class=sr-only>Your feedback on this part</label>`+
     `<textarea id=feedback rows=2 placeholder="Give optional feedback and roll forward, or say what's not landing and regenerate this part."></textarea>`+
     `<div class=chips>${FB_CHIPS.map(x=>`<button type=button class=chip onclick="addChip('${x}')">${esc(x)}</button>`).join('')}</div>`+
     `<div class=navrow><button type=button class=b-back onclick=regenStep() title="Regenerate this part with your feedback (to go back a step, use the decision tree)">\\u21bb Not feeling it</button>`+
@@ -1818,43 +1832,68 @@ function talkItOut(){   // #8 off-ramp: hash the idea out in the side-chat inste
 }
 // ── #7 Inline comments: select text (or click a line) in the current draft → a popover note. Comments
 // are held per node id and folded into the next regenerate / roll-forward, anchored to the quoted span.
-let COMMENTS={};     // {nodeId:[{quote,note}]}
+// ── #1 suggested feedback: surface the engine's open questions above the per-part feedback box ──
+function suggestedFb(s){
+  const qs=[]; const cq=((s.shaped||{}).clarifying_question||'').trim(); if(cq)qs.push(cq);
+  return qs;
+}
+function useFb(t){const f=document.getElementById('feedback'); if(!f)return; f.value=(f.value?f.value.replace(/\\s*$/,'')+' ':'')+t; f.focus();}
+
+// ── #2 inline comments: highlight the targeted block, leave a 💬/✕ marker you can edit or remove ──
+let COMMENTS={};     // {nodeId:[{quote,note,blk}]}  (blk = index among the draft's block elements)
 let CUR_NODE=null;   // active node id (keys the comments)
-let CMT_QUOTE='';    // the span the open popover targets
+let CMT_QUOTE='', CMT_BLK=-1, CMT_EDIT=-1;
 function nodeComments(){return (CUR_NODE&&COMMENTS[CUR_NODE])||[];}
 function commentsSteer(){   // fold inline comments into the feedback string the model receives
   const cs=nodeComments(); if(!cs.length)return '';
   return "\\n\\nInline comments on the current draft (address each, anchored to the quoted text):\\n"+
     cs.map(c=>`- On \\u201c${c.quote}\\u201d: ${c.note}`).join("\\n");
 }
-function renderComments(){
-  const box=document.getElementById('cmtlist'); if(!box)return;
-  const cs=nodeComments();
-  box.innerHTML = cs.length ? (`<div class=cmth>Your notes on this part \\u2014 folded in when you regenerate or roll forward</div>`+
-    cs.map((c,i)=>`<div class=cmt><span class=cmtq>\\u201c${esc(c.quote.length>60?c.quote.slice(0,60)+'\\u2026':c.quote)}\\u201d</span><span class=cmtn>${esc(c.note)}</span><button type=button class=cmtx aria-label="Remove comment" onclick="removeComment(${i})">\\u00d7</button></div>`).join('')) : '';
+function draftBlocks(){const d=document.querySelector('#node .draft');return d?Array.prototype.slice.call(d.querySelectorAll('p,li,h3,h4,h5,h6,td')):[];}
+function clearCmtTarget(){document.querySelectorAll('.draft .cmt-target').forEach(el=>el.classList.remove('cmt-target'));}
+function decorateComments(){   // re-apply highlights + markers for the active node's comments
+  const blocks=draftBlocks();
+  blocks.forEach(b=>{b.classList.remove('hascmt');const m=b.querySelector('.cmtmark');if(m)m.remove();});
+  nodeComments().forEach((c,i)=>{
+    const b=blocks[c.blk]; if(!b)return;
+    b.classList.add('hascmt');
+    const mk=document.createElement('span'); mk.className='cmtmark'; mk.contentEditable='false';
+    mk.innerHTML=`<button type=button class=cmtmark-e title="Edit note: ${esc(c.note)}" onclick="editComment(${i})">💬</button><button type=button class=cmtmark-x aria-label="Remove note" title="Remove note" onclick="removeComment(${i})">\\u00d7</button>`;
+    b.appendChild(mk);
+  });
 }
-function removeComment(i){const cs=nodeComments();cs.splice(i,1);renderComments();}
-function onDraftSelect(e){
-  if(e.target.closest('#cmtpop'))return;             // interactions inside the popover don't re-open it
-  const draft=e.target.closest('.draft'); if(!draft){return;}
-  const sel=window.getSelection(); let quote=(sel&&sel.toString()||'').trim();
-  if(!quote){const blk=e.target.closest('p,li,h3,h4,h5,h6,td');quote=blk?(blk.textContent||'').trim():'';}
-  if(!quote)return;
-  CMT_QUOTE=quote.slice(0,180);
+function renderComments(){const box=document.getElementById('cmtlist'); if(box)box.innerHTML=''; decorateComments();}
+function removeComment(i){const cs=nodeComments();cs.splice(i,1);decorateComments();}
+function editComment(i){const c=nodeComments()[i]; if(!c)return; CMT_EDIT=i; CMT_QUOTE=c.quote||''; CMT_BLK=c.blk;
+  openCmtPop(draftBlocks()[c.blk], c.note);}
+function openCmtPop(anchorEl, prefill){
   const pop=document.getElementById('cmtpop'); if(!pop)return;
+  clearCmtTarget(); if(anchorEl)anchorEl.classList.add('cmt-target');
   document.getElementById('cmtquote').textContent='\\u201c'+(CMT_QUOTE.length>90?CMT_QUOTE.slice(0,90)+'\\u2026':CMT_QUOTE)+'\\u201d';
-  document.getElementById('cmtnote').value='';
-  pop.style.left=Math.max(8,Math.min(e.pageX,window.scrollX+window.innerWidth-300))+'px';
-  pop.style.top=(e.pageY+8)+'px';
+  document.getElementById('cmtnote').value=prefill||'';
+  const r=anchorEl?anchorEl.getBoundingClientRect():{left:40,bottom:80};
+  pop.style.left=Math.max(8,Math.min(window.scrollX+r.left,window.scrollX+window.innerWidth-300))+'px';
+  pop.style.top=(window.scrollY+r.bottom+8)+'px';
   pop.classList.add('show'); pop.setAttribute('aria-hidden','false');
   setTimeout(()=>{const n=document.getElementById('cmtnote');if(n)n.focus();},30);
 }
-function hideCmtPop(){const p=document.getElementById('cmtpop');if(p){p.classList.remove('show');p.setAttribute('aria-hidden','true');}}
+function onDraftSelect(e){
+  if(e.target.closest('#cmtpop')||e.target.closest('.cmtmark'))return;   // marker buttons handle themselves
+  if(!e.target.closest('.draft'))return;
+  const blk=e.target.closest('p,li,h3,h4,h5,h6,td'); if(!blk)return;
+  const sel=window.getSelection(); let quote=(sel&&sel.toString()||'').trim();
+  if(!quote)quote=(blk.textContent||'').trim();
+  if(!quote)return;
+  CMT_EDIT=-1; CMT_QUOTE=quote.slice(0,180); CMT_BLK=draftBlocks().indexOf(blk);
+  openCmtPop(blk,'');
+}
+function hideCmtPop(){const p=document.getElementById('cmtpop');if(p){p.classList.remove('show');p.setAttribute('aria-hidden','true');}clearCmtTarget();}
 function saveComment(){
   const note=((document.getElementById('cmtnote')||{}).value||'').trim();
-  if(!note||!CMT_QUOTE||!CUR_NODE){hideCmtPop();return;}
-  (COMMENTS[CUR_NODE]=COMMENTS[CUR_NODE]||[]).push({quote:CMT_QUOTE,note});
-  CMT_QUOTE=''; hideCmtPop(); renderComments();
+  if(!note||CMT_BLK<0||!CUR_NODE){hideCmtPop();return;}
+  const cs=(COMMENTS[CUR_NODE]=COMMENTS[CUR_NODE]||[]);
+  if(CMT_EDIT>=0&&cs[CMT_EDIT])cs[CMT_EDIT].note=note; else cs.push({quote:CMT_QUOTE,note,blk:CMT_BLK});
+  CMT_EDIT=-1; CMT_QUOTE=''; CMT_BLK=-1; hideCmtPop(); decorateComments();
   const s=window.getSelection&&window.getSelection(); if(s&&s.removeAllRanges)s.removeAllRanges();
 }
 document.addEventListener('mouseup',onDraftSelect);
