@@ -93,6 +93,26 @@ def test_call_without_a_bound_provider_raises():
         pipeline.call("s", pipeline.SONNET, "hi")
 
 
+def test_web_search_tool_downgrades_on_haiku():
+    # web_search_20260209 (dynamic filtering) 400s on Haiku 4.5 — the default stack's research model.
+    # _call_anthropic must swap it for the basic web_search_20250305 when the resolved model is Haiku,
+    # and leave it alone on Sonnet/Opus, so a real Anthropic key still returns cited research.
+    haiku = pipeline._web_tools_for_model([dict(pipeline.WEB_SEARCH_TOOL)], pipeline.HAIKU)
+    assert haiku[0]["type"] == "web_search_20250305"
+    sonnet = pipeline._web_tools_for_model([dict(pipeline.WEB_SEARCH_TOOL)], pipeline.SONNET)
+    assert sonnet[0]["type"] == "web_search_20260209"
+
+
+def test_web_search_sent_to_client_matches_model():
+    # End-to-end through the bound client: a research call resolving to Haiku sends the basic variant.
+    cap = {}
+    prov = provider.Provider("anthropic", "anthropic", _fake_client(cap),
+                             {pipeline.HAIKU: pipeline.HAIKU})
+    with provider.use(prov):
+        pipeline.call("research", pipeline.HAIKU, "find facts", tools=[dict(pipeline.WEB_SEARCH_TOOL)])
+    assert cap["tools"][0]["type"] == "web_search_20250305"
+
+
 def test_as_year_coerces_and_bounds():
     assert pipeline._as_year(2024) == 2024
     assert pipeline._as_year("2021") == 2021

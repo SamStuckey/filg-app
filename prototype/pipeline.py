@@ -63,6 +63,11 @@ OPENROUTER_WEB_MAX = 4          # results per request for OpenRouter's web plugi
 # web_search defaults to programmatic calling, which Haiku can't do — pin to direct.
 WEB_SEARCH_TOOL = {"type": "web_search_20260209", "name": "web_search",
                    "max_uses": 4, "allowed_callers": ["direct"]}
+# The dynamic-filtering `web_search_20260209` variant requires Opus 4.6+/Sonnet 4.6 — it is NOT
+# supported on Haiku 4.5 (the default stack's research model), where it 400s. Haiku must use the
+# basic `web_search_20250305` variant. `_web_tools_for_model` swaps per RESOLVED model so a real
+# Anthropic key on the default "The closer" stack still returns cited results from the fan-out.
+WEB_SEARCH_TOOL_BASIC = {"type": "web_search_20250305", "name": "web_search", "max_uses": 4}
 
 # FILG is user-key-only: there is NO hosted FILG client. Every real call runs on a provider bound
 # from the user's BYOK key (provider.use(...) on the run thread + pipeline.bound() into fan-outs).
@@ -214,6 +219,8 @@ def _call_anthropic(prov, stage: str, model: str, prompt: str, *, max_tokens: in
                            "fan-out workers must be wrapped with pipeline.bound().")
     cl = prov.client
     model = prov.model_id(model)
+    if tools:
+        tools = _web_tools_for_model(tools, model)   # Haiku needs the basic web_search variant
     messages = [{"role": "user", "content": prompt}]
     text_parts: list[str] = []
     for _ in range(6):  # cap resume hops
@@ -236,6 +243,17 @@ def _call_anthropic(prov, stage: str, model: str, prompt: str, *, max_tokens: in
 
 def _is_web_search_tool(t) -> bool:
     return isinstance(t, dict) and str(t.get("type", "")).startswith("web_search")
+
+
+def _web_tools_for_model(tools: list, model: str) -> list:
+    """Match the web_search tool VERSION to the resolved Anthropic model. The dynamic-filtering
+    `web_search_20260209` needs Opus 4.6+/Sonnet 4.6; on Haiku 4.5 it 400s, so swap it for the basic
+    `web_search_20250305`. Non-Haiku models keep the richer variant. No-op when there's no web tool."""
+    if HAIKU not in (model or ""):
+        return tools
+    return [dict(WEB_SEARCH_TOOL_BASIC)
+            if (_is_web_search_tool(t) and "20260209" in str(t.get("type", ""))) else t
+            for t in tools]
 
 
 def _call_openai(prov, stage: str, model: str, prompt: str, *, max_tokens: int,
