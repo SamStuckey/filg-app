@@ -24,7 +24,7 @@ import json
 import os
 import re
 import sys
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 from urllib.parse import urlparse
 
@@ -113,13 +113,32 @@ def page_shell(title: str, desc: str, body: str) -> str:
 
 
 # ─── Evidence assembly (deterministic, the gate's labels are authoritative) ──
-def build_evidence(idea: str, headlines: int):
+def build_evidence(idea: str, headlines: int, on_progress=None):
     from pipeline import plan, research_lane, gate_claims, research_primary, bound  # lazy: --rebuild needs no API
+
+    def emit(line: str) -> None:
+        if on_progress:
+            try:
+                on_progress(line)
+            except Exception:  # noqa: BLE001 — progress is best-effort, never break the run
+                pass
+
     lanes = plan(idea)
+    # Announce the fan-out shape so the UI can paint one leaf per research lane up front (grey), then
+    # turn each leaf green as its §LANEDONE§ arrives. All emits run on THIS (the prepare) thread — never
+    # inside a worker — so there's no cross-thread store write.
+    emit("§LANES§" + json.dumps(lanes))
     # bound() re-binds the active provider/stack/ledger inside each worker — threads don't inherit
     # contextvars, so without it the fan-out runs on FILG's default key, not the user's BYOK key.
+    lane_claims_map: dict[int, list] = {}
     with ThreadPoolExecutor(max_workers=3) as ex:
-        lane_claims = list(ex.map(bound(lambda ln: research_lane(idea, ln)), lanes))
+        futs = {ex.submit(bound(lambda ln=ln: research_lane(idea, ln))): li
+                for li, ln in enumerate(lanes)}
+        for f in as_completed(futs):
+            li = futs[f]
+            lane_claims_map[li] = f.result()
+            emit("§LANEDONE§" + str(li))   # leaf li → green
+    lane_claims = [lane_claims_map.get(li, []) for li in range(len(lanes))]
     # remember which lane each claim came from, so the UI can show who researched what (persona-owned
     # lanes are assigned app-side; this just carries the provenance through the gate).
     claim_lane = {id(c): lanes[li] for li, lane in enumerate(lane_claims) for c in lane}
@@ -242,14 +261,16 @@ MOCK_RESULT = {
 }
 
 
-def generate(idea: str, headlines: int = HEADLINES_TO_RESEARCH, mock: bool = False) -> dict:
+def generate(idea: str, headlines: int = HEADLINES_TO_RESEARCH, mock: bool = False,
+             on_progress=None) -> dict:
     """Run one teardown and return {prose, rows, stats, cost}. `mock=True` returns canned data with
-    no API calls, for local/frontend dev and for testing the metering without spend."""
+    no API calls, for local/frontend dev and for testing the metering without spend. `on_progress(line)`
+    streams milestones (incl. `§LANES§`/`§LANEDONE§` leaf events) so the UI can paint the fan-out live."""
     if mock:
         return {**MOCK_RESULT, "prose": dict(MOCK_RESULT["prose"])}
     from pipeline import LEDGER
     start = len(LEDGER.rows)
-    rows, stats, lanes = build_evidence(idea, headlines)
+    rows, stats, lanes = build_evidence(idea, headlines, on_progress=on_progress)
     prose = write_prose(idea, rows)
     return {"prose": prose, "rows": rows, "stats": stats, "lanes": lanes,
             "cost": round(LEDGER.cost_slice(start), 4)}

@@ -1332,15 +1332,28 @@ button:hover{background:#e8e8e8}button:disabled{opacity:.5;cursor:default}
 .toasts{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);display:flex;flex-direction:column;gap:8px;z-index:60;align-items:center;pointer-events:none}
 .toast{background:var(--ink);color:#fff;padding:10px 16px;font-size:14px;font-weight:700;transition:opacity .25s;max-width:90vw}
 .toast.err{background:var(--kill)}.toast.out{opacity:0}
-.activity{position:fixed;left:0;right:0;bottom:0;z-index:80;transform:translateY(115%);transition:transform .2s;background:#f4f4f4;color:var(--ink);border-top:1px solid #888}
-.activity.show{transform:translateY(0)}
-.afoot-bar{display:flex;align-items:center;justify-content:center;gap:9px;width:100%;background:#eaeaea;border:0;border-bottom:1px solid var(--line);color:var(--ink);font:inherit;cursor:pointer;padding:4px 0}
-.afoot-grip{width:34px;height:3px;background:#999}
-.afoot-caret{font-size:11px;opacity:.65}
-.activity.min .alog{display:none}
-.alog{max-width:980px;margin:0 auto;padding:10px 16px;display:flex;flex-direction:column;gap:7px;max-height:42vh;overflow-y:auto}
+/* The runner: a permanent main-column panel that swaps in when the intake collapses. */
+.runner{border:1px solid #888;background:#f4f4f4;margin:0 0 18px}
+.run-head{display:flex;align-items:center;gap:9px;padding:7px 12px;background:#eaeaea;border-bottom:1px solid var(--line);font-size:13px;font-weight:700}
+.run-dot{width:8px;height:8px;border-radius:50%;background:#bbb;flex:none}
+.runner.busy .run-dot{background:var(--ok);animation:runpulse 1s infinite}
+@keyframes runpulse{0%,100%{opacity:1}50%{opacity:.3}}
+.run-title{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.run-spacer{flex:1}
+.run-min{background:none;border:0;color:var(--muted);font-size:12px;cursor:pointer;padding:2px 6px;line-height:1}
+.runner.min .run-min{transform:rotate(-90deg)}
+.runner.min .run-leaves,.runner.min .run-log{display:none}
+.run-leaves{padding:11px 14px;border-bottom:1px solid var(--line);background:#fbfbfa}
+.leaf-cap{font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin:0 0 8px}
+.leaf-row{display:flex;flex-wrap:wrap;gap:7px}
+.leaf{display:inline-flex;align-items:center;gap:5px;padding:4px 9px;border:1px solid var(--line);background:#fff;font-size:12px;border-radius:999px;color:var(--muted)}
+.leaf .leaf-ico{filter:grayscale(1);opacity:.45;transition:filter .3s,opacity .3s}
+.leaf.done{border-color:var(--ok);color:var(--ink);background:var(--ok-bg,#eaf4f2)}
+.leaf.done .leaf-ico{filter:none;opacity:1}
+.leaf-lbl{white-space:nowrap;max-width:120px;overflow:hidden;text-overflow:ellipsis}
+.run-log{padding:10px 12px;display:flex;flex-direction:column;gap:7px;max-height:46vh;overflow-y:auto}
 .atask{border:1px solid var(--line);background:#fff;overflow:hidden}
-.atask.done{opacity:.65}
+.atask.done{opacity:.7}
 .ah{display:flex;align-items:center;gap:9px;width:100%;background:none;border:0;color:var(--ink);font:inherit;font-size:13px;font-weight:700;padding:8px 12px;cursor:pointer;text-align:left}
 .ah .astat{width:13px;flex:none;text-align:center;color:var(--warn)}
 .ah .astat::before{content:"\\25cf";font-size:10px}
@@ -1413,7 +1426,6 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <textarea id=cmtnote rows=2 placeholder="Comment on this… (folded in when you regenerate or roll forward)"></textarea>
 <div class=cmtpa><button type=button class=ghost onclick=hideCmtPop()>Cancel</button><button type=button onclick=saveComment()>Comment</button></div></div>
 <div class=toasts id=toasts aria-live=polite></div>
-<div class=activity id=activity aria-live=polite aria-hidden=true><button type=button class=afoot-bar onclick="this.parentNode.classList.toggle('min')" aria-label="Collapse or expand the activity log"><span class=afoot-grip aria-hidden=true></span><span class=afoot-caret aria-hidden=true>&#9662;</span></button><div class=alog id=activity-log></div></div>
 <div class=workspace id=workspace style="display:none">
 <aside class=side>
 <div class=sec><h3>Your plan</h3><ul class=tree id=tree></ul>
@@ -1442,6 +1454,11 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <div class=secbody><div id=research></div></div></div>
 </aside>
 <main class=main>
+<div class=runner id=runner aria-live=polite hidden>
+<div class=run-head><span class=run-dot aria-hidden=true></span><span class=run-title id=run-title>The machine, working</span><span class=run-spacer></span><button type=button class=run-min id=run-min onclick="document.getElementById('runner').classList.toggle('min')" aria-label="Collapse or expand the runner">&#9662;</button></div>
+<div class=run-leaves id=run-leaves hidden></div>
+<div class=run-log id=runner-log></div>
+</div>
 <div id=viewer style="display:none"></div>
 <div id=vet></div>
 <div id=answer></div>
@@ -1501,21 +1518,32 @@ async function poll(){
   meterTick(s);     // set the session-meter baseline early (cost 0 mid-research) so the welcome run counts
   renderTree(s);renderAddons(s);     // show the plan outline immediately, even while researching
   if(s.status==='researching'){
-    if(!ACT_RESEARCH){ACT_ID=Activity.open('Researching + grading your market');Activity.push(ACT_ID,'Spinning up your research');ACT_RESEARCH=true;ACT_PROG_N=0;}
-    const prog=s.progress||[];                                   // real receipts from the engine, streamed
-    for(let i=ACT_PROG_N;i<prog.length;i++)Activity.push(ACT_ID,prog[i]);
-    ACT_PROG_N=Math.max(ACT_PROG_N,prog.length);
-    document.getElementById('node').innerHTML='<div class=node><span class=eyebrow>Working</span><h3>Researching + grading your market…</h3><p class=lead>Pulling sources and grading every number, so vendor spin gets labeled, not laundered. About 1 to 2 minutes. Watch the receipts spew in below.</p></div>';
+    if(!ACT_RESEARCH){Activity.resetLeaves();ACT_ID=Activity.open('Researching + grading your market');Activity.push(ACT_ID,'Spinning up your research');ACT_RESEARCH=true;ACT_PROG_N=0;}
+    _drainProgress(s);                                           // real receipts + the leaf fan-out, streamed
+    document.getElementById('node').innerHTML='<div class=node><span class=eyebrow>Working</span><h3>Researching + grading your market…</h3><p class=lead>Pulling sources and grading every number, so vendor spin gets labeled, not laundered. About 1 to 2 minutes. Watch the leaves green up and the receipts spew in above.</p></div>';
     say('Researching and grading your market.');
     setTimeout(poll,1500);return;
   }
   if(ACT_RESEARCH){
-    const prog=s.progress||[]; for(let i=ACT_PROG_N;i<prog.length;i++)Activity.push(ACT_ID,prog[i]);  // flush any final lines
+    _drainProgress(s);                                           // flush any final lines + leaf events
     Activity.done(ACT_ID,s.status==='error'?'Hit a snag.':'Research graded. Building your plan.');ACT_RESEARCH=false;ACT_ID=null;
   }
   render(s);
 }
 let ACT_RESEARCH=false, ACT_PROG_N=0, ACT_ID=null;
+// Stream new progress lines into the runner. Two sentinel lines drive the leaf viz instead of the text
+// spew: "§LANES§<json array>" paints one grey leaf per lane; "§LANEDONE§<index>" greens that leaf.
+function _drainProgress(s){
+  const prog=s.progress||[];
+  for(let i=ACT_PROG_N;i<prog.length;i++){
+    const ln=prog[i]||'';
+    if(ln.indexOf('\\u00A7LANES\\u00A7')===0){ try{Activity.leaves(JSON.parse(ln.slice(7)));}catch(e){} }
+    else if(ln.indexOf('\\u00A7LANEDONE\\u00A7')===0){ Activity.leafDone(parseInt(ln.slice(10),10)); }
+    else Activity.push(ACT_ID,ln);
+  }
+  ACT_PROG_N=Math.max(ACT_PROG_N,prog.length);
+  if(s.research&&s.research.owned_lanes)Activity.relabelLeaves(s.research.owned_lanes);  // Lane N → owner name
+}
 // ── Model crew: pick-a-tile popover; cheap → premium. n = display name, k = engine stack key
 // (keys are STABLE — the engine/tests/DB key on them; only the labels were renamed). ──────────
 let STACK_CUR=(function(){try{return localStorage.getItem('filg_stack')||'the-work-horse';}catch(e){return 'the-work-horse';}})();
@@ -2184,15 +2212,21 @@ async function submitDrawer(){
 // done(id,'…') or stop(id) on error. Parallel ops STACK as separate labelled cards (the header says
 // what each is doing) so concurrent spew stays legible; a card removes itself when its task finishes,
 // and the footer hides once the last one is gone. start() auto-cycles its steps; open() is manual.
+// The runner is a PERMANENT main-column panel (not the old slide-up footer): on submit the intake
+// collapses and this expands in its place. Each AI op is its own collapsible card; finished cards stay
+// as HISTORY (collapsed, click to re-read its spew) instead of vanishing, and the research fan-out
+// paints a row of literal leaves 🍃 that turn grey→green as each lane completes.
 const Activity={
-  _seq:0, tracks:{}, n:0,
-  _el(){return document.getElementById('activity');},
-  _log(){return document.getElementById('activity-log');},
-  _show(){const a=this._el();if(a){a.classList.add('show');a.setAttribute('aria-hidden','false');}},
+  _seq:0, tracks:{}, n:0, _live:0,
+  _el(){return document.getElementById('runner');},
+  _log(){return document.getElementById('runner-log');},
+  _show(){const a=this._el();if(a){a.hidden=false;a.classList.add('show');a.classList.remove('min');}},
+  _trim(){ const log=this._log(); if(!log)return; const done=log.querySelectorAll('.atask.done');
+    for(let i=0;i<done.length-7;i++)done[i].parentNode.removeChild(done[i]); },   // keep ~7 history cards
   _mkTask(label){
     const log=this._log(); if(!log)return null;
     const wrap=document.createElement('div'); wrap.className='atask';
-    wrap.innerHTML='<button type=button class=ah><span class=astat aria-hidden=true></span><span class=alabel></span><span class=caret aria-hidden=true>\\u25be</span></button><div class=abody></div>';
+    wrap.innerHTML='<button type=button class=ah><span class=astat aria-hidden=true></span><span class=alabel></span><span class=caret aria-hidden=true>&#9662;</span></button><div class=abody></div>';
     wrap.querySelector('.alabel').textContent=label||'Working';
     wrap.querySelector('.ah').onclick=()=>wrap.classList.toggle('collapsed');
     log.appendChild(wrap); log.scrollTop=log.scrollHeight;
@@ -2204,36 +2238,53 @@ const Activity={
     li.innerHTML='<span class=aglyph aria-hidden=true></span><span class=atext></span>';
     li.querySelector('.atext').textContent=text||'';
     body.appendChild(li);
-    while(body.children.length>40)body.removeChild(body.firstChild);
+    while(body.children.length>60)body.removeChild(body.firstChild);
     body.scrollTop=body.scrollHeight;
     return li;
   },
   _advance(t,text){ if(t.line)t.line.classList.replace('active','done'); t.line=this._line(t.body,text,false); },
+  _busy(){ const a=this._el(); if(a)a.classList.toggle('busy',this._live>0); },
   start(steps,interval,label){
-    const id=++this._seq; this.n++; this._show();
+    const id=++this._seq; this.n++; this._live++; this._show();
     const wrap=this._mkTask(label); const body=wrap?wrap.querySelector('.abody'):null;
     const s=(steps||[]).slice(); let i=0; const t={wrap,body,line:null,timer:null}; this.tracks[id]=t;
     if(s.length)this._advance(t,s[0]);
     t.timer=setInterval(()=>{ if(i<s.length-1){i++;this._advance(t,s[i]);} else {clearInterval(t.timer);t.timer=null;} }, interval||1600);
-    return id;
+    this._busy(); return id;
   },
-  open(label){ const id=++this._seq; this.n++; this._show(); const wrap=this._mkTask(label); this.tracks[id]={wrap,body:wrap?wrap.querySelector('.abody'):null,line:null,timer:null}; return id; },
+  open(label){ const id=++this._seq; this.n++; this._live++; this._show(); const wrap=this._mkTask(label); this.tracks[id]={wrap,body:wrap?wrap.querySelector('.abody'):null,line:null,timer:null}; this._busy(); return id; },
   push(id,line){ const t=this.tracks[id]; if(t)this._advance(t,line); },
   done(id,msg){ this._end(id,msg,false); },
   stop(id){ this._end(id,null,true); },
   _end(id,msg,immediate){
     const t=this.tracks[id];
-    if(!t){ this._maybeHide(immediate); return; }
+    if(!t)return;
     if(t.timer)clearInterval(t.timer);
     if(t.line)t.line.classList.replace('active','done');
     if(msg)this._line(t.body,msg,true);
-    if(t.wrap)t.wrap.classList.add('done');
-    delete this.tracks[id]; this.n=Math.max(0,this.n-1);
-    setTimeout(()=>{ if(t.wrap&&t.wrap.parentNode)t.wrap.parentNode.removeChild(t.wrap); this._maybeHide(false); }, immediate?250:1300);
+    if(t.wrap){ t.wrap.classList.add('done'); t.wrap.classList.add('collapsed'); }  // collapse into history, keep it
+    delete this.tracks[id]; this.n=Math.max(0,this.n-1); this._live=Math.max(0,this._live-1);
+    this._trim(); this._busy();
   },
-  _maybeHide(immediate){ if(this.n>0)return; setTimeout(()=>{ if(this.n<=0)this._hide(); }, immediate?0:250); },
-  stopAll(){ for(const id in this.tracks){if(this.tracks[id].timer)clearInterval(this.tracks[id].timer);} this.tracks={}; this.n=0; this._hide(); },
-  _hide(){ const a=this._el(); if(a){a.classList.remove('show');a.classList.remove('min');a.setAttribute('aria-hidden','true');} const l=this._log(); if(l)l.innerHTML=''; }
+  // ── research fan-out leaves: one 🍃 per lane, grey → green as each lane returns ──
+  leaves(labels){
+    const box=document.getElementById('run-leaves'); if(!box)return;
+    labels=labels||[];
+    box.hidden=false;
+    box.innerHTML='<div class=leaf-cap>'+labels.length+' research lanes, fanned out in parallel</div>'+
+      '<div class=leaf-row>'+labels.map((ln,i)=>
+        '<span class="leaf" data-i="'+i+'" title="'+esc(ln)+'"><span class=leaf-ico>\\uD83C\\uDF43</span>'+
+        '<span class=leaf-lbl>Lane '+(i+1)+'</span></span>').join('')+'</div>';
+  },
+  leafDone(i){ const box=document.getElementById('run-leaves'); if(!box)return;
+    const el=box.querySelector('.leaf[data-i="'+i+'"]'); if(el)el.classList.add('done'); },
+  relabelLeaves(owned){ const box=document.getElementById('run-leaves'); if(!box||!owned)return;
+    owned.forEach((o,i)=>{ const el=box.querySelector('.leaf[data-i="'+i+'"] .leaf-lbl');
+      if(el){const who=o.owner_first||o.owner_name; if(who)el.textContent=who;} }); },
+  resetLeaves(){ const box=document.getElementById('run-leaves'); if(box){box.hidden=true;box.innerHTML='';} },
+  stopAll(){ for(const id in this.tracks){if(this.tracks[id].timer)clearInterval(this.tracks[id].timer);}
+    this.tracks={}; this.n=0; this._live=0; this.resetLeaves();
+    const a=this._el(); if(a){a.hidden=true;a.classList.remove('show','min','busy');} const l=this._log(); if(l)l.innerHTML=''; }
 };
 const RESEARCH_STEPS=["Focusing your idea into one sharp thesis","Spinning up research across the web","Pulling sources on the market and competition","Grading every source for credibility","Flagging vendor-marketing spin","Re-sourcing the headline stats to primary sources","Scoring demand, market, and willingness to pay","Drafting your first offer"];
 const PDF_STEPS=["Applying your board's input","Pulling your graded evidence","Building the decision matrix","Laying out a modern, on-brand design","Typesetting your PDF"];
@@ -2430,7 +2481,7 @@ async function upgrade(){
   }catch(e){toast('Network error starting checkout.','err');}
 }
 function show(id){['intake','workspace','profile'].forEach(x=>{const e=document.getElementById(x);if(e)e.style.display=(x===id?(x==='workspace'?'grid':'block'):'none');});}
-function newPlan(){SIDEBAR_PHASE=null;ACT_RESEARCH=false;VET_OPEN=true;VET_STEPPED=false;DTREE_STEP=-99;Activity.stopAll();closeViewer();SID=null;
+function newPlan(){SIDEBAR_PHASE=null;ACT_RESEARCH=false;ACT_PROG_N=0;ACT_ID=null;VET_OPEN=true;VET_STEPPED=false;DTREE_STEP=-99;Activity.stopAll();closeViewer();SID=null;
   // render a FRESH intake — clear any in-flight button/idea/error left over from a prior build or sign-out
   const g=document.getElementById('go'); if(g){g.disabled=false;g.textContent='Build my plan →';}
   const idea=document.getElementById('idea'); if(idea)idea.value='';

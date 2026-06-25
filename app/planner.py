@@ -18,6 +18,7 @@ each section on Sonnet over ONLY the gate-graded research (label-don't-chase), s
 
 from __future__ import annotations
 
+import json
 import re
 import sys
 from pathlib import Path
@@ -129,9 +130,10 @@ def wod_forward(node: dict) -> tuple[dict, float]:
     return child, 0.0
 
 
-def research(idea: str, mock: bool = False) -> dict:
-    """Step 0 — run the teardown engine once. Returns {prose, rows, stats, cost}."""
-    return teardown.generate(idea, mock=mock)
+def research(idea: str, mock: bool = False, on_progress=None) -> dict:
+    """Step 0 — run the teardown engine once. Returns {prose, rows, stats, cost}. `on_progress` streams
+    the fan-out milestones (incl. the `§LANES§`/`§LANEDONE§` leaf events) up to the caller."""
+    return teardown.generate(idea, mock=mock, on_progress=on_progress)
 
 
 def _working_idea(session: dict) -> str:
@@ -184,9 +186,13 @@ def prepare(idea: str, mock: bool = False, on_progress=None) -> dict:
     shaped, c_shape = intake.shape(idea, mock=mock)
     thesis = shaped["thesis"]
     emit("Planning the research fan-out")
-    research_data = research(thesis, mock=mock)
+    research_data = research(thesis, mock=mock, on_progress=on_progress)
     owned = _own_lanes(research_data.get("lanes") or [])
     research_data["owned_lanes"] = owned                # who researched what — surfaced in the UI
+    if mock and owned:   # real mode streams the leaf events live from build_evidence as each lane returns;
+        emit("§LANES§" + json.dumps([o["lane"] for o in owned]))   # mock skips that path, so paint them here
+        for i in range(len(owned)):
+            emit("§LANEDONE§" + str(i))
     for o in owned:                                     # the fan-out, as persona-owned lanes
         who = o.get("owner_first") or o.get("owner_name") or "A researcher"
         emit(f"🔎 {who} ({o.get('owner_name')}) is digging into: {o['lane']}")

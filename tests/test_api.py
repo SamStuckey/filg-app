@@ -255,12 +255,13 @@ def test_advisor_uses_drawer_not_native_prompt(client):
     assert "prompt('Ask the advisor" not in html and "prompt('Ask your board" not in html
 
 
-def test_inline_comment_and_footer_collapse_ui_present(client):
-    # #7 inline comments + #9 collapsible footer are client-side; guard their wiring stays in the page.
+def test_inline_comment_and_runner_ui_present(client):
+    # #7 inline comments + the permanent main-column runner are client-side; guard their wiring stays.
     html = client.get("/").text
     assert "id=cmtpop" in html and "function saveComment" in html and "function commentsSteer" in html
     assert "function onDraftSelect" in html and "function renderComments" in html
-    assert "afoot-bar" in html and "classList.toggle('min')" in html   # footer-level collapse toggle
+    assert 'id=runner' in html and "classList.toggle('min')" in html   # permanent runner + collapse toggle
+    assert "function _drainProgress" in html and "leafDone" in html     # leaf fan-out viz wiring
     assert "function forceNext" in html and "function talkItOut" in html  # softened kill-gate off-ramps
 
 

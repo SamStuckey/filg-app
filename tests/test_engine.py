@@ -100,6 +100,24 @@ def test_as_year_coerces_and_bounds():
     assert pipeline._as_year(1500) is None   # implausible year rejected
 
 
+def test_build_evidence_emits_leaf_events(monkeypatch):
+    # The runner's leaf viz is driven by two sentinel progress lines: §LANES§<json> up front, then a
+    # §LANEDONE§<index> as each lane future completes. Guard that build_evidence emits both, with one
+    # done-event per lane, so the frontend can paint grey→green leaves.
+    import teardown
+    lanes = ["lane A?", "lane B?", "lane C?"]
+    monkeypatch.setattr(pipeline, "plan", lambda idea: list(lanes))
+    monkeypatch.setattr(pipeline, "research_lane", lambda idea, ln: [])
+    monkeypatch.setattr(pipeline, "gate_claims", lambda claims: [])
+    monkeypatch.setattr(pipeline, "research_primary", lambda c: None)
+    seen = []
+    teardown.build_evidence("an idea", 3, on_progress=seen.append)
+    lanes_lines = [s for s in seen if s.startswith("§LANES§")]
+    done_lines = [s for s in seen if s.startswith("§LANEDONE§")]
+    assert len(lanes_lines) == 1 and __import__("json").loads(lanes_lines[0][len("§LANES§"):]) == lanes
+    assert sorted(int(s[len("§LANEDONE§"):]) for s in done_lines) == [0, 1, 2]  # one green leaf per lane
+
+
 def test_label_triangulation_marks_single_vs_corroborated():
     import teardown
     rows = [
