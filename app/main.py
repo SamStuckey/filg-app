@@ -1202,6 +1202,18 @@ button:hover{background:#e8e8e8}button:disabled{opacity:.5;cursor:default}
 .takeaway{margin-top:14px;background:var(--ok-bg);border:1px solid var(--line);padding:12px 14px;font-size:14px}
 .takeaway .tl{font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--ok);margin-bottom:5px}
 .takeaway .split{display:block;margin-top:6px;color:var(--muted);font-size:13px}
+.skeptic{border:1px solid var(--line);border-left:3px solid var(--warn);padding:11px 13px;margin:0 0 12px;background:#fff}
+.skeptic.sk-agree{border-left-color:var(--ok)}
+.skeptic.sk-dissent,.skeptic.sk-non-starter{border-left-color:var(--kill)}
+.skhead{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.sknm{font-weight:700;font-size:13.5px}
+.skverdict{margin-left:auto;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;padding:1px 7px;border:1px solid var(--line)}
+.skverdict.sk-agree{color:var(--ok);border-color:var(--ok)}
+.skverdict.sk-concern{color:var(--warn);border-color:var(--warn)}
+.skverdict.sk-dissent,.skverdict.sk-non-starter{color:var(--kill);border-color:var(--kill)}
+.skbody{font-size:13.5px}
+.skfix{font-size:13px;margin-top:7px}
+.skmeta{font-size:11px;color:var(--muted);margin-top:6px}
 .drawer-back{position:fixed;inset:0;background:rgba(0,0,0,.35);opacity:0;visibility:hidden;transition:opacity .15s;z-index:40}
 .drawer-back.show{opacity:1;visibility:visible}
 .drawer{position:fixed;top:0;right:0;height:100vh;width:min(440px,93vw);background:var(--card);border-left:1px solid #888;transform:translateX(101%);transition:transform .2s;z-index:41;display:flex;flex-direction:column}
@@ -1568,6 +1580,18 @@ async function sendChat(){
   }catch(e){Activity.stop(aid);const th=document.getElementById('chatthinking');if(th)th.innerHTML='<span class=think>Network error.</span>';}
   finally{CHAT_BUSY=false;btn.disabled=false;log.scrollTop=log.scrollHeight;}
 }
+// The standing adversary's card — a committed verdict + verbatim objection, surfaced as a headline.
+// This is the "the grumpy industry vet said Y" moment: the board always has a skeptic in the room.
+function skepticCardHtml(sk){
+  if(!sk||!sk.rationale)return '';
+  const v=['agree','concern','dissent','non-starter'].includes(sk.verdict)?sk.verdict:'concern';
+  const who=esc(sk.first||sk.name||'The Skeptic')+((sk.first&&sk.name)?' ('+esc(sk.name)+')':'');
+  const fix=sk.suggested_change?`<div class=skfix><b>Strongest fix:</b> ${esc(sk.suggested_change)}</div>`:'';
+  const conf=sk.confidence?`<div class=skmeta>${esc(sk.confidence)} confidence</div>`:'';
+  return `<div class="skeptic sk-${v}"><div class=skhead><span class=sknm>🧐 ${who} pushed back</span>`+
+    `<span class="skverdict sk-${v}">${esc(v)}</span></div>`+
+    `<div class="skbody md">${mdToHtml(sk.rationale)}</div>${fix}${conf}</div>`;
+}
 function renderBoardRound(s){
   const el=document.getElementById('boardround'); if(!el)return;
   const reviews=s.board||[];
@@ -1579,6 +1603,7 @@ function renderBoardRound(s){
   }).join('');
   const split=(r.conflicts&&r.conflicts.toLowerCase()!=='none')?`<span class=split>Where they split: ${esc(r.conflicts)}</span>`:'';
   el.innerHTML=`<div class=bround><h4>🗣️ Your board weighed in on “${esc(r.title)}”</h4>`+
+    skepticCardHtml(r.skeptic)+
     `<div class=balloons>${balloons}</div>`+
     `<div class=takeaway><div class=tl>Board takeaway</div>${esc(r.verdict||'')}${split}</div></div>`;
 }
@@ -2009,7 +2034,8 @@ async function submitDrawer(){
       if(!r.ok){Activity.stop(aid);out.innerHTML=esc(d.error||'Could not convene the board.');return;}
       Activity.done(aid,'Your board weighed in.');meterTick({id:SID,cost:d.cost,tokens:d.tokens});
       const split=(d.conflicts&&d.conflicts.toLowerCase()!=='none')?`<span class=split>Where they split: ${esc(d.conflicts)}</span>`:'';
-      out.innerHTML=d.directors.map((x,i)=>`<div class=balloon id=dbal_${i}><button type=button class=bh onclick="document.getElementById('dbal_${i}').classList.toggle('open')">💬 See what ${esc(x.first||x.name)}${x.first&&x.name?' ('+esc(x.name)+')':''} says<span class=caret>▸</span></button><div class="bb md">${mdToHtml(x.take)}</div></div>`).join('')+
+      out.innerHTML=skepticCardHtml(d.skeptic)+
+        d.directors.map((x,i)=>`<div class=balloon id=dbal_${i}><button type=button class=bh onclick="document.getElementById('dbal_${i}').classList.toggle('open')">💬 See what ${esc(x.first||x.name)}${x.first&&x.name?' ('+esc(x.name)+')':''} says<span class=caret>▸</span></button><div class="bb md">${mdToHtml(x.take)}</div></div>`).join('')+
         `<div class=takeaway><div class=tl>Board takeaway</div>${esc(d.verdict)}${split}</div>`+
         `<div class=disc>${esc(d.disclaimer||'')}</div>`;
     }

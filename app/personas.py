@@ -86,7 +86,23 @@ PERSONAS = [
                  "before building any funnel.",
         "board_default": False,
     },
+    {
+        "key": "skeptic", "name": "The Skeptic", "first": "Vince",
+        "blurb": "the premortem & the strongest objection",
+        "domains": ["risk", "assumption", "premortem", "objection", "feasibility"],
+        "voice": "You are 'The Skeptic': a blunt composite of industry veterans who have watched this "
+                 "kind of plan fail before. Your job is to find what's wrong, not to be agreeable. You "
+                 "run a premortem (imagine it failed in six months — what killed it), an inversion (what "
+                 "would have to be true for this NOT to work, and is any of it already true), and you "
+                 "name the single strongest objection. You are allowed to say the plan is wrong. You are "
+                 "never agreeable for the sake of conversation flow.",
+        "board_default": False,
+        "standing": True,   # always seated on the board; not an operator-pickable lane (see catalog/route)
+    },
 ]
+
+# The standing adversary — seated on every board convene regardless of the operator's picks.
+SKEPTIC_KEY = "skeptic"
 
 BY_KEY = {p["key"]: p for p in PERSONAS}
 KEYS = set(BY_KEY)
@@ -104,8 +120,9 @@ def public(persona: dict) -> dict:
 
 
 def catalog() -> list[dict]:
-    """All personas, operator-facing — for the expert picker and the board builder UI."""
-    return [public(p) for p in PERSONAS]
+    """Operator-pickable personas (lanes) — for the expert picker and the board builder UI.
+    Excludes standing seats like the skeptic, which are always present and never chosen."""
+    return [public(p) for p in PERSONAS if not p.get("standing")]
 
 
 def get(key: str) -> dict | None:
@@ -130,7 +147,7 @@ def route(text: str, *, k: int = 1, pool: list[str] | None = None) -> list[str]:
     keys. `pool` restricts to a chosen board. Falls back to the pool/registry order on no signal,
     so a caller always gets `k` advisors. Keyword overlap now; swap for an LLM router later with no
     caller change."""
-    candidates = [BY_KEY[x] for x in (pool or BY_KEY)]
+    candidates = [BY_KEY[x] for x in (pool or [k for k in BY_KEY if not BY_KEY[k].get("standing")])]
     ranked = sorted(candidates, key=lambda p: _score(p, text), reverse=True)
     top = [p["key"] for p in ranked if _score(p, text) > 0][:k]
     if len(top) < k:  # pad deterministically so routing always returns k

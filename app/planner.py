@@ -252,8 +252,15 @@ def _board_notes(reviews: list) -> str | None:
     this is how the board's takeaway actually influences the output, not just narrates it."""
     if not reviews:
         return None
-    return "\n".join(f"- on “{r.get('title', r.get('section'))}”: {r.get('verdict', '')}"
-                     for r in reviews) or None
+    lines = []
+    for r in reviews:
+        lines.append(f"- on “{r.get('title', r.get('section'))}”: {r.get('verdict', '')}")
+        # the standing skeptic's objection steers the next draft too (not just the net verdict) — but
+        # only when it actually pushed back (concern/dissent/non-starter), so an 'agree' adds no noise.
+        sk = r.get("skeptic") or {}
+        if sk.get("rationale") and sk.get("verdict") in ("concern", "dissent", "non-starter"):
+            lines.append(f"  · the skeptic ({sk['verdict']}): {sk['rationale']}")
+    return "\n".join(lines) or None
 
 
 # How each branch steers the next draft. The operator's choice + note become a prompt instruction,
