@@ -188,6 +188,39 @@ def _busy_response(e: BusyError) -> JSONResponse:
          "busy": True}, status_code=429)
 
 
+def _humanize_error(e: Exception) -> tuple[str, bool]:
+    """Turn a raw provider exception into a message the user can act on. Returns (message, needKey).
+    The most common live failure is a bad/expired BYOK key — OpenRouter answers 401 'User not found',
+    which is meaningless to a user; we translate it into 'update your key'. Full traces still go to the
+    Render logs (the callers print them); only this friendly string reaches the browser."""
+    s = str(e)
+    low = s.lower()
+    name = type(e).__name__.lower()
+    is_key = ("authentication" in name or "permissiondenied" in name
+              or "code: 401" in low or "'code': 401" in low or " 401 " in f" {low} "
+              or "user not found" in low or "invalid api key" in low or "incorrect api key" in low
+              or "no auth credentials" in low or ("expired" in low and "key" in low))
+    if is_key:
+        return ("Your OpenRouter key was rejected — it looks expired or invalid. Update your key "
+                "with the 🔑 button up top, then try again."), True
+    if "402" in low or "insufficient" in low or ("credit" in low and "openrouter" in low):
+        return ("Your OpenRouter account looks out of credits. Top it up at openrouter.ai, then try "
+                "again."), False
+    if "429" in low or "rate limit" in low or "overloaded" in low:
+        return "The model is busy right now. Give it a few seconds and try again.", False
+    return "Something went wrong on our side. Try again in a moment.", False
+
+
+def _engine_error(e: Exception, status_code: int = 500):
+    """Standard JSON error for an engine route — humanized message + a needKey flag the frontend uses
+    to reopen the key modal."""
+    msg, need_key = _humanize_error(e)
+    body = {"error": msg}
+    if need_key:
+        body["needKey"] = True
+    return JSONResponse(body, status_code=status_code)
+
+
 def _run_job(job_id: str, idea: str, user: str, mode: str) -> None:
     try:
         with pipeline.run_ledger():
@@ -196,7 +229,7 @@ def _run_job(job_id: str, idea: str, user: str, mode: str) -> None:
         store.finish(job_id, res, mode)
     except Exception as e:  # noqa: BLE001 — surface failures to the client, don't crash the worker
         traceback.print_exc()  # full trace → Render stdout logs (client only sees str(e))
-        store.fail(job_id, str(e))
+        store.fail(job_id, _humanize_error(e)[0])
 
 
 @app.post("/api/run")
@@ -539,7 +572,7 @@ def _plan_research(session_id: str, idea: str, user: str) -> None:
                         cost=prep["cost"], tokens=toks, tree=tree, progress=progress)
     except Exception as e:  # noqa: BLE001
         traceback.print_exc()  # full trace → Render stdout logs (client only sees str(e))
-        store.plan_save(session_id, status="error", error=str(e))
+        store.plan_save(session_id, status="error", error=_humanize_error(e)[0])
 
 
 @app.post("/api/plan/start")
@@ -620,7 +653,7 @@ async def api_plan_respond(sid: str, request: Request):
     except BusyError as be:
         return _busy_response(be)
     except Exception as e:  # noqa: BLE001
-        return JSONResponse({"error": str(e)}, status_code=500)
+        return _engine_error(e)
     _meter(s.get("user"), round((upd.get("cost", 0) or 0) - (s.get("cost") or 0), 4))  # draft + board review
     store.plan_save(sid, **upd)
     return _plan_state(store.plan_get(sid))
@@ -657,7 +690,7 @@ async def api_plan_next(sid: str, request: Request):
     except BusyError as be:
         return _busy_response(be)
     except Exception as e:  # noqa: BLE001
-        return JSONResponse({"error": str(e)}, status_code=500)
+        return _engine_error(e)
     node = _new_node(child, active["id"])
     tree["nodes"][node["id"]] = node
     active.setdefault("children", []).append(node["id"])
@@ -694,7 +727,7 @@ async def api_plan_revet(sid: str, request: Request):
     except BusyError as be:
         return _busy_response(be)
     except Exception as e:  # noqa: BLE001
-        return JSONResponse({"error": str(e)}, status_code=500)
+        return _engine_error(e)
     updates = {"shaped": shaped, "vetting": vetting}
     if proposal is not None:
         root = _new_node(planner.root_node(proposal), None)   # no branches exist yet on a kill, so reseed
@@ -735,7 +768,7 @@ async def api_plan_back(sid: str, request: Request):
     except BusyError as be:
         return _busy_response(be)
     except Exception as e:  # noqa: BLE001
-        return JSONResponse({"error": str(e)}, status_code=500)
+        return _engine_error(e)
     node = _new_node(sib, prev.get("parent"))   # sibling of `prev` → branches from prev's parent
     tree["nodes"][node["id"]] = node
     if prev.get("parent"):
@@ -774,7 +807,7 @@ async def api_plan_redraft(sid: str, request: Request):
     except BusyError as be:
         return _busy_response(be)
     except Exception as e:  # noqa: BLE001
-        return JSONResponse({"error": str(e)}, status_code=500)
+        return _engine_error(e)
     node = _new_node(sib, active.get("parent"))   # sibling of the active node → same step, new branch
     tree["nodes"][node["id"]] = node
     if active.get("parent"):
@@ -835,7 +868,7 @@ async def api_plan_ask(sid: str, request: Request):
     except BusyError as be:
         return _busy_response(be)
     except Exception as e:  # noqa: BLE001
-        return JSONResponse({"error": str(e)}, status_code=500)
+        return _engine_error(e)
     _meter(s.get("user"), cost)
     nc, nt = _fold_usage(sid, s, cost, toks)
     return {**res, "cost": nc, "tokens": nt}
@@ -867,7 +900,7 @@ async def api_plan_board(sid: str, request: Request):
     except BusyError as be:
         return _busy_response(be)
     except Exception as e:  # noqa: BLE001
-        return JSONResponse({"error": str(e)}, status_code=500)
+        return _engine_error(e)
     _meter(s.get("user"), cost)
     extra = {"directors": directors} if picked else {}   # persist a freshly chosen board for later steps
     nc, nt = _fold_usage(sid, s, cost, toks, **extra)
@@ -1540,7 +1573,9 @@ function render(s){
   CUR_NODE=(s.tree&&s.tree.active)||null;   // #7 key inline comments to the active node
   hideCmtPop();
   if(s.status==='error'){
-    document.getElementById('node').innerHTML='<div class=node><h3>Hit a snag</h3><p class=lead>'+esc(s.error)+'</p><button type=button onclick=newPlan()>Start over</button></div>';
+    const keyErr=isKeyErr(s.error);   // a rejected/expired key → offer to fix the key, not just restart
+    const fix=keyErr?'<button type=button class=b-but onclick=keyModal()>Update your key</button> ':'';
+    document.getElementById('node').innerHTML='<div class=node><h3>Hit a snag</h3><p class=lead>'+esc(s.error||'Something went wrong.')+'</p>'+fix+'<button type=button class=ghost onclick=newPlan()>Start over</button></div>';
     say('Something went wrong: '+(s.error||'')); return;
   }
   renderResearch(s);renderVet(s);renderAnswer(s);renderTree(s);renderNode(s);renderAddons(s);renderBoard(s);renderBoardRound(s);renderDecisionTree(s);renderChat(s);renderStack(s);syncSidebar(s);
@@ -2177,6 +2212,7 @@ async function downloadZip(){   // power-user escape hatch: the raw source files
 }
 function esc(s){const d=document.createElement('div');d.textContent=s==null?'':s;return d.innerHTML;}
 function host(u){try{return new URL(u).hostname.replace(/^www\\./,'');}catch(e){return u;}}
+function isKeyErr(m){return /key was rejected|expired or invalid|update your key|401|user not found/i.test(m||'');}
 function mdToHtml(md){
   let h=esc(md==null?'':md);
   h=h.replace(/`([^`]+)`/g,'<code>$1</code>');
