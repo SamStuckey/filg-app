@@ -571,6 +571,7 @@ async def api_plan_start(request: Request):
     directors = [k for k in (body.get("directors") or []) if k in personas.KEYS]  # optional board
     sid = uuid.uuid4().hex[:12]
     store.plan_create(sid, user, idea, directors=directors)
+    store.plan_save(sid, stack=provider.stack_name(body.get("stack")))  # honor the crew picked at intake
     threading.Thread(target=_plan_research, args=(sid, idea, user), daemon=True).start()
     return {"id": sid}
 
@@ -1044,14 +1045,10 @@ body[data-mode=build] #meter{display:none!important}
 .stackbtn:hover{border-color:#444}
 .stackbtn .stacklbl{font-weight:700;font-size:12px;white-space:nowrap;display:inline-flex;align-items:center;gap:4px;color:var(--ink)}
 .stackbtn .sk-star{color:var(--warn);font-size:11px}
-.stackbtn .sk-key{font-size:11px}
 .stackcaret{font-size:9px;color:var(--muted)}
-.stackbtn.needkey{border-color:var(--warn)}
-.stackbtn.needkey .stacklbl{color:var(--warn)}
 .stack-cost{display:inline-flex;gap:2px;align-items:center}
 .stack-cost i{width:5px;height:5px;background:var(--line);display:inline-block}
 .stack-cost i.on{background:var(--ink)}
-.stackbtn.needkey .stack-cost i.on{background:var(--warn)}
 .stackpop{position:absolute;right:0;top:calc(100% + 4px);z-index:70;width:300px;max-width:86vw;background:var(--card);border:1px solid #888;padding:4px;display:flex;flex-direction:column;gap:2px}
 .stackpop[hidden]{display:none}
 .stackpop-h{font-size:11.5px;color:var(--muted);padding:4px 6px;line-height:1.35}
@@ -1064,7 +1061,6 @@ body[data-mode=build] #meter{display:none!important}
 .st-badges{display:inline-flex;gap:5px;align-items:center}
 .st-badge{font-size:9px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;padding:1px 5px;white-space:nowrap;border:1px solid var(--line)}
 .st-badge.rec{color:var(--warn);border-color:var(--warn)}
-.st-badge.key{color:var(--muted)}
 .st-top .stack-cost{margin-left:auto}
 .st-desc{font-size:11.5px;color:var(--muted);line-height:1.4}
 .stacktile.sel .st-desc{color:var(--ink)}
@@ -1405,7 +1401,7 @@ async function start(){
   err.textContent='';document.getElementById('joke').innerHTML='';
   if(CFG.authEnabled&&!session){authModal();return;}   // signed-out → prompt them with the sign-in modal
   if(!requireKey())return;                              // no key → open the key modal; we cover no runs now
-  const body={idea}; if(!session) body.email=email;   // signed in → identity from the token
+  const body={idea, stack:STACK_CUR}; if(!session) body.email=email;   // signed in → identity from the token
   if(BOARD.length) body.directors=BOARD;               // optional Board of Directors → vets each step
   go.disabled=true; go.textContent='Researching…'; ACT_RESEARCH=false;
   try{
@@ -1451,7 +1447,7 @@ async function poll(){
 let ACT_RESEARCH=false, ACT_PROG_N=0, ACT_ID=null;
 // ── Model crew: pick-a-tile popover; cheap → premium. n = display name, k = engine stack key
 // (keys are STABLE — the engine/tests/DB key on them; only the labels were renamed). ──────────
-let STACK_CUR='the-work-horse';
+let STACK_CUR=(function(){try{return localStorage.getItem('filg_stack')||'the-work-horse';}catch(e){return 'the-work-horse';}})();
 const STACKS_UI=[   // cheap → premium
   {k:'the-turd-polisher',n:'The intern',b:"Cheap and eager. Fast first drafts you'll want to double-check. Fine for spiking, feature-testing, or kicking the tires.",o:false},
   {k:'the-capable-intern',n:'The work horse',b:"Cheap research, solid synthesis. Gets the bulk of the job done well without much hand-holding.",o:false},
@@ -1464,12 +1460,10 @@ function _stackCost(i){return [0,1,2,3,4].map(n=>'<i class='+(n<=i?'on':'')+'></
 function renderStack(s){   // s optional; updates the header button (+ open panel)
   const d=document.getElementById('stackdial'); if(!d)return; d.hidden=false;
   if(s&&s.stack)STACK_CUR=s.stack;
-  const i=_stackIdx(STACK_CUR), u=STACKS_UI[i]||STACKS_UI[2], needkey=!!(u.o&&!HAS_KEY);
+  const i=_stackIdx(STACK_CUR), u=STACKS_UI[i]||STACKS_UI[2];
   const lbl=document.getElementById('stacklbl');
-  if(lbl)lbl.innerHTML=esc(u.n)+(u.rec?' <span class=sk-star aria-hidden=true>\\u2605</span>':'')
-    +(needkey?' <span class=sk-key aria-hidden=true title="Needs your own key">\\uD83D\\uDD11</span>':'');
+  if(lbl)lbl.innerHTML=esc(u.n)+(u.rec?' <span class=sk-star aria-hidden=true>\\u2605</span>':'');
   const c=document.getElementById('stackcost'); if(c)c.innerHTML=_stackCost(i);
-  const b=document.getElementById('stackbtn'); if(b)b.classList.toggle('needkey',needkey);
   const pop=document.getElementById('stackpop'); if(pop&&!pop.hidden)renderStackTiles();
 }
 function renderStackTiles(){
@@ -1477,9 +1471,7 @@ function renderStackTiles(){
   const cur=_stackIdx(STACK_CUR);
   pop.innerHTML='<div class=stackpop-h>Pick your crew. Sets the models behind research, the credibility gate, and the writing you read.</div>'+
     STACKS_UI.map((u,i)=>{
-      const needkey=!!(u.o&&!HAS_KEY);
-      const badges=(u.rec?'<span class="st-badge rec">Recommended</span>':'')
-        +(needkey?'<span class="st-badge key">\\uD83D\\uDD11 Your key</span>':'');
+      const badges=(u.rec?'<span class="st-badge rec">Recommended</span>':'');
       return '<button type=button role=menuitemradio aria-checked='+(i===cur)+' class="stacktile'+(i===cur?' sel':'')+'" onclick=pickStack('+i+')">'+
         '<span class=st-top><span class=st-name>'+esc(u.n)+'</span><span class=st-badges>'+badges+'</span>'+
         '<span class=stack-cost aria-hidden=true>'+_stackCost(i)+'</span></span>'+
@@ -1496,12 +1488,14 @@ function closeStackPop(){const pop=document.getElementById('stackpop'),btn=docum
   if(pop&&!pop.hidden){pop.hidden=true;btn.setAttribute('aria-expanded','false');}}
 function pickStack(i){const u=STACKS_UI[i];closeStackPop();if(u&&u.k!==STACK_CUR)commitStack(i);}
 async function commitStack(i){
-  const u=STACKS_UI[i]; if(!u||!SID)return;
-  STACK_CUR=u.k; renderStack();   // optimistic; reconciled by render(s) below
+  const u=STACKS_UI[i]; if(!u)return;
+  STACK_CUR=u.k; try{localStorage.setItem('filg_stack',u.k);}catch(e){}
+  renderStack();                  // reflect the choice immediately — works before a plan exists too
+  toast(u.n+' is on the job.','ok');
+  if(!SID)return;                 // no plan yet → the choice is sent when the plan starts
   try{
     const r=await fetch('/api/plan/'+SID+'/stack',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({stack:u.k})});
-    const s=await r.json();
-    if(r.ok){render(s);toast(u.n+' is on the job.'+(u.o&&!HAS_KEY?' Add your key to actually run it.':''),'ok');}
+    const s=await r.json(); if(r.ok)render(s);
   }catch(e){}
 }
 // ── Session usage meter ─────────────────────────────────────────────────────
@@ -2384,7 +2378,7 @@ async function initAuth(){
   if(q.get('pdf'))banner('🎉 Polished PDF unlocked. Download it from your finished plan.');
   if(q.get('pdf_canceled'))banner('Checkout canceled, no charge. Your raw export is still free.');
   applyMode();   // set the view mode (build vs see-how-it-works) before first paint
-  restoreIdea();renderBoardPick();paintMeter();   // show the session meter at 0 from first paint
+  restoreIdea();renderBoardPick();renderStack();paintMeter();   // show the crew picker + meter from first paint
   if(!CFG.authEnabled||!window.supabase){renderAuth();routeFromPath();return;}
   sb=window.supabase.createClient(CFG.supabaseUrl,CFG.supabaseAnon);
   sb.auth.onAuthStateChange(async (_e,s)=>{session=s;await loadMe();renderAuth();});
