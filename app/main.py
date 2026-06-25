@@ -220,9 +220,14 @@ def _humanize_error(e: Exception) -> tuple[str, bool]:
     if is_key:
         return ("Your API key was rejected — it looks expired or invalid. Update your key "
                 "with the 🔑 button up top, then try again."), True
-    if "402" in low or "insufficient" in low or ("credit" in low and "openrouter" in low):
-        return ("Your OpenRouter account looks out of credits. Top it up at openrouter.ai, then try "
-                "again."), False
+    if ("credit balance" in low or "insufficient" in low or "billing" in low or "quota" in low
+            or "402" in low):
+        return ("That key works, but the account is out of credits or has no billing set up. Add "
+                "credits/billing with your provider (Anthropic: console.anthropic.com · OpenRouter: "
+                "openrouter.ai), then try again."), False
+    if "not_found" in low or "model" in low and "404" in low:
+        return ("That model isn't available on this key/account. Pick a different model crew, or "
+                "check your provider account's model access."), False
     if "429" in low or "rate limit" in low or "overloaded" in low:
         return "The model is busy right now. Give it a few seconds and try again.", False
     return "Something went wrong on our side. Try again in a moment.", False
@@ -351,8 +356,13 @@ def _validate_key(provider_name: str, api_key: str) -> tuple[bool, str]:
         with prov_mod.use(_build_provider(provider_name, api_key)):
             out = pipeline.call("key_validate", pipeline.HAIKU, "Reply with: OK", max_tokens=5)
         return (True, "ok") if out else (False, "The key didn't return a response.")
-    except Exception:  # noqa: BLE001 — never surface provider internals to the client
-        return False, "That key didn't work. Check it and try again."
+    except Exception as e:  # noqa: BLE001
+        msg, _ = _humanize_error(e)
+        if msg.startswith("Something went wrong"):
+            # validation is the user debugging their OWN key — surface a trimmed real reason
+            raw = " ".join(str(e).split())[:180]
+            msg = f"That key didn't validate: {raw}"
+        return False, msg
 
 
 @app.get("/api/key")
@@ -1087,10 +1097,6 @@ a{color:var(--link)}
 .modesw button{background:#fff;color:var(--muted);border:0;border-right:1px solid var(--line);font:inherit;font-size:11.5px;font-weight:700;padding:4px 9px;cursor:pointer}
 .modesw button:last-child{border-right:0}
 .modesw button.on{background:#444;color:#fff}
-.modehint{font-size:11px;color:var(--muted);margin:0 0 12px}
-/* mode gating: 'build a business' hides the engine internals; 'see how it works' shows everything */
-body[data-mode=build] .techonly{display:none!important}
-body[data-mode=build] #meter{display:none!important}
 .meter{display:inline-flex;align-items:center;gap:6px;background:#fff;border:1px solid var(--line);color:var(--muted);font-size:12px;font-weight:700;padding:3px 8px;cursor:default;font-variant-numeric:tabular-nums}
 .stackdial{position:relative;display:inline-flex}
 .stackbtn{display:inline-flex;align-items:center;gap:7px;background:#f4f4f4;border:1px solid #888;padding:3px 8px;cursor:pointer;font:inherit;color:var(--ink)}
@@ -1358,7 +1364,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 .tree button.f{width:100%;background:none;border:0;font:inherit;color:inherit;text-align:left;cursor:pointer;padding:0}
 .tree button.f:hover .nm{color:var(--link)}
 </style></head><body><div class=page>
-<div class=top><h1 class=logo><button type=button class=logobtn onclick=newPlan() aria-label="FILG, start a new idea"><svg class=logomark viewBox="0 0 32 32" aria-hidden=true><rect width=32 height=32 rx=8 fill=#FF6B4A></rect><path d="M16 4c-3.2 2.8-4.3 7.4-4.3 11.8v3.2h8.6v-3.2C20.3 11.4 19.2 6.8 16 4z" fill=#fff></path><circle cx=16 cy=12 r=2.1 fill=#2E7CF6></circle><path d="M11.7 15.5 8.6 20.5l3.1-1.3z" fill=#fff></path><path d="M20.3 15.5 23.4 20.5l-3.1-1.3z" fill=#fff></path><path d="M13.6 19.5h4.8L16 25.5z" fill=#FFC23F></path></svg>FI<span>LG</span></button></h1><div class=topright><div class=modesw id=modesw role=group aria-label="View mode"></div><div class=stackdial id=stackdial hidden><button type=button class=stackbtn id=stackbtn aria-haspopup=true aria-expanded=false aria-label="Choose your model crew" onclick=toggleStackPop()><span class=stacklbl id=stacklbl></span><span class=stack-cost id=stackcost aria-hidden=true></span><span class=stackcaret aria-hidden=true>&#9662;</span></button><div class=stackpop id=stackpop role=menu aria-label="Choose a model crew" hidden></div></div><button type=button class=meter id=meter hidden title="Token usage this session (resets when you reload)"></button><div class=authbar id=authbar></div></div></div>
+<div class=top><h1 class=logo><button type=button class=logobtn onclick=newPlan() aria-label="FILG, start a new idea"><svg class=logomark viewBox="0 0 32 32" aria-hidden=true><rect width=32 height=32 rx=8 fill=#FF6B4A></rect><path d="M16 4c-3.2 2.8-4.3 7.4-4.3 11.8v3.2h8.6v-3.2C20.3 11.4 19.2 6.8 16 4z" fill=#fff></path><circle cx=16 cy=12 r=2.1 fill=#2E7CF6></circle><path d="M11.7 15.5 8.6 20.5l3.1-1.3z" fill=#fff></path><path d="M20.3 15.5 23.4 20.5l-3.1-1.3z" fill=#fff></path><path d="M13.6 19.5h4.8L16 25.5z" fill=#FFC23F></path></svg>FI<span>LG</span></button></h1><div class=topright><div class=stackdial id=stackdial hidden><button type=button class=stackbtn id=stackbtn aria-haspopup=true aria-expanded=false aria-label="Choose your model crew" onclick=toggleStackPop()><span class=stacklbl id=stacklbl></span><span class=stack-cost id=stackcost aria-hidden=true></span><span class=stackcaret aria-hidden=true>&#9662;</span></button><div class=stackpop id=stackpop role=menu aria-label="Choose a model crew" hidden></div></div><button type=button class=meter id=meter hidden title="Token usage this session (resets when you reload)"></button><div class=authbar id=authbar></div></div></div>
 <div class=note-banner id=banner></div>
 <div class=intake id=intake>
 <h2>You've got a business in you. Let's find it. 🚀</h2>
@@ -1395,7 +1401,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <textarea id=cmtnote rows=2 placeholder="Comment on this… (folded in when you regenerate or roll forward)"></textarea>
 <div class=cmtpa><button type=button class=ghost onclick=hideCmtPop()>Cancel</button><button type=button onclick=saveComment()>Comment</button></div></div>
 <div class=toasts id=toasts aria-live=polite></div>
-<div class=activity id=activity aria-live=polite aria-hidden=true><button type=button class=afoot-bar onclick="this.parentNode.classList.toggle('min')" aria-label="Collapse or expand the activity log"><span class=afoot-grip aria-hidden=true></span><span class=afoot-caret aria-hidden=true>\\u25be</span></button><div class=alog id=activity-log></div></div>
+<div class=activity id=activity aria-live=polite aria-hidden=true><button type=button class=afoot-bar onclick="this.parentNode.classList.toggle('min')" aria-label="Collapse or expand the activity log"><span class=afoot-grip aria-hidden=true></span><span class=afoot-caret aria-hidden=true>&#9662;</span></button><div class=alog id=activity-log></div></div>
 <div class=workspace id=workspace style="display:none">
 <aside class=side>
 <div class=sec><h3>Your plan</h3><ul class=tree id=tree></ul>
@@ -2430,23 +2436,12 @@ async function sharePlan(id){
   }catch(e){toast('Network error.','err');}
 }
 function banner(msg){const b=document.getElementById('banner');b.textContent=msg;b.style.display='block';}
-// ── View mode: 'build' (hide the engine internals) vs 'tech' (see how it works). Persisted; a
-// surfacing level over one engine, not a separate product. Default to 'build'.
-let MODE=(function(){try{return localStorage.getItem('filg_mode')||'build';}catch(e){return 'build';}})();
-function renderModeSwitch(){
-  const el=document.getElementById('modesw'); if(!el)return;
-  el.innerHTML=[['build','Build a business'],['tech','See how it works']].map(([m,label])=>
-    `<button type=button data-m=${m} class=${MODE===m?'on':''} aria-pressed=${MODE===m} onclick="setMode('${m}')">${label}</button>`).join('');
-}
-function applyMode(){document.body.dataset.mode=MODE;renderModeSwitch();}
-function setMode(m){MODE=(m==='tech')?'tech':'build';try{localStorage.setItem('filg_mode',MODE);}catch(e){}applyMode();}
 async function initAuth(){
   const q=new URLSearchParams(location.search);
   if(q.get('upgraded'))banner('🎉 You\\'re on Operator. Your plans + integrations are unlocked.');
   if(q.get('canceled'))banner('Checkout canceled, no charge. You\\'re still on the free tier.');
   if(q.get('pdf'))banner('🎉 Polished PDF unlocked. Download it from your finished plan.');
   if(q.get('pdf_canceled'))banner('Checkout canceled, no charge. Your raw export is still free.');
-  applyMode();   // set the view mode (build vs see-how-it-works) before first paint
   restoreIdea();renderBoardPick();renderStack();paintMeter();   // show the crew picker + meter from first paint
   if(!CFG.authEnabled||!window.supabase){renderAuth();routeFromPath();return;}
   sb=window.supabase.createClient(CFG.supabaseUrl,CFG.supabaseAnon);
