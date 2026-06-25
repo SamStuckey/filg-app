@@ -20,6 +20,12 @@ def test_research_lanes_get_distinct_persona_owners():
     assert "skeptic" not in {o["owner"] for o in owned}
 
 
+def test_prepare_attaches_assumption_premortem_to_vetting():
+    prep = planner.prepare("guitar coaching for adults", mock=True)
+    pm = prep["vetting"].get("premortem")
+    assert pm and all(a["assumption"] and a["status"] in ("holds", "shaky", "breaks") for a in pm)
+
+
 def test_working_idea_prefers_thesis():
     assert planner._working_idea({"idea": "raw", "shaped": {"thesis": "focused"}}) == "focused"
     assert planner._working_idea({"idea": "raw"}) == "raw"  # back-compat

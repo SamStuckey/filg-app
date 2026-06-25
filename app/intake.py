@@ -98,6 +98,66 @@ def vet(idea: str, shaped: dict, research: dict | None = None, mock: bool = Fals
     }, round(LEDGER.cost_slice(start), 4)
 
 
+_MOCK_PREMORTEM = [
+    {"assumption": "Local owners will outsource sales (the part they're most protective of) to a stranger.",
+     "status": "shaky",
+     "why": "It's the most guarded function in a small business; trust has to be earned before anyone "
+            "hands it over, so the first sale is slow."},
+    {"assumption": "You can get results without the client's brand/product doing the work.",
+     "status": "shaky",
+     "why": "If the offer or product is weak, no amount of outreach closes — your results depend on "
+            "something you don't control."},
+    {"assumption": "A flat fee covers the hours each client actually takes.",
+     "status": "breaks",
+     "why": "Sales effort varies wildly per client; a flat fee is where the margin quietly dies."},
+]
+
+# the load-bearing assumption STATUSES — surfaced as the assumption-check card
+_PM_STATUS = ("holds", "shaky", "breaks")
+
+
+def premortem(idea: str, shaped: dict, research: dict | None = None,
+              mock: bool = False) -> tuple[list, float]:
+    """Assumption check — the standing-skeptic pass on the operator's OWN plan (not external sources).
+    Ports biz-skeptic's premortem + inversion: name the load-bearing assumptions THIS plan depends on
+    and judge whether each holds. This is the 'how assumption checking works' surface. Returns
+    (assumptions, cost) where each item is {assumption, status: holds|shaky|breaks, why}."""
+    if mock:
+        return [dict(a) for a in _MOCK_PREMORTEM], 0.0
+    from pipeline import LEDGER, call, extract_json, SONNET
+    start = len(LEDGER.rows)
+    cited = ""
+    if research and research.get("rows"):
+        cleared = [r["text"] for r in research["rows"] if r.get("mark") == "ok"]
+        cited = "\n".join(f"- {t}" for t in cleared) or "- (none cleared)"
+    out = call("premortem", SONNET, max_tokens=700, system=skills.VOICE, prompt=(
+        "You are a blunt skeptic pressure-testing an operator's plan. Name the 3-4 LOAD-BEARING "
+        "assumptions this plan depends on — the things that must be true for it to work. Run a "
+        "premortem (it's six months later and this failed: what was the false assumption that killed "
+        "it?) and an inversion (what would have to be true for this NOT to work, and is any of it "
+        "already true?). For each assumption, judge whether it holds. Output STRICTLY this JSON, no "
+        "preamble:\n"
+        '{"assumptions": [{"assumption": "the belief the plan rests on", '
+        '"status": "holds | shaky | breaks", "why": "one blunt sentence"}]}\n\n'
+        "status: holds = well-supported; shaky = unproven, could go either way; breaks = likely wrong "
+        "and load-bearing. Be specific to THIS plan — never generic risks.\n\n"
+        f"OPERATOR'S RAW INPUT:\n{idea}\n\nFOCUSED THESIS:\n{shaped.get('thesis', '')}\n\n"
+        f"FOUNDER EDGE:\n{shaped.get('founder_edge', '(none named)')}\n\n"
+        f"GATE-CLEARED EVIDENCE (context only):\n{cited or '- (no research yet)'}"))
+    data = extract_json(out)
+    items = (data.get("assumptions") if isinstance(data, dict) else None) or []
+    out_items = []
+    for a in items[:4]:
+        if not isinstance(a, dict) or not (a.get("assumption") or "").strip():
+            continue
+        status = str(a.get("status", "shaky")).strip().lower()
+        if status not in _PM_STATUS:
+            status = "shaky"
+        out_items.append({"assumption": a["assumption"].strip(), "status": status,
+                          "why": (a.get("why") or "").strip()})
+    return out_items, round(LEDGER.cost_slice(start), 4)
+
+
 def revet(idea: str, more: str, research: dict | None = None, mock: bool = False) -> tuple[dict, dict, float]:
     """Kill-gate rescue: the operator was told their idea is unbuildable and has now added real
     substance (a skill / asset / who'd pay). Fold `more` into the raw idea, re-shape it into a thesis,
@@ -120,4 +180,7 @@ if __name__ == "__main__":  # self-test (mock, no API)
     assert vetting["scores"]["founder_fit"] == 5 and vetting["first_test"] and vetting["reaction"]
     # skill bodies are real and used as the system blocks
     assert "Frankenstein" in skills.system("intake") and "kill-gate" in skills.system("vet")
-    print("intake.py self-test OK — shape + vet (mock); verdict:", vetting["verdict"])
+    # the assumption premortem — the skeptic pass on the operator's OWN plan
+    pm, c3 = premortem(grab_bag, shaped, None, mock=True)
+    assert c3 == 0.0 and pm and all(a["assumption"] and a["status"] in _PM_STATUS for a in pm)
+    print("intake.py self-test OK — shape + vet + premortem (mock); verdict:", vetting["verdict"])

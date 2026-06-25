@@ -1197,6 +1197,12 @@ button:hover{background:#e8e8e8}button:disabled{opacity:.5;cursor:default}
 .verdict{font-size:12px;font-weight:700;padding:2px 9px;border:1px solid var(--line);text-transform:uppercase;letter-spacing:.04em}
 .verdict.pursue{color:var(--ok);border-color:var(--ok)}.verdict.pivot{color:var(--warn);border-color:var(--warn)}.verdict.kill{color:var(--kill);border-color:var(--kill)}
 .vet .thesis{font-size:14px;margin:0 0 10px}.vet .vrow{font-size:13px;color:var(--muted);margin:3px 0}.vet .vrow b{color:var(--ink)}
+.premortem{margin-top:12px;border-top:1px solid var(--line);padding-top:10px}
+.pmh{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:8px}
+.pmrow{display:flex;gap:9px;align-items:flex-start;padding:6px 0;border-top:1px dashed var(--line)}.pmrow:first-of-type{border-top:0}
+.pmstatus{flex:none;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;padding:1px 6px;border:1px solid var(--line);margin-top:1px}
+.pmstatus.pm-holds{color:var(--ok);border-color:var(--ok)}.pmstatus.pm-shaky{color:var(--warn);border-color:var(--warn)}.pmstatus.pm-breaks{color:var(--kill);border-color:var(--kill)}
+.pmtext{font-size:13px}.pmtext b{font-weight:700}.pmwhy{display:block;color:var(--muted);font-size:12.5px;margin-top:2px}
 .bdirs{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
 .bchip{font-size:12px;font-weight:700;padding:5px 10px;border:1px solid var(--line);background:#fff;cursor:pointer;color:var(--ink)}
 .bchip.on{background:#f0f0f0;border-color:#444;color:var(--link)}
@@ -1927,8 +1933,11 @@ function renderVet(s){
   const risk=v&&v.biggest_risk?`<p class=vrow><b>Biggest risk:</b> ${esc(v.biggest_risk)}</p>`:'';
   const test=v&&v.first_test?`<p class=vrow><b>Cheapest first test:</b> ${esc(v.first_test)}</p>`:'';
   const cq=(sh&&sh.clarifying_question)?`<p class=vrow>🤔 ${esc(sh.clarifying_question)}</p>`:'';
+  const PM=(v&&v.premortem)||[];   // the assumption check — the skeptic pass on the operator's OWN plan
+  const pm=PM.length?('<div class=premortem><div class=pmh>🧪 Assumptions your plan rests on</div>'+
+    PM.map(a=>`<div class="pmrow pm-${esc(a.status)}"><span class="pmstatus pm-${esc(a.status)}">${esc(a.status)}</span><div class=pmtext><b>${esc(a.assumption)}</b>${a.why?`<span class=pmwhy>${esc(a.why)}</span>`:''}</div></div>`).join('')+'</div>'):'';
   el.innerHTML=`<div class="vet${VET_OPEN?' open':''}" id=vetcard><button type=button class=vethead onclick=toggleVet() aria-expanded="${VET_OPEN}">${head}<span class=vtitle>Before we build: the straight read</span><span class=vcaret aria-hidden=true>▸</span></button>`+
-    `<div class=vetbody>${react}${thesis}${edge}${alts}${reason}${risk}${test}${cq}</div></div>`;
+    `<div class=vetbody>${react}${thesis}${edge}${alts}${reason}${risk}${test}${cq}${pm}</div></div>`;
 }
 // Board selection state (keys); seeded from the default board, editable in intake + sidebar.
 let BOARD=(CFG.defaultBoard||[]).slice();

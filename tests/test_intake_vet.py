@@ -56,3 +56,19 @@ def test_vet_real_bad_verdict_defaults_to_pursue(patch_call):
     shaped, _ = intake.shape(GRAB_BAG, mock=True)
     vetting, _ = intake.vet(GRAB_BAG, shaped, None, mock=False)
     assert vetting["verdict"] == "pursue"   # unknown verdict normalized
+
+
+def test_premortem_mock_returns_status_judged_assumptions():
+    shaped, _ = intake.shape(GRAB_BAG, mock=True)
+    pm, cost = intake.premortem(GRAB_BAG, shaped, None, mock=True)
+    assert cost == 0.0 and pm
+    assert all(a["assumption"] and a["status"] in intake._PM_STATUS for a in pm)
+
+
+def test_premortem_real_clamps_bad_status_and_caps(patch_call):
+    patch_call('{"assumptions": [{"assumption": "a1", "status": "nonsense", "why": "w1"}, '
+               '{"assumption": "a2", "status": "breaks", "why": "w2"}, '
+               '{"assumption": "", "status": "holds", "why": "skip me"}]}')
+    shaped, _ = intake.shape(GRAB_BAG, mock=True)
+    pm, _ = intake.premortem(GRAB_BAG, shaped, None, mock=False)
+    assert [a["status"] for a in pm] == ["shaky", "breaks"]   # bad→shaky; empty assumption dropped

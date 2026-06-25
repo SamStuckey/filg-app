@@ -197,12 +197,17 @@ def prepare(idea: str, mock: bool = False, on_progress=None) -> dict:
     emit(f"Graded {len(rows)} source" + ("" if len(rows) == 1 else "s"))
     vetting, c_vet = intake.vet(idea, shaped, research_data, mock=mock)
     emit(f"Verdict: {vetting.get('verdict', 'pursue')}")
+    emit("Pressure-testing the assumptions your plan rests on")
+    pm, c_pm = intake.premortem(idea, shaped, research_data, mock=mock)
+    vetting["premortem"] = pm                          # rides along in the persisted vetting JSON
+    for a in pm:
+        emit(f"• assumption [{a['status']}]: {a['assumption']}")
     emit("Drafting your first offer")
     proposal, c_prop = first_proposal(thesis, research_data, founder=shaped.get("founder_edge"),
                                       mock=mock)
     return {"shaped": shaped, "research": research_data, "vetting": vetting, "proposal": proposal,
             "research_cost": research_data["cost"],
-            "cost": round(research_data["cost"] + c_shape + c_vet + c_prop, 4)}
+            "cost": round(research_data["cost"] + c_shape + c_vet + c_pm + c_prop, 4)}
 
 
 def _cited_flagged(rows: list) -> tuple[str, str]:
