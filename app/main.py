@@ -1472,7 +1472,7 @@ function renderStackTiles(){
   pop.innerHTML='<div class=stackpop-h>Pick your crew. Sets the models behind research, the credibility gate, and the writing you read.</div>'+
     STACKS_UI.map((u,i)=>{
       const badges=(u.rec?'<span class="st-badge rec">Recommended</span>':'');
-      return '<button type=button role=menuitemradio aria-checked='+(i===cur)+' class="stacktile'+(i===cur?' sel':'')+'" onclick=pickStack('+i+')">'+
+      return '<button type=button role=menuitemradio aria-checked='+(i===cur)+' class="stacktile'+(i===cur?' sel':'')+'" onclick="pickStack('+i+')">'+
         '<span class=st-top><span class=st-name>'+esc(u.n)+'</span><span class=st-badges>'+badges+'</span>'+
         '<span class=stack-cost aria-hidden=true>'+_stackCost(i)+'</span></span>'+
         '<span class=st-desc>'+esc(u.b)+'</span></button>';
