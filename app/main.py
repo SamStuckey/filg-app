@@ -1919,7 +1919,7 @@ body.hasbar .workspace{padding-bottom:74px}
 @keyframes spewpulse{0%,100%{opacity:1}50%{opacity:.5}}
 #spewsec.done .sechead h3{color:var(--ok)}#spewsec.done .sechead .ticon{filter:none;opacity:1}
 @media(prefers-reduced-motion:reduce){#spewsec.running .sechead h3{animation:none}}
-#spewsec .runner{border:0;background:none;margin:0}#spewsec .run-head{background:none;padding:0 0 6px}
+#spewsec .runner{border:0;background:none;margin:0}
 body.ws .side .sec.collap.tabactive .sechead h3{color:var(--link)}
 .secdrawer{position:fixed;left:300px;top:calc(var(--hdr) + var(--disc));bottom:0;width:min(660px,calc(100vw - 320px));background:var(--paper);border-right:1px solid #888;box-shadow:6px 0 24px rgba(0,0,0,.14);z-index:58;transform:translateX(-100%);transition:transform .2s;display:flex;flex-direction:column;visibility:hidden}
 .secdrawer.open{transform:translateX(0);visibility:visible}
@@ -1982,9 +1982,10 @@ body.sd-open .secdrawer-back{display:block}
 .toasts{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);display:flex;flex-direction:column;gap:8px;z-index:60;align-items:center;pointer-events:none}
 .toast{background:var(--ink);color:#fff;padding:10px 16px;font-size:14px;font-weight:700;transition:opacity .25s;max-width:90vw}
 .toast.err{background:var(--kill)}.toast.out{opacity:0}
-/* The runner: a permanent main-column panel that swaps in when the intake collapses. */
-.runner{border:1px solid #888;background:#f4f4f4;margin:0 0 18px}
-.run-head{display:flex;align-items:center;gap:9px;padding:7px 12px;background:#eaeaea;border-bottom:1px solid var(--line);font-size:13px;font-weight:700}
+/* The runner = the "The machine" tab's body. The tab title already heads it, so it's chromeless and
+   the inner "The machine" header bar is dropped (the redundant middle nesting). */
+.runner{border:0;background:none;margin:0}
+.run-head{display:none}
 .run-dot{width:8px;height:8px;border-radius:50%;background:#bbb;flex:none}
 .runner.busy .run-dot{background:var(--ok);animation:runpulse 1s infinite}
 @keyframes runpulse{0%,100%{opacity:1}50%{opacity:.3}}
@@ -2012,7 +2013,7 @@ body.sd-open .secdrawer-back{display:block}
 .leafbody .src .note{color:var(--muted)}
 .leafbody .src .gate{display:block;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;color:var(--muted);margin-top:2px}
 .leafbody .pending{color:var(--muted);font-style:italic}
-.run-log{padding:10px 12px;display:flex;flex-direction:column;gap:7px;max-height:46vh;overflow-y:auto}
+.run-log{padding:8px 0;display:flex;flex-direction:column;gap:7px}   /* the container scrolls the card list; each chain (.abody) scrolls itself */
 .run-empty{color:var(--muted);font-size:12.5px;line-height:1.5;font-family:Arial,Helvetica,sans-serif}
 /* shared spinner + the deep-link boot loader (hides the intake flash on /plan/{id} refresh) */
 @keyframes spin{to{transform:rotate(360deg)}}
@@ -2030,7 +2031,7 @@ html.route-plan #bootload{display:flex;align-items:center;justify-content:center
 .ah .alabel{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ah .caret{flex:none;font-size:11px;opacity:.6}
 .atask.collapsed .abody{display:none}
-.abody{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.5;padding:0 12px 9px 12px}
+.abody{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.5;padding:0 12px 9px 12px;max-height:42vh;overflow-y:auto}
 .aline{display:flex;align-items:flex-start;gap:9px;padding:1px 0;background:none;color:var(--muted)}
 .aline.done{color:#444}
 .aline.active{color:var(--ink);font-weight:600}
@@ -3338,7 +3339,7 @@ const Activity={
     li.querySelector('.atext').textContent=text||'';
     body.appendChild(li);
     while(body.children.length>80)body.removeChild(body.firstChild);
-    const log=this._log(); if(log)log.scrollTop=log.scrollHeight;   // outer log scrolls; card bodies show full
+    body.scrollTop=body.scrollHeight;   // each spew chain scrolls within itself to the latest line
     return li;
   },
   _advance(t,text){ if(t.line)t.line.classList.replace('active','done'); t.line=this._line(t.body,text,false); },
