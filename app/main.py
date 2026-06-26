@@ -1936,16 +1936,16 @@ body.drawer-collapsed .secdrawer{left:0}
 }
 .sd-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 18px;border-bottom:1px solid #888;background:var(--paper)}
 /* collapse tab stuck to the middle of the open drawer's outer edge — mirrors the "Tools" reopen rail */
-.sd-rail{position:absolute;right:-19px;top:50%;transform:translateY(-50%);z-index:59;width:20px;height:54px;display:flex;align-items:center;justify-content:center;background:#444;color:#fff;border:0;border-radius:0 8px 8px 0;cursor:pointer;font-size:18px;line-height:1;padding:0}
+.sd-rail{position:absolute;right:0;top:50%;transform:translateY(-50%);z-index:59;width:20px;height:54px;display:flex;align-items:center;justify-content:center;background:#444;color:#fff;border:0;border-radius:8px 0 0 8px;cursor:pointer;font-size:18px;line-height:1;padding:0}
 .sd-rail:hover{background:#222}
 /* small screens only: a collapse tab on the toolbar's outer edge (mirror of the drawer's sd-rail) so
    the sidebar itself can be dismissed to reveal the main content, + a backdrop that collapses both. */
 .side-rail{display:none}
 .mback{display:none}
 @media(max-width:640px){
-  body.ws .side-rail{display:flex;position:absolute;right:-19px;top:50%;transform:translateY(-50%);z-index:61;
+  body.ws .side-rail{display:flex;position:absolute;right:0;top:50%;transform:translateY(-50%);z-index:61;
     width:20px;height:54px;align-items:center;justify-content:center;background:#444;color:#fff;border:0;
-    border-radius:0 8px 8px 0;cursor:pointer;font-size:18px;line-height:1;padding:0}
+    border-radius:8px 0 0 8px;cursor:pointer;font-size:18px;line-height:1;padding:0}
   body.ws .side-rail:hover{background:#222}
   body.ws:not(.drawer-collapsed) .mback{display:block;position:fixed;inset:calc(var(--hdr) + var(--disc)) 0 0 0;z-index:55;background:rgba(0,0,0,.2)}
 }
