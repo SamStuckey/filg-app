@@ -1427,8 +1427,18 @@ body.ws.drawer-collapsed .side{transform:translateX(-100%)}
 body.ws.drawer-collapsed .workspace{margin-left:0}
 body.ws.drawer-collapsed .drawer-rail{display:flex;align-items:center;gap:7px;position:fixed;left:0;top:50%;transform:translateY(-50%);z-index:61;background:#444;color:#fff;border:0;border-radius:0 8px 8px 0;padding:11px 9px;cursor:pointer;font-size:12px;font-weight:700;writing-mode:vertical-rl;letter-spacing:.05em}
 @media(max-width:820px){body.ws .workspace{margin-left:0}body.ws .side{box-shadow:2px 0 18px rgba(0,0,0,.25)}}
-.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;position:relative}
 .topright{display:flex;align-items:center;gap:12px}
+.topham{display:none;background:none;border:0;font-size:21px;color:var(--ink);cursor:pointer;padding:0 4px;line-height:1}
+/* progressive header: when it's tight, hide the token meter first … */
+@media(max-width:860px){.meter{display:none!important}}
+/* … then collapse the rest (model crew + account) behind a hamburger so the content fills the screen */
+@media(max-width:680px){
+  .topham{display:inline-flex;align-items:center}
+  .topright{position:absolute;top:100%;right:2px;margin-top:6px;flex-direction:column;align-items:stretch;gap:12px;background:var(--paper);border:1px solid #888;border-radius:8px;padding:14px;min-width:200px;max-width:84vw;z-index:67;display:none;box-shadow:0 8px 24px rgba(0,0,0,.18)}
+  .topright.open{display:flex}
+  .authbar{display:flex;flex-direction:column;align-items:flex-start;gap:10px}
+}
 .modesw{display:inline-flex;border:1px solid #888}
 .modesw button{background:#fff;color:var(--muted);border:0;border-right:1px solid var(--line);font:inherit;font-size:11.5px;font-weight:700;padding:4px 9px;cursor:pointer}
 .modesw button:last-child{border-right:0}
@@ -1787,6 +1797,9 @@ body.drawer-collapsed .secdrawer{left:0}
   body.ws .top .topright{gap:8px}
 }
 .sd-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 14px;border-bottom:1px solid #888;background:var(--paper)}
+/* collapse tab stuck to the middle of the open drawer's outer edge — mirrors the "Tools" reopen rail */
+.sd-rail{position:absolute;right:-19px;top:50%;transform:translateY(-50%);z-index:59;width:20px;height:54px;display:flex;align-items:center;justify-content:center;background:#444;color:#fff;border:0;border-radius:0 8px 8px 0;cursor:pointer;font-size:18px;line-height:1;padding:0}
+.sd-rail:hover{background:#222}
 .sd-head span{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
 .sd-x{background:none;border:0;font-size:20px;color:var(--muted);cursor:pointer;line-height:1;padding:0 4px}
 .sd-x:hover{color:var(--ink)}
@@ -1888,7 +1901,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
 .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 </style></head><body><div class=page>
-<div class=top><h1 class=logo><button type=button class=logobtn onclick=newPlan() aria-label="FILG, start a new idea"><svg class=logomark viewBox="0 0 32 32" aria-hidden=true><rect width=32 height=32 rx=8 fill=#FF6B4A></rect><path d="M16 4c-3.2 2.8-4.3 7.4-4.3 11.8v3.2h8.6v-3.2C20.3 11.4 19.2 6.8 16 4z" fill=#fff></path><circle cx=16 cy=12 r=2.1 fill=#2E7CF6></circle><path d="M11.7 15.5 8.6 20.5l3.1-1.3z" fill=#fff></path><path d="M20.3 15.5 23.4 20.5l-3.1-1.3z" fill=#fff></path><path d="M13.6 19.5h4.8L16 25.5z" fill=#FFC23F></path></svg>FI<span>LG</span><span class=logotip aria-hidden=true>“Fuck it. Let’s go.” — You, 30 seconds ago</span></button></h1><div class=topright><div class=stackdial id=stackdial hidden><button type=button class=stackbtn id=stackbtn aria-haspopup=true aria-expanded=false aria-label="Choose your model crew" onclick=toggleStackPop()><span class=stacklbl id=stacklbl></span><span class=stack-cost id=stackcost aria-hidden=true></span><span class=stackcaret aria-hidden=true>&#9662;</span></button><div class=stackpop id=stackpop role=menu aria-label="Choose a model crew" hidden></div></div><button type=button class=meter id=meter hidden title="Token usage this session (resets when you reload)"></button><div class=authbar id=authbar></div></div></div>
+<div class=top><h1 class=logo><button type=button class=logobtn onclick=newPlan() aria-label="FILG, start a new idea"><svg class=logomark viewBox="0 0 32 32" aria-hidden=true><rect width=32 height=32 rx=8 fill=#FF6B4A></rect><path d="M16 4c-3.2 2.8-4.3 7.4-4.3 11.8v3.2h8.6v-3.2C20.3 11.4 19.2 6.8 16 4z" fill=#fff></path><circle cx=16 cy=12 r=2.1 fill=#2E7CF6></circle><path d="M11.7 15.5 8.6 20.5l3.1-1.3z" fill=#fff></path><path d="M20.3 15.5 23.4 20.5l-3.1-1.3z" fill=#fff></path><path d="M13.6 19.5h4.8L16 25.5z" fill=#FFC23F></path></svg>FI<span>LG</span><span class=logotip aria-hidden=true>“Fuck it. Let’s go.” — You, 30 seconds ago</span></button></h1><div class=topright><div class=stackdial id=stackdial hidden><button type=button class=stackbtn id=stackbtn aria-haspopup=true aria-expanded=false aria-label="Choose your model crew" onclick=toggleStackPop()><span class=stacklbl id=stacklbl></span><span class=stack-cost id=stackcost aria-hidden=true></span><span class=stackcaret aria-hidden=true>&#9662;</span></button><div class=stackpop id=stackpop role=menu aria-label="Choose a model crew" hidden></div></div><button type=button class=meter id=meter hidden title="Token usage this session (resets when you reload)"></button><div class=authbar id=authbar></div></div><button type=button class=topham id=topham onclick=toggleTopMenu() aria-label="Menu" aria-expanded=false>&#9776;</button></div>
 <div class=note-banner id=banner></div>
 <div class=intake id=intake>
 <h2>You've got a business in you. Let's find it. 🚀</h2>
@@ -1921,7 +1934,8 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <div class=secdrawer-back id=secdrawerback onclick=closeSecDrawer()></div>
 <div class=secdrawer id=secdrawer role=dialog aria-modal=false aria-hidden=true>
 <div class=sd-head><span id=sd-title></span><button type=button class=sd-x onclick=closeSecDrawer() aria-label="Close panel">&times;</button></div>
-<div class=sd-body id=sd-body></div></div>
+<div class=sd-body id=sd-body></div>
+<button type=button class=sd-rail onclick=closeSecDrawer() aria-label="Close panel" title="Collapse">&#8249;</button></div>
 <div class=cmtpop id=cmtpop role=dialog aria-label="Add a comment on this part" aria-hidden=true>
 <div class=cmtpq id=cmtquote></div>
 <label for=cmtnote class=sr-only>Your comment on the highlighted text</label>
@@ -3478,12 +3492,16 @@ function routeFromPath(){   // a finished plan lives at /plan/{id} — deep-link
   else if(SID){SID=null;show('intake');renderBoardPick();gateIntake();}   // navigated back to home
 }
 window.addEventListener('popstate',routeFromPath);   // browser back/forward drives the SPA
+function toggleTopMenu(){const r=document.querySelector('.topright'),h=document.getElementById('topham');if(!r)return;const open=r.classList.toggle('open');if(h)h.setAttribute('aria-expanded',String(open));}
 document.addEventListener('click',function(e){   // click outside the crew picker closes it
   const sp=document.getElementById('stackpop');
   if(sp&&!sp.hidden&&!e.target.closest('#stackdial'))closeStackPop();
   // click outside the inline-comment popover discards it (same as Cancel) + unhighlights the block
   const cp=document.getElementById('cmtpop');
   if(cp&&cp.classList.contains('show')&&!e.target.closest('#cmtpop')&&!e.target.closest('.draft')&&!e.target.closest('.cmtmark'))hideCmtPop();
+  // click outside the collapsed header menu closes it
+  const tr=document.querySelector('.topright.open');
+  if(tr&&!e.target.closest('.topright')&&!e.target.closest('#topham'))toggleTopMenu();
 });
 document.addEventListener('keydown',function(e){
   const drawer=document.getElementById('drawer'), modal=document.getElementById('modal');
