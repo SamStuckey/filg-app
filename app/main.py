@@ -1974,6 +1974,7 @@ body.sd-open .secdrawer-back{display:block}
 .leafbody .src .gate{display:block;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;color:var(--muted);margin-top:2px}
 .leafbody .pending{color:var(--muted);font-style:italic}
 .run-log{padding:10px 12px;display:flex;flex-direction:column;gap:7px;max-height:46vh;overflow-y:auto}
+.run-empty{color:var(--muted);font-size:12.5px;line-height:1.5;font-family:Arial,Helvetica,sans-serif}
 .atask{border:1px solid var(--line);background:#fff;overflow:hidden}
 .atask.done{opacity:.7}
 .ah{display:flex;align-items:center;gap:9px;width:100%;background:none;border:0;color:var(--ink);font:inherit;font-size:13px;font-weight:700;padding:8px 12px;cursor:pointer;text-align:left}
@@ -2076,11 +2077,11 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <aside class=side>
 <div class=drawerhead><b>Tools</b><button type=button class=drawerx onclick="document.body.classList.add('drawer-collapsed')" aria-label="Collapse tools">&#8249;</button></div>
 <div class=side-scroll>
-<div class="sec collap" id=spewsec style="display:none"><button type=button class=sechead aria-expanded=false onclick="toggleSec('spewsec')"><h3>The machine</h3><span class=caret aria-hidden=true>▸</span></button>
+<div class="sec collap" id=spewsec><button type=button class=sechead aria-expanded=false onclick="toggleSec('spewsec')"><h3>The machine</h3><span class=caret aria-hidden=true>▸</span></button>
 <div class=secbody>
-<div class=runner id=runner aria-live=polite>
-<div class=run-head><span class=run-dot aria-hidden=true></span><span class=run-title id=run-title>The machine, working</span><span class=run-spacer></span><button type=button class=run-min id=run-min onclick="document.getElementById('runner').classList.toggle('min')" aria-label="Collapse or expand the runner">&#9662;</button></div>
-<div class=run-log id=runner-log></div>
+<div class="runner show" id=runner aria-live=polite>
+<div class=run-head><span class=run-dot aria-hidden=true></span><span class=run-title id=run-title>The machine</span><span class=run-spacer></span><button type=button class=run-min id=run-min onclick="document.getElementById('runner').classList.toggle('min')" aria-label="Collapse or expand the runner">&#9662;</button></div>
+<div class=run-log id=runner-log><div class=run-empty id=run-empty>Nothing running yet. This is the engine's terminal: every operation, the research fan-out, grading, drafting, the board, shows here step by step and stays as collapsed history you can reopen.</div></div>
 </div></div></div>
 <div class="sec collap" id=straightsec style="display:none"><button type=button class=sechead aria-expanded=false onclick="toggleSec('straightsec')"><h3>The straight read</h3><span class=caret aria-hidden=true>▸</span></button>
 <div class=secbody><div id=vet></div></div></div>
@@ -2098,6 +2099,8 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <div class=disc>AI advisor grounded in your plan + graded research, not professional advice.</div></div></div>
 <div class="sec collap board" id=boardsec style="display:none"><button type=button class=sechead aria-expanded=false onclick="toggleSec('boardsec')"><h3>Board of Directors</h3><span class=caret aria-hidden=true>▸</span></button>
 <div class=secbody>
+<div class="dsec" id=ds-weighedin hidden><button type=button class=dsec-h onclick="this.parentNode.classList.toggle('open')"><span>🗣️ Your board weighed in</span><span class=dsec-caret aria-hidden=true>▸</span></button>
+<div class=dsec-b id=conveneresult></div></div>
 <div class="dsec open" id=ds-directors><button type=button class=dsec-h onclick="this.parentNode.classList.toggle('open')"><span>Your directors</span><span class=dsec-caret aria-hidden=true>▸</span></button>
 <div class=dsec-b><p class=bhelp>Tap to add or drop a director.</p>
 <div class=bdirs id=boarddirs></div>
@@ -2174,6 +2177,7 @@ async function start(){
     if(d.gibberish){showJoke(d);go.disabled=false;go.textContent='Build my plan →';return;}  // nonsense → roast, no run
     if(!r.ok){err.textContent=d.error||'Something went wrong.';if(d.needKey)err.innerHTML+=' <a href=# onclick="keyModal();return false">Add your key →</a>';go.disabled=false;go.textContent='Build my plan →';return;}
     SID=d.id;meterBaseline(d.id);   // baseline at 0 so this run's tokens fully count as research streams in
+    clearWorkspace();   // new idea → never flash the previous plan's PURSUE block / tabs / research
     history.replaceState({plan:SID},'','/plan/'+SID);   // put the plan in the URL NOW so a mid-build refresh restores it
     show('workspace');   // reveal the workspace + apply the ws layout (left tools drawer, full-width main)
     poll();
@@ -2462,17 +2466,19 @@ async function runResearchQuery(mode){
   // terminal-style spew, inline in the drawer, until the answer comes back
   if(out)out.innerHTML='<div class=rqspew id=rqspew></div>';
   const spew=document.getElementById('rqspew');
-  let si=0; const pushLine=()=>{if(spew&&si<steps.length){const d=document.createElement('div');d.className='rqline';d.textContent='\\u203a '+steps[si];spew.appendChild(d);spew.scrollTop=spew.scrollHeight;si++;}};
+  const raid=Activity.open(deep?'Researching deeper':'Quick research check');   // mirror into the machine tab
+  let si=0; const pushLine=()=>{if(si<steps.length){if(spew){const d=document.createElement('div');d.className='rqline';d.textContent='\\u203a '+steps[si];spew.appendChild(d);spew.scrollTop=spew.scrollHeight;}Activity.push(raid,steps[si]);si++;}};
   pushLine(); const tmr=setInterval(pushLine,1100);
   try{
     const r=await _aiRun('/api/plan/'+SID+'/research/query',{question:q,mode:deep?'deep':'quick'});
     const d=await r.json(); clearInterval(tmr);
-    if(!r.ok){if(out)out.innerHTML='<div class=ferr>'+esc(d.error||'Could not run that.')+'</div>';RQ_BUSY=false;return;}
+    if(!r.ok){Activity.stop(raid);if(out)out.innerHTML='<div class=ferr>'+esc(d.error||'Could not run that.')+'</div>';RQ_BUSY=false;return;}
+    Activity.done(raid,'Answered from the graded research.');
     if(d.cost!=null)meterTick({id:SID,cost:d.cost,tokens:d.tokens});
     let html='<div class="rqans md">'+mdToHtml(d.answer||'')+'</div>';
     if(d.rows&&d.rows.length){html+='<div class=rqrows>'+d.rows.map(x=>`<div class=rqrow>${x.mark==='ok'?'\\u2705':'\\u26a0\\ufe0f'} ${esc(x.text)} <span class=rqsrc>${esc(host(x.url))}</span></div>`).join('')+'</div>';}
     if(out)out.innerHTML=html;
-  }catch(e){clearInterval(tmr);if(out)out.innerHTML='<div class=ferr>Network error.</div>';}
+  }catch(e){clearInterval(tmr);Activity.stop(raid);if(out)out.innerHTML='<div class=ferr>Network error.</div>';}
   RQ_BUSY=false;
 }
 let SUM_OPEN=true;
@@ -2975,17 +2981,20 @@ function runForge(){
   FORGE_STEPS.forEach(st=>_forgeStep(st.k,''));
   // animate the tree greening up while the request is in flight (snaps to done on response)
   let i=0; _forgeStep(FORGE_STEPS[0].k,'running');
+  const faid=Activity.open('Forging a director');   // mirror into the machine tab
+  FORGE_STEPS.forEach(st=>Activity.push(faid,st.l));
   if(FORGE_TIMER)clearInterval(FORGE_TIMER);
   FORGE_TIMER=setInterval(()=>{ if(i<FORGE_STEPS.length){_forgeStep(FORGE_STEPS[i].k,'done');i++; if(i<FORGE_STEPS.length)_forgeStep(FORGE_STEPS[i].k,'running');} },1400);
   _aiRun('/api/plan/'+SID+'/director/forge',{description:FORGE_DESC}).then(async r=>{
     const d=await r.json(); clearInterval(FORGE_TIMER); FORGE_TIMER=null; FORGE_BUSY=false;
-    if(!r.ok){ FORGE_STEPS.forEach(st=>_forgeStep(st.k,'')); showForgeError(d.error||'Could not forge a director.'); return; }
+    if(!r.ok){ Activity.stop(faid); FORGE_STEPS.forEach(st=>_forgeStep(st.k,'')); showForgeError(d.error||'Could not forge a director.'); return; }
+    Activity.done(faid,'Director forged.');
     if(d.cost!=null)meterTick({id:SID,cost:d.cost,tokens:d.tokens});
     FORGE_DRAFT=d.persona||null;
     const trace={}; ((FORGE_DRAFT&&FORGE_DRAFT.trace)||[]).forEach(t=>{trace[t.step]=t.note;});
     FORGE_STEPS.forEach(st=>_forgeStep(st.k,'done',trace[st.k]||''));
     showForgeResult();
-  }).catch(()=>{ if(FORGE_TIMER)clearInterval(FORGE_TIMER); FORGE_TIMER=null; FORGE_BUSY=false; showForgeError('Network error.'); });
+  }).catch(()=>{ if(FORGE_TIMER)clearInterval(FORGE_TIMER); FORGE_TIMER=null; FORGE_BUSY=false; Activity.stop(faid); showForgeError('Network error.'); });
 }
 function showForgeResult(){
   const p=FORGE_DRAFT, out=document.getElementById('forgeout'); if(!out)return;
@@ -3044,23 +3053,31 @@ async function runConvene(){
   const ds=document.getElementById('ds-convene'); if(ds){ds.classList.remove('done');ds.classList.add('running');}
   CONVENE_BUSY=true;
   const steps=["Briefing your board on the plan","Each director weighs in","The skeptic pushes back","Synthesizing their verdict"];
+  const aid=Activity.open('Convening your board');   // mirror the run into the machine tab (terminal history)
   panel.innerHTML='<div class=rqspew id=convspew></div>';
   const spew=document.getElementById('convspew'); let si=0;
-  const push=()=>{if(spew&&si<steps.length){const d=document.createElement('div');d.className='rqline';d.textContent='\\u203a '+steps[si];spew.appendChild(d);spew.scrollTop=spew.scrollHeight;si++;}};
+  const push=()=>{if(si<steps.length){if(spew){const d=document.createElement('div');d.className='rqline';d.textContent='\\u203a '+steps[si];spew.appendChild(d);spew.scrollTop=spew.scrollHeight;}Activity.push(aid,steps[si]);si++;}};
   push(); const tmr=setInterval(push,1100);
   try{
     const body={question:q}; if(SESSION_BOARD&&SESSION_BOARD.length)body.directors=SESSION_BOARD;
     const r=await _aiRun('/api/plan/'+SID+'/board',body);
     const d=await r.json(); clearInterval(tmr);
     if(ds){ds.classList.remove('running');ds.classList.add('done');}
-    if(!r.ok){panel.innerHTML='<div class=ferr>'+esc(d.error||'Could not convene the board.')+'</div>';CONVENE_BUSY=false;return;}
+    if(!r.ok){Activity.stop(aid);panel.innerHTML='<div class=ferr>'+esc(d.error||'Could not convene the board.')+'</div>';CONVENE_BUSY=false;return;}
+    Activity.done(aid,'Your board weighed in.');
     if(d.cost!=null)meterTick({id:SID,cost:d.cost,tokens:d.tokens});
     const split=(d.conflicts&&d.conflicts.toLowerCase()!=='none')?`<span class=split>Where they split: ${esc(d.conflicts)}</span>`:'';
     const balloons=(d.directors||[]).map((x,i)=>`<div class=balloon id=cbal_${i}><button type=button class=bh onclick="document.getElementById('cbal_${i}').classList.toggle('open')">\\uD83D\\uDCAC ${esc(x.first||x.name)}<span class=caret>\\u25b8</span></button><div class="bb md">${mdToHtml(x.take)}</div></div>`).join('');
-    panel.innerHTML=`<div class=bround>${skepticCardHtml(d.skeptic||{})}<div class=balloons>${balloons}</div>`+
+    const resHtml=`<div class=bround>${skepticCardHtml(d.skeptic||{})}<div class=balloons>${balloons}</div>`+
       `<div class=takeaway><div class=tl>Board takeaway</div>${esc(d.verdict||'')}${split}</div></div>`+
       `<div class=dpanel-acts><button type=button class=ghost onclick=convene()>Convene again</button></div>`;
-  }catch(e){clearInterval(tmr);if(ds)ds.classList.remove('running');panel.innerHTML='<div class=ferr>Network error.</div>';}
+    // The verdict surfaces as the collapsible "Your board weighed in" section at the TOP of the drawer.
+    const res=document.getElementById('conveneresult'); if(res)res.innerHTML=resHtml;
+    const wi=document.getElementById('ds-weighedin'); if(wi){wi.hidden=false;wi.classList.add('open');}
+    if(ds)ds.classList.remove('open');                                  // collapse the convene input, the result is up top
+    panel.innerHTML='';                                                 // clear the spew (it lives in the machine tab now)
+    const sb=document.getElementById('sd-body')||document.querySelector('#boardsec'); if(sb)sb.scrollTop=0;
+  }catch(e){clearInterval(tmr);Activity.stop(aid);if(ds)ds.classList.remove('running');panel.innerHTML='<div class=ferr>Network error.</div>';}
   CONVENE_BUSY=false;
 }
 let DRAWER={mode:null,key:null}, DRAWER_TRIGGER=null;
@@ -3243,6 +3260,7 @@ const Activity={
     for(let i=0;i<done.length-7;i++)done[i].parentNode.removeChild(done[i]); },   // keep ~7 history cards
   _mkTask(label){
     const log=this._log(); if(!log)return null;
+    const empty=document.getElementById('run-empty'); if(empty)empty.style.display='none';   // first op hides the idle hint
     const wrap=document.createElement('div'); wrap.className='atask';
     wrap.innerHTML='<button type=button class=ah><span class=astat aria-hidden=true></span><span class=alabel></span><span class=caret aria-hidden=true>&#9662;</span></button><div class=abody></div>';
     wrap.querySelector('.alabel').textContent=label||'Working';
@@ -3331,8 +3349,12 @@ const Activity={
   },
   resetLeaves(){ this._leafbox=null; this._leaflabels=null; },   // the old leaf tree lives in its card; cleared with the log
   stopAll(){ for(const id in this.tracks){if(this.tracks[id].timer)clearInterval(this.tracks[id].timer);}
-    this.tracks={}; this.n=0; this._live=0; this.resetLeaves();
-    const a=this._el(); if(a){a.hidden=true;a.classList.remove('show','min','busy');} const l=this._log(); if(l)l.innerHTML=''; }
+    this.tracks={}; this.n=0; this._live=0; this._everRan=false; this.resetLeaves();
+    // The machine tab stays present (a persistent terminal): clear the cards, restore the idle hint,
+    // drop the running/done state. Don't hide it.
+    const a=this._el(); if(a)a.classList.remove('min','busy'); this._busy();
+    const sec=this._sec(); if(sec)sec.classList.remove('running','done');
+    const l=this._log(); if(l)l.innerHTML='<div class=run-empty id=run-empty>Nothing running yet. This is the engine\\u2019s terminal: every operation, the research fan-out, grading, drafting, the board, shows here step by step and stays as collapsed history you can reopen.</div>'; }
 };
 const RESEARCH_STEPS=["Focusing your idea into one sharp thesis","Spinning up research across the web","Pulling sources on the market and competition","Grading every source for credibility","Flagging vendor-marketing spin","Re-sourcing the headline stats to primary sources","Scoring demand, market, and willingness to pay","Drafting your first offer"];
 const PDF_STEPS=["Applying your board's input","Pulling your graded evidence","Building the decision matrix","Laying out a modern, on-brand design","Typesetting your PDF"];
@@ -3584,7 +3606,18 @@ function show(id){['intake','workspace','profile'].forEach(x=>{const e=document.
 function _toolsNarrow(){return window.innerWidth<=1024;}   // tablet or smaller
 let _wasToolsNarrow=_toolsNarrow();
 window.addEventListener('resize',function(){const n=_toolsNarrow();if(n&&!_wasToolsNarrow&&document.body.classList.contains('ws'))document.body.classList.add('drawer-collapsed');_wasToolsNarrow=n;});
-function newPlan(){SIDEBAR_PHASE=null;ACT_RESEARCH=false;ACT_PROG_N=0;ACT_ID=null;VET_OPEN=true;VET_STEPPED=false;GREETED_SID=null;Activity.stopAll();closeViewer();SID=null;
+function clearWorkspace(){
+  // Wipe every workspace render target so a new idea never flashes the previous plan's PURSUE block,
+  // plan tabs, research, board, or machine spew. (render() repopulates these for the new plan.)
+  LAST_S=null; PLAN_TAB=-99; SUM_OPEN=true; SESSION_BOARD=null; CUR_NODE=null;
+  ['answer','node','planview','boardround','vet','rqout','conveneresult','boarddirs','runner-log'].forEach(id=>{const e=document.getElementById(id);if(e)e.innerHTML='';});
+  const wi=document.getElementById('ds-weighedin'); if(wi){wi.hidden=true;wi.classList.remove('open');}
+  const pw=document.getElementById('planwrap'); if(pw)pw.style.display='none';
+  const dl=document.getElementById('dlbar'); if(dl)dl.style.display='none';
+  document.querySelectorAll('#workspace .sec.collap').forEach(s=>{if(s.id!=='spewsec')s.style.display='none';});
+  closeSecDrawer();
+}
+function newPlan(){SIDEBAR_PHASE=null;ACT_RESEARCH=false;ACT_PROG_N=0;ACT_ID=null;VET_OPEN=true;VET_STEPPED=false;GREETED_SID=null;Activity.stopAll();closeViewer();clearWorkspace();SID=null;
   // render a FRESH intake — clear any in-flight button/idea/error left over from a prior build or sign-out
   const g=document.getElementById('go'); if(g){g.disabled=false;g.textContent='Build my plan →';}
   const idea=document.getElementById('idea'); if(idea)idea.value='';
