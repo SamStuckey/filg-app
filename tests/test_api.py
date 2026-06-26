@@ -277,7 +277,7 @@ def test_tables_favicon_and_headings(client):
     html = client.get("/").text
     assert "<table><thead><tr>" in html and ".md table{" in html  # client renders + styles md tables
     assert 'rel="icon"' in html and "class=logomark" in html      # custom favicon + header mark
-    assert "<h3>Ask an expert</h3>" in html and "Add-ons ·" not in html
+    assert "<h3>Board of Directors</h3>" in html and "Add-ons ·" not in html
     assert "Let’s go." in html and "You, 30 seconds ago" in html  # brand pull-quote
 
 

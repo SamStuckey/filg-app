@@ -1273,6 +1273,7 @@ textarea::placeholder,input::placeholder{color:#999;opacity:1}
 button{background:#f4f4f4;color:var(--ink);border:1px solid #888;font:inherit;font-weight:700;padding:7px 14px;cursor:pointer}
 button:hover{background:#e8e8e8}button:disabled{opacity:.5;cursor:default}
 .intake{max-width:680px;margin:22px auto;text-align:center}.intake textarea,.intake input{text-align:left}
+.intake textarea,.intake>input{margin-bottom:16px}.intake h2{margin-bottom:14px}
 .intake h2{font-size:22px;font-weight:700;letter-spacing:-.01em;margin:0 0 6px}.intake .go{font-size:15px;padding:9px 18px}
 .brandfoot{margin:34px auto 0;padding-top:14px;border-top:1px solid var(--line);max-width:420px;font-size:13px;color:var(--muted);line-height:1.35}
 .brandfoot cite{font-style:normal;font-size:12px}
@@ -1494,8 +1495,9 @@ body.hasbar .workspace{padding-bottom:74px}
 .dnode .dsub{display:block;font-size:11px;color:var(--muted);font-weight:400}
 .dnode.on .dsub{color:var(--link)}
 .dnode .ds{display:block;font-size:11px;color:var(--muted);font-weight:400;margin-top:2px;font-style:italic}
-.boardpick{margin:0 0 12px}.boardpick .lab{font-size:13px;color:var(--muted);font-weight:700;text-align:left}
-.boardpick .bp-head{display:flex;align-items:center;gap:8px;width:100%;background:none;border:0;padding:0;cursor:pointer;font:inherit}
+.boardpick{margin:18px 0}.boardpick .lab{font-size:13px;color:var(--muted);font-weight:700;text-align:left}
+.boardpick .bp-head{display:flex;align-items:center;gap:8px;width:100%;background:none;border:1px solid var(--line);padding:9px 11px;cursor:pointer;font:inherit}
+.boardpick .bp-head:hover{background:#f7f7f7}
 .bp-caret{margin-left:auto;color:var(--muted);font-size:11px;transition:transform .15s}
 .boardpick.open .bp-caret{transform:rotate(90deg)}
 .boardpick .opts{display:none;flex-wrap:wrap;gap:6px;justify-content:flex-start;margin-top:8px}
@@ -1712,9 +1714,6 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <textarea id=chatinput rows=2 placeholder="Ask anything about your plan…"></textarea>
 <button type=button class=chatsend id=chatsend onclick=sendChat()>Ask the planner →</button>
 <div class=disc>AI advisor grounded in your plan + graded research, not professional advice.</div></div></div>
-<div class="sec collap addons" id=expertsec><button type=button class=sechead aria-expanded=false onclick="toggleSec('expertsec')"><h3>Ask an expert</h3><span class=caret aria-hidden=true>▸</span></button>
-<div class=secbody><div class=ax id=addons></div>
-<div class=disc id=adisc></div></div></div>
 <div class="sec collap board" id=boardsec style="display:none"><button type=button class=sechead aria-expanded=false onclick="toggleSec('boardsec')"><h3>Board of Directors</h3><span class=caret aria-hidden=true>▸</span></button>
 <div class=secbody><p class=bhelp>Tap to add or drop a director, then convene them on your plan.</p>
 <div class=bdirs id=boarddirs></div>
@@ -3065,6 +3064,7 @@ async function signinEmail(){
 async function signout(){await sb.auth.signOut();session=null;me=null;newPlan();renderAuth();}
 function show(id){['intake','workspace','profile'].forEach(x=>{const e=document.getElementById(x);if(e)e.style.display=(x===id?(x==='workspace'?'block':'block'):'none');});
   document.body.classList.toggle('ws',id==='workspace');
+  if(id!=='workspace'){document.body.classList.remove('hasbar','sd-open');const dr=document.getElementById('secdrawer');if(dr)dr.classList.remove('open');}   // leaving the build → drop the action-bar/drawer state so the landing footer shows
   if(id==='workspace'&&_toolsNarrow())document.body.classList.add('drawer-collapsed');}   // tablet/smaller → tools start collapsed
 function _toolsNarrow(){return window.innerWidth<=1024;}   // tablet or smaller
 let _wasToolsNarrow=_toolsNarrow();
