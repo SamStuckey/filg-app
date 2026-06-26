@@ -1949,7 +1949,9 @@ body.drawer-collapsed .secdrawer{left:0}
   body.ws .side-rail:hover{background:#222}
   body.ws:not(.drawer-collapsed) .mback{display:block;position:fixed;inset:calc(var(--hdr) + var(--disc)) 0 0 0;z-index:55;background:rgba(0,0,0,.2)}
 }
-.sd-head span{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+.sd-head #sd-title{flex:1;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+.sd-back{background:none;border:0;font-size:20px;color:var(--muted);cursor:pointer;line-height:1;padding:0 4px;flex:none}
+.sd-back:hover{color:var(--ink)}
 .sd-x{background:none;border:0;font-size:20px;color:var(--muted);cursor:pointer;line-height:1;padding:0 4px}
 .sd-x:hover{color:var(--ink)}
 .sd-body{padding:16px 18px;overflow:auto;flex:1}
@@ -2120,7 +2122,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <h3 id=modal-title></h3><div id=modal-body></div><div class=modal-actions id=modal-actions></div></div>
 <div class=secdrawer-back id=secdrawerback onclick=closeSecDrawer()></div>
 <div class=secdrawer id=secdrawer role=dialog aria-modal=false aria-hidden=true>
-<div class=sd-head><span id=sd-title></span><button type=button class=sd-x onclick=closeSecDrawer() aria-label="Close panel">&times;</button></div>
+<div class=sd-head><button type=button class=sd-back onclick=backToTools() aria-label="Back to tools" title="Back to tools">&#8592;</button><span id=sd-title></span><button type=button class=sd-x onclick=closeSecDrawer() aria-label="Close panel">&times;</button></div>
 <div class=sd-body id=sd-body></div>
 <button type=button class=sd-rail onclick=closeSecDrawer() aria-label="Close panel" title="Collapse">&#8249;</button></div>
 <div class=cmtpop id=cmtpop role=dialog aria-label="Add a comment on this part" aria-hidden=true>
@@ -3236,6 +3238,9 @@ function closeSecDrawer(){
 // Small screens: collapse BOTH the tab drawer and the toolbar (sidebar slides off, the "Tools" rail
 // reopens it). Wired to the sidebar's collapse rail and the backdrop (tap outside to dismiss).
 function collapseAll(){closeSecDrawer();document.body.classList.add('drawer-collapsed');}
+// "Back to tools": close the open tab drawer and reveal the tool menu (the sidebar). On small screens
+// the sidebar was collapsed when the drawer opened, so bring it back.
+function backToTools(){closeSecDrawer();document.body.classList.remove('drawer-collapsed');}
 const TAB_ICONS={spewsec:'\\u2699\\ufe0f',straightsec:'\\uD83D\\uDCCB',dtreesec:'\\uD83C\\uDF3F',chatsec:'\\uD83D\\uDCAC',boardsec:'\\uD83D\\uDC65',researchsec:'\\uD83D\\uDD0D'};
 function setupTabs(){   // turn every collapsible sidebar section into a modern nav tab (icon + label, no caret)
   document.querySelectorAll('.side .sec.collap').forEach(sec=>{
