@@ -1347,7 +1347,7 @@ body.hasbar .vibestrip{display:none}   /* don't fight the fixed action bar mid-b
 .straightread .vet{margin-bottom:0;padding:13px 14px;background:#fafafa}
 /* "Your plan" tab strip — the plan outline + decision tree, merged into the center column */
 .planwrap{margin:2px 0 0}
-.plantabs{display:flex;gap:4px;overflow-x:auto;padding-top:2px;border-bottom:1px solid #888;scrollbar-width:thin}
+.plantabs{display:flex;gap:4px;overflow-x:auto;overflow-y:hidden;padding-top:3px;padding-bottom:2px;border-bottom:1px solid #888;scrollbar-width:thin}
 .ptab{flex:0 0 auto;display:inline-flex;align-items:center;gap:6px;background:#ececec;color:var(--ink);border:1px solid var(--line);border-bottom:0;border-radius:7px 7px 0 0;font:inherit;font-size:12.5px;font-weight:700;padding:7px 12px;cursor:pointer;white-space:nowrap;position:relative;top:1px}
 .ptab .pic{font-size:11px;display:inline-grid;place-items:center;width:15px;height:15px}
 .ptab.built .pic{color:var(--ok)}
@@ -1468,6 +1468,16 @@ body.hasbar .workspace{padding-bottom:74px}
 .ftstep.running{color:var(--ink)}.ftstep.running .ftleaf{filter:grayscale(.3);opacity:.9}
 .ftstep.done{color:var(--ink)}.ftstep.done .ftleaf{filter:none;opacity:1}
 .ftnote{margin-left:auto;font-size:11.5px;color:var(--muted);font-style:italic;text-align:right;max-width:52%}
+/* collapsible sub-section inside a tools drawer — each box gets its own collapse arrow */
+.dsec{border:1px solid var(--line);margin-bottom:10px;background:var(--card)}
+.dsec-h{display:flex;align-items:center;justify-content:space-between;width:100%;background:none;border:0;padding:9px 11px;cursor:pointer;font:inherit;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+.dsec-h:hover{background:#f7f7f7}
+.dsec-caret{font-size:11px;transition:transform .15s}
+.dsec.open .dsec-caret{transform:rotate(90deg)}
+.dsec-b{display:none;padding:0 11px 11px}
+.dsec.open .dsec-b{display:block}
+.dsec.running .dsec-h{color:var(--link)}
+.dsec.done .dsec-h{color:var(--ok)}
 /* inline process panel in the tools drawer (forge etc.): a collapsible-style block with spew + result */
 .dpanel-h{display:flex;align-items:center;justify-content:space-between;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:8px}
 .dpanel-x{background:none;border:0;font-size:18px;color:var(--muted);cursor:pointer;line-height:1;padding:0 4px}
@@ -1722,27 +1732,32 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <button type=button class=chatsend id=chatsend onclick=sendChat()>Ask the planner →</button>
 <div class=disc>AI advisor grounded in your plan + graded research, not professional advice.</div></div></div>
 <div class="sec collap board" id=boardsec style="display:none"><button type=button class=sechead aria-expanded=false onclick="toggleSec('boardsec')"><h3>Board of Directors</h3><span class=caret aria-hidden=true>▸</span></button>
-<div class=secbody><div id=boardmain><p class=bhelp>Tap to add or drop a director, then convene them on your plan.</p>
+<div class=secbody>
+<div class="dsec open" id=ds-directors><button type=button class=dsec-h onclick="this.parentNode.classList.toggle('open')"><span>Your directors</span><span class=dsec-caret aria-hidden=true>▸</span></button>
+<div class=dsec-b><p class=bhelp>Tap to add or drop a director.</p>
 <div class=bdirs id=boarddirs></div>
-<button type=button class=convene id=convene onclick=convene()>Convene the board</button>
-<div class=forge>
-<div class=forge-h>Forge your own director</div>
-<p class=forge-sub>Describe the advisor you wish you had. We can't say we trained them on anyone real… but we can't stop you from asking.</p>
+<button type=button class=convene id=convene onclick=convene()>Convene the board</button></div></div>
+<div class=dsec id=ds-convene><button type=button class=dsec-h onclick="this.parentNode.classList.toggle('open')"><span>Convene the board</span><span class=dsec-caret aria-hidden=true>▸</span></button>
+<div class=dsec-b id=convenebody></div></div>
+<div class=dsec id=ds-forge><button type=button class=dsec-h onclick="this.parentNode.classList.toggle('open')"><span>Forge a director</span><span class=dsec-caret aria-hidden=true>▸</span></button>
+<div class=dsec-b>
+<div id=forgemain><p class=forge-sub>Describe the advisor you wish you had. We can't say we trained them on anyone real… but we can't stop you from asking.</p>
 <label for=forgeinput class=sr-only>Describe your ideal director</label>
 <textarea id=forgeinput rows=2 placeholder="e.g. a ruthless ops nerd who has scaled 3 agencies and hates busywork"></textarea>
-<button type=button class=forge-go onclick=openForge()>✦ Forge a director →</button>
-</div>
-<div class=disc>AI composite directors, not real people, not professional advice.</div></div>
+<button type=button class=forge-go onclick=openForge()>✦ Forge a director →</button></div>
 <div class=dpanel id=forgepanel hidden></div></div></div>
+<div class=disc>AI composite directors, not real people, not professional advice.</div></div></div>
 <div class="sec collap open" id=researchsec><button type=button class=sechead aria-expanded=true onclick="toggleSec('researchsec')"><h3>Check the facts</h3><span class=caret aria-hidden=true>▸</span></button>
 <div class=secbody>
-<p class=bhelp>Ask a question against your graded research. <b>Quick check</b> reads what's already there (and will say when it's not sure); <b>Go deeper</b> spawns fresh research.</p>
+<div class="dsec open" id=ds-ask><button type=button class=dsec-h onclick="this.parentNode.classList.toggle('open')"><span>Ask the research</span><span class=dsec-caret aria-hidden=true>▸</span></button>
+<div class=dsec-b><p class=bhelp>Ask a question against your graded research. <b>Quick check</b> reads what's already there (and will say when it's not sure); <b>Go deeper</b> spawns fresh research.</p>
 <label for=rqinput class=sr-only>Your research question</label>
 <textarea id=rqinput rows=2 placeholder="e.g. how price-sensitive is this buyer, really?"></textarea>
 <div class=rqacts><button type=button class=ghost onclick="runResearchQuery('quick')">Quick check</button><button type=button class=rq-go onclick="runResearchQuery('deep')">🔎 Go deeper</button></div>
-<div class=rqout id=rqout></div>
-<div class=factsep>The graded research</div>
-<div id=research></div></div></div>
+<div class=rqout id=rqout></div></div></div>
+<div class="dsec open" id=ds-graded><button type=button class=dsec-h onclick="this.parentNode.classList.toggle('open')"><span>The graded research</span><span class=dsec-caret aria-hidden=true>▸</span></button>
+<div class=dsec-b><div id=research></div></div></div>
+</div></div>
 </aside>
 <main class=main>
 <div class=runner id=runner aria-live=polite hidden>
@@ -2549,7 +2564,9 @@ function openForge(){
   const desc=((document.getElementById('forgeinput')||{}).value||'').trim();
   if(desc.length<4){toast('Describe the director you want first.','err');const t=document.getElementById('forgeinput');if(t)t.focus();return;}
   FORGE_DESC=desc;
-  const bm=document.getElementById('boardmain'); if(bm)bm.style.display='none';   // collapse the board content
+  const fm=document.getElementById('forgemain'); if(fm)fm.style.display='none';   // hide the input while it runs
+  ['ds-directors','ds-convene'].forEach(id=>{const e=document.getElementById(id);if(e)e.classList.remove('open');});   // collapse siblings (don't remove)
+  const fs=document.getElementById('ds-forge'); if(fs)fs.classList.add('open','running');
   const panel=document.getElementById('forgepanel'); if(!panel)return;
   panel.hidden=false;
   panel.innerHTML=`<div class=dpanel-h><span>Forging your director</span><button type=button class=dpanel-x onclick=cancelForge() aria-label="Close">\\u00d7</button></div>`+
@@ -2561,7 +2578,8 @@ function openForge(){
 function _forgeClose(){
   if(FORGE_TIMER){clearInterval(FORGE_TIMER);FORGE_TIMER=null;}
   const panel=document.getElementById('forgepanel'); if(panel){panel.hidden=true;panel.innerHTML='';}
-  const bm=document.getElementById('boardmain'); if(bm)bm.style.display='';
+  const fm=document.getElementById('forgemain'); if(fm)fm.style.display='';
+  const fs=document.getElementById('ds-forge'); if(fs)fs.classList.remove('running','done');
 }
 function _forgeStep(k,state,note){const row=document.querySelector('#forgetree .ftstep[data-k="'+k+'"]');if(!row)return;
   row.classList.remove('running','done');if(state)row.classList.add(state);if(note!=null){const n=row.querySelector('.ftnote');if(n)n.textContent=note;}}
@@ -2585,6 +2603,7 @@ function runForge(){
 }
 function showForgeResult(){
   const p=FORGE_DRAFT, out=document.getElementById('forgeout'); if(!out)return;
+  const fs=document.getElementById('ds-forge'); if(fs){fs.classList.remove('running');fs.classList.add('done');}
   if(!p){showForgeError('No director came back. Try again.');return;}
   const doms=(p.domains||[]).slice(0,6).map(d=>`<span class=fdom>${esc(d)}</span>`).join('');
   out.innerHTML=`<div class=forgecard><div class=fc-name>\\u2726 ${esc(p.name)}${p.first?` <span class=fc-first>(${esc(p.first)})</span>`:''}</div>`+
@@ -2617,7 +2636,47 @@ async function approveForge(){
 function cancelForge(){ FORGE_DRAFT=null; FORGE_BUSY=false; _forgeClose(); }
 // Ask-an-expert + convene open the advisor drawer (a styled flyout, not a browser dialog).
 function ask(key){openDrawer('expert',key);}
-function convene(){openDrawer('board');}
+// Convene the board INLINE in the tools drawer: open the convene sub-section with a question box, run
+// it with terminal spew, then render the board's take (skeptic + directors + takeaway) in place.
+function convene(){
+  if(!requireKey())return;
+  ['ds-directors','ds-forge'].forEach(id=>{const e=document.getElementById(id);if(e)e.classList.remove('open');});
+  const ds=document.getElementById('ds-convene'); if(ds)ds.classList.add('open');
+  const body=document.getElementById('convenebody'); if(!body)return;
+  body.innerHTML=`<p class=forge-sub>Convene your board on the plan so far. Leave it blank for a general read, or aim them at one thing.</p>`+
+    `<label for=conveneq class=sr-only>What should the board weigh in on?</label>`+
+    `<textarea id=conveneq rows=2 placeholder="e.g. is the pricing right?"></textarea>`+
+    `<button type=button class=mfb-go onclick=runConvene()>Convene the board \\u2192</button>`+
+    `<div class=dpanel id=convenepanel></div>`;
+  const t=document.getElementById('conveneq'); if(t)t.focus();
+}
+let CONVENE_BUSY=false;
+async function runConvene(){
+  if(!requireKey())return; if(CONVENE_BUSY)return;
+  const q=((document.getElementById('conveneq')||{}).value||'').trim();
+  const panel=document.getElementById('convenepanel'); if(!panel)return;
+  const ds=document.getElementById('ds-convene'); if(ds){ds.classList.remove('done');ds.classList.add('running');}
+  CONVENE_BUSY=true;
+  const steps=["Briefing your board on the plan","Each director weighs in","The skeptic pushes back","Synthesizing their verdict"];
+  panel.innerHTML='<div class=rqspew id=convspew></div>';
+  const spew=document.getElementById('convspew'); let si=0;
+  const push=()=>{if(spew&&si<steps.length){const d=document.createElement('div');d.className='rqline';d.textContent='\\u203a '+steps[si];spew.appendChild(d);spew.scrollTop=spew.scrollHeight;si++;}};
+  push(); const tmr=setInterval(push,1100);
+  try{
+    const body={question:q}; if(SESSION_BOARD&&SESSION_BOARD.length)body.directors=SESSION_BOARD;
+    const r=await _aiRun('/api/plan/'+SID+'/board',body);
+    const d=await r.json(); clearInterval(tmr);
+    if(ds){ds.classList.remove('running');ds.classList.add('done');}
+    if(!r.ok){panel.innerHTML='<div class=ferr>'+esc(d.error||'Could not convene the board.')+'</div>';CONVENE_BUSY=false;return;}
+    if(d.cost!=null)meterTick({id:SID,cost:d.cost,tokens:d.tokens});
+    const split=(d.conflicts&&d.conflicts.toLowerCase()!=='none')?`<span class=split>Where they split: ${esc(d.conflicts)}</span>`:'';
+    const balloons=(d.directors||[]).map((x,i)=>`<div class=balloon id=cbal_${i}><button type=button class=bh onclick="document.getElementById('cbal_${i}').classList.toggle('open')">\\uD83D\\uDCAC ${esc(x.first||x.name)}<span class=caret>\\u25b8</span></button><div class="bb md">${mdToHtml(x.take)}</div></div>`).join('');
+    panel.innerHTML=`<div class=bround>${skepticCardHtml(d.skeptic||{})}<div class=balloons>${balloons}</div>`+
+      `<div class=takeaway><div class=tl>Board takeaway</div>${esc(d.verdict||'')}${split}</div></div>`+
+      `<div class=dpanel-acts><button type=button class=ghost onclick=convene()>Convene again</button></div>`;
+  }catch(e){clearInterval(tmr);if(ds)ds.classList.remove('running');panel.innerHTML='<div class=ferr>Network error.</div>';}
+  CONVENE_BUSY=false;
+}
 let DRAWER={mode:null,key:null}, DRAWER_TRIGGER=null;
 function openDrawer(mode,key){
   DRAWER={mode,key:key||null};
