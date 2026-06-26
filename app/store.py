@@ -63,6 +63,22 @@ def init() -> None:
                     "  stripe_session TEXT,"
                     "  amount_cents INTEGER,"
                     "  created_at TEXT NOT NULL)")
+                # Coupon codes that unlock the PDF for free (bypass Stripe). `used` is a private counter
+                # (admin-only, never surfaced in the UX); a code is spent once used >= max_uses.
+                con.execute(
+                    "CREATE TABLE IF NOT EXISTS coupons ("
+                    "  code TEXT PRIMARY KEY,"
+                    "  max_uses INTEGER NOT NULL,"
+                    "  used INTEGER NOT NULL DEFAULT 0,"
+                    "  active INTEGER NOT NULL DEFAULT 1,"
+                    "  created_at TEXT NOT NULL)")
+                # Seed the standing comp code. INSERT OR IGNORE → idempotent: re-deploys never reset the
+                # `used` counter (it lives on the persistent disk), so 100 uses means 100 across all time.
+                con.execute(
+                    "INSERT OR IGNORE INTO coupons (code, max_uses, used, active, created_at) "
+                    "VALUES (?,?,0,1,?)",
+                    ("FUCKYOUIMNOTGIVINGYOU13BUCKS", 100,
+                     datetime.now(timezone.utc).isoformat()))
                 # Interactive plan-builder sessions (idea → decision-tree → downloadable file tree).
                 con.execute(
                     "CREATE TABLE IF NOT EXISTS plan_sessions ("
@@ -186,6 +202,56 @@ def has_purchased(email: str) -> bool:
     finally:
         con.close()
     return row is not None
+
+
+# ── Coupons (free PDF unlock — bypass Stripe) ────────────────────────────────
+def redeem_coupon(code: str, normalized_email: str) -> tuple[bool, str]:
+    """Atomically redeem a coupon for `normalized_email`: if the code is active and has uses left,
+    bump its counter and grant the PDF unlock (record_purchase). Returns (ok, reason). `reason` is
+    coarse ('invalid' | 'spent') and never leaks the remaining-uses count. Idempotent-ish: a buyer
+    who already unlocked still 'succeeds' without burning a use."""
+    code = (code or "").strip()
+    if not code or not normalized_email:
+        return False, "invalid"
+    con = _connect()
+    try:
+        with con:  # single transaction → the SELECT + UPDATE can't race two redemptions past the cap
+            row = con.execute(
+                "SELECT max_uses, used, active FROM coupons WHERE code=?", (code,)).fetchone()
+            if not row or not row["active"]:
+                return False, "invalid"
+            # Already unlocked on this account → don't spend a use, just confirm.
+            have = con.execute("SELECT 1 FROM pdf_purchases WHERE email=?",
+                               (normalized_email,)).fetchone()
+            if have:
+                return True, "already"
+            if row["used"] >= row["max_uses"]:
+                return False, "spent"
+            now = datetime.now(timezone.utc).isoformat()
+            con.execute("UPDATE coupons SET used=used+1 WHERE code=?", (code,))
+            con.execute(
+                "INSERT INTO pdf_purchases (email, stripe_session, amount_cents, created_at) "
+                "VALUES (?,?,?,?) ON CONFLICT(email) DO UPDATE SET created_at=excluded.created_at",
+                (normalized_email, f"coupon:{code}", 0, now))
+        return True, "redeemed"
+    finally:
+        con.close()
+
+
+def coupon_status(code: str) -> dict | None:
+    """Admin-only view of a coupon (code, max_uses, used, remaining, active). For Sam, never the UX."""
+    init()
+    con = _connect()
+    try:
+        row = con.execute(
+            "SELECT code, max_uses, used, active FROM coupons WHERE code=?",
+            ((code or "").strip(),)).fetchone()
+    finally:
+        con.close()
+    if not row:
+        return None
+    return {"code": row["code"], "max_uses": row["max_uses"], "used": row["used"],
+            "remaining": max(0, row["max_uses"] - row["used"]), "active": bool(row["active"])}
 
 
 # ── Plan-builder sessions ────────────────────────────────────────────────────

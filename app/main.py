@@ -315,6 +315,26 @@ async def api_buy_pdf(sid: str, request: Request):
     return {"url": url}
 
 
+@app.post("/api/coupon")
+async def api_coupon(request: Request):
+    """Redeem a coupon code to unlock the polished PDF for free (account-wide). Signed-in only. The
+    remaining-uses counter is never returned — a spent/invalid code gets the same coarse message."""
+    authed = auth.user_from_request(request)
+    if not authed or not authed["email"]:
+        return JSONResponse({"error": "Sign in first."}, status_code=401)
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    code = (body.get("code") or "").strip()
+    if not code:
+        return JSONResponse({"error": "Enter a code."}, status_code=400)
+    ok, _reason = store.redeem_coupon(code, auth.normalize_email(authed["email"]))
+    if not ok:
+        return JSONResponse({"error": "That code isn't valid."}, status_code=400)
+    return {"unlocked": True}
+
+
 def _validate_key(provider_name: str, api_key: str) -> tuple[bool, str]:
     """One cheap call confirms a BYOK key works before we store it. Skipped in mock mode (no spend)."""
     if provider_name not in keys.PROVIDERS:
@@ -1208,6 +1228,9 @@ button:hover{background:#e8e8e8}button:disabled{opacity:.5;cursor:default}
 .compose .row{display:flex;gap:8px;margin-top:10px}.compose .row button{flex:none}.compose .ghost{background:#fff;color:var(--muted);border:1px solid var(--line)}
 .done{background:var(--ok-bg);border:1px solid var(--line);padding:14px 16px;font-size:15px}
 .planacts{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}.planacts .ghost{background:#fff;color:var(--ink);border:1px solid var(--line)}
+.couponrow{display:flex;gap:8px;margin-top:10px;max-width:340px}
+.couponrow input{flex:1;padding:8px 11px;border:1px solid var(--line);border-radius:8px;font:inherit;background:#fff}
+.couponrow .ghost{background:#fff;color:var(--ink);border:1px solid var(--line);white-space:nowrap}
 .addons .ax{display:flex;flex-wrap:wrap;gap:8px}
 .addons .ax button{flex:1;min-width:120px;background:#fff;border:1px solid var(--line);color:var(--ink);font-size:13px;font-weight:700;padding:9px 10px;text-align:left}
 .addons .ax .bl{display:block;font-size:11px;color:var(--muted);font-weight:400}
@@ -1757,8 +1780,9 @@ function closeViewer(){VIEWING=null;const v=document.getElementById('viewer');if
 function renderNode(s){
   const n=document.getElementById('node');
   if(s.status==='researching')return;
-  if(s.done){n.innerHTML='<div class=node><div class=done>🎉 <b>Your plan is ready</b>, all '+s.total+' parts. This is your plan\\'s home: grab the <b>polished PDF</b> (or the free raw files), <b>chat with your plan</b> in the sidebar to pressure-test it, or share it.</div>'+
-    '<div class=planacts>'+pdfBtn()+'<button type=button class=ghost onclick=downloadZip()>⬇ Raw files (.zip), free</button><button type=button class=ghost onclick="sharePlan(SID)">🔗 Share</button></div></div>';return;}
+  if(s.done){const cpn=pdfUnlocked()?'':'<div class=couponrow><input id=coupon placeholder="Coupon code" autocomplete=off spellcheck=false><button type=button class=ghost onclick=redeemCoupon()>Apply</button></div>';
+    n.innerHTML='<div class=node><div class=done>🎉 <b>Your plan is ready</b>, all '+s.total+' parts. This is your plan\\'s home: grab the <b>polished PDF</b> (or the free raw files), <b>chat with your plan</b> in the sidebar to pressure-test it, or share it.</div>'+
+    '<div class=planacts>'+pdfBtn()+'<button type=button class=ghost onclick=downloadZip()>⬇ Raw files (.zip), free</button><button type=button class=ghost onclick="sharePlan(SID)">🔗 Share</button></div>'+cpn+'</div>';return;}
   const p=s.proposal; if(!p){n.innerHTML='';return;}
   const sec=(s.sections||[]).find(x=>x.title===p.title)||{};
   const intro=s.step===0?`<p class=lead>We build your plan in ${s.total} parts, one at a time, your call on each (watch them fill in on the left). First up:</p>`:'';
@@ -2275,6 +2299,20 @@ async function buyPdf(){
     if(d.unlocked){await loadMe();download();return;}  // already paid → just grab it
     toast(d.error||'Could not start checkout.','err');
   }catch(e){toast('Network error starting checkout.','err');}
+}
+async function redeemCoupon(){
+  const inp=document.getElementById('coupon'); if(!inp)return;
+  const code=(inp.value||'').trim(); if(!code){toast('Enter a code.','err');return;}
+  if(CFG.authEnabled&&!session){toast('Sign in to use a code.');signinEmail();return;}
+  try{
+    const r=await fetch('/api/coupon',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({code})});
+    const d=await r.json();
+    if(r.ok&&d.unlocked){
+      await loadMe();                               // refresh me.pdf_unlocked
+      toast('Code applied, your PDF is unlocked.','ok');
+      try{const pr=await fetch('/api/plan/'+SID,{headers:authHeaders()});render(await pr.json());}catch(e){}  // flip the button to Download
+    } else { toast(d.error||'That code isn\\'t valid.','err'); }
+  }catch(e){toast('Network error.','err');}
 }
 async function download(){
   if(!pdfUnlocked()){buyPdf();return;}     // locked → route to the $13 unlock, not a key prompt
