@@ -70,9 +70,12 @@ def shape(idea: str, mock: bool = False) -> tuple[dict, float]:
     return shaped, round(LEDGER.cost_slice(start), 4)
 
 
-def vet(idea: str, shaped: dict, research: dict | None = None, mock: bool = False) -> tuple[dict, float]:
+def vet(idea: str, shaped: dict, research: dict | None = None, mock: bool = False,
+        angle: str | None = None) -> tuple[dict, float]:
     """Kill-gate: score the shaped idea and return pursue/pivot/kill. `research` (optional) is the
-    teardown result — its cleared evidence grounds the verdict. Returns (vetting, cost)."""
+    teardown result — its cleared evidence grounds the verdict. `angle` (optional) is a REVISED setup
+    framing — when the operator regenerates the idea-defining 'setup' section, the verdict re-grades
+    against this new angle. Returns (vetting, cost)."""
     if mock:
         return dict(_MOCK_VET), 0.0
     from pipeline import LEDGER, call, extract_json, SONNET
@@ -81,9 +84,12 @@ def vet(idea: str, shaped: dict, research: dict | None = None, mock: bool = Fals
     if research and research.get("rows"):
         cleared = [r["text"] for r in research["rows"] if r.get("mark") == "ok"]
         cited = "\n".join(f"- {t}" for t in cleared) or "- (none cleared)"
+    angle_block = (f"REVISED ANGLE (the operator just reframed the setup — re-grade against THIS framing, "
+                   f"not the original):\n{angle.strip()}\n\n" if (angle or "").strip() else "")
     out = call("vet", SONNET, max_tokens=700, system=skills.system("vet"), cache=True, prompt=(
         f"OPERATOR'S RAW INPUT:\n{idea}\n\nFOCUSED THESIS (from intake):\n{shaped.get('thesis', '')}\n\n"
         f"FOUNDER EDGE:\n{shaped.get('founder_edge', '(none named)')}\n\n"
+        f"{angle_block}"
         f"GATE-CLEARED EVIDENCE (context only):\n{cited or '- (no research yet)'}\n\n"
         "Also classify the REALISTIC shape of this as ONE model_type, weighing market competition and "
         "whether it's a quick hustle vs a durable business:\n"

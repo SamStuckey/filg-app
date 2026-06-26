@@ -175,6 +175,19 @@ def test_redraft_regenerates_current_part_as_sibling(client):
     assert s["tree"]["active"] != [n["id"] for n in nodes if n["step"] == 1][0]  # active moved to the new one
 
 
+def test_setup_redraft_regrades_verdict(client):
+    # Regenerating the SETUP (step 0) re-grades the idea, so the response carries a (re-graded) verdict.
+    # (Mock vet always returns "pursue"; this locks in that the setup-stage re-grade path runs + threads
+    # the vetting back. Non-setup redrafts don't re-grade — covered by the sibling test above.)
+    sid = client.post("/api/plan/start",
+                      json={"idea": GRAB_BAG, "email": "regrade@x.com"}).json()["id"]
+    s = wait_status(client, sid)
+    assert s["step"] == 0 and s["proposal"]["section"] == "brief"   # we're on the setup
+    s = client.post(f"/api/plan/{sid}/redraft", json={"feedback": "reframe it around enterprise buyers"}).json()
+    assert s["step"] == 0                                            # still the setup, a regenerated sibling
+    assert s["vetting"] and s["vetting"]["verdict"] in ("pursue", "pivot", "kill")
+
+
 def test_download_follows_active_branch_no_paywall(client):
     # Build a plan to completion, then branch part 2 and finish again. The download must zip the
     # ACTIVE branch's files (the final decision set) — and no paywall gates it.

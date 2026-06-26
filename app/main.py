@@ -662,6 +662,21 @@ def _mirror(tree: dict) -> dict:
             "status": "done" if done else "building"}
 
 
+def _regrade_setup(s: dict, node: dict, cost: float) -> tuple[dict | None, float]:
+    """When the SETUP (step-0) section is reframed, re-grade the idea against the new angle so the
+    PURSUE/PIVOT verdict + reaction track it. Only the setup stage triggers a re-grade. Must run on the
+    bound provider (call inside `_run_slot`). Returns (new_vetting_or_None, cost_including_revet). A
+    re-grade failure never breaks the underlying redraft/back."""
+    if (node or {}).get("step") != 0:
+        return None, cost
+    try:
+        vetting, vc = intake.vet(planner._working_idea(s), s.get("shaped") or {}, s.get("research"),
+                                 mock=MOCK, angle=(node.get("draft") or ""))
+    except Exception:  # noqa: BLE001
+        return None, cost
+    return vetting, round(cost + vc, 4)
+
+
 def _ensure_tree(s: dict) -> dict:
     """Return the session's node tree, lazily seeding a single-node tree from legacy flat state for
     plans created before branching existed (so resumed in-progress plans still go Next/Back)."""
@@ -904,6 +919,7 @@ async def api_plan_back(sid: str, request: Request):
         with _run_slot(s.get("user"), s.get("stack")):
             sib, cost = planner.rebranch(planner._working_idea(s), s["research"], prev, feedback,
                                          founder=planner._founder(s), mock=MOCK)
+            regrade, cost = _regrade_setup(s, sib, cost)   # back onto the setup → re-grade the verdict
             toks = pipeline.LEDGER.tokens()
     except BusyError as be:
         return _busy_response(be)
@@ -915,7 +931,10 @@ async def api_plan_back(sid: str, request: Request):
         tree["nodes"][prev["parent"]].setdefault("children", []).append(node["id"])
     tree["active"] = node["id"]
     _meter(s.get("user"), cost)
-    _fold_usage(sid, s, cost, toks, tree=tree, **_mirror(tree))
+    updates = dict(tree=tree, **_mirror(tree))
+    if regrade:
+        updates["vetting"] = regrade
+    _fold_usage(sid, s, cost, toks, **updates)
     return _plan_state(store.plan_get(sid))
 
 
@@ -943,6 +962,7 @@ async def api_plan_redraft(sid: str, request: Request):
         with _run_slot(s.get("user"), s.get("stack")):
             sib, cost = planner.rebranch(planner._working_idea(s), s["research"], active, feedback,
                                          founder=planner._founder(s), mock=MOCK)
+            regrade, cost = _regrade_setup(s, sib, cost)   # setup reframed → re-grade the verdict on the new angle
             toks = pipeline.LEDGER.tokens()
     except BusyError as be:
         return _busy_response(be)
@@ -954,7 +974,10 @@ async def api_plan_redraft(sid: str, request: Request):
         tree["nodes"][active["parent"]].setdefault("children", []).append(node["id"])
     tree["active"] = node["id"]
     _meter(s.get("user"), cost)
-    _fold_usage(sid, s, cost, toks, tree=tree, **_mirror(tree))
+    updates = dict(tree=tree, **_mirror(tree))
+    if regrade:
+        updates["vetting"] = regrade
+    _fold_usage(sid, s, cost, toks, **updates)
     return _plan_state(store.plan_get(sid))
 
 
