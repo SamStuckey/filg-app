@@ -47,6 +47,7 @@ import teardown  # noqa: E402
 import usage     # noqa: E402
 import personas  # noqa: E402 — advisor/director registry (shared by ask-an-expert + the board)
 import board     # noqa: E402 — Board of Directors orchestration
+import director_forge  # noqa: E402 — forge a custom Board director from a description (distill→draft→QA)
 import gibberish  # noqa: E402 — pre-LLM "is this even an idea?" gate (saves a run, hands back a roast)
 import intake     # noqa: E402 — shape + vet (the kill-gate); /revet re-runs it after added substance
 import plan_pdf   # noqa: E402 — styled PDF generation (synthesis + fpdf2 render)
@@ -535,6 +536,9 @@ def _plan_state(s: dict) -> dict:
         "research": s.get("research"),
         "shaped": s.get("shaped"), "vetting": s.get("vetting"),
         "directors": s.get("directors") or [], "board": s.get("board") or [],
+        "customDirectors": [{"key": p["key"], "name": p["name"], "first": p.get("first"),
+                             "blurb": p.get("blurb"), "domains": p.get("domains") or []}
+                            for p in (s.get("custom_directors") or [])],   # custom-forged board chips
         "files": [{"path": p, "content": c} for p, c in (s.get("files") or {}).items()],
         "sections": [{"file": x["file"], "title": x["title"], "sub": x["sub"]}
                      for x in planner.SECTIONS],
@@ -731,7 +735,8 @@ async def api_plan_next(sid: str, request: Request):
             else:
                 child, cost = planner.forward(planner._working_idea(s), s["research"], active, feedback,
                                               directors=s.get("directors") or None,
-                                              founder=planner._founder(s), mock=MOCK)
+                                              founder=planner._founder(s), mock=MOCK,
+                                              extra_personas=s.get("custom_directors"))
             toks = pipeline.LEDGER.tokens()
     except BusyError as be:
         return _busy_response(be)
@@ -932,16 +937,19 @@ async def api_plan_board(sid: str, request: Request):
     if (wall := _key_wall(s)):
         return wall
     body = await request.json()
+    customs = s.get("custom_directors") or []
+    custom_keys = {p["key"] for p in customs}
     picked = body.get("directors")
     directors = [k for k in (picked or s.get("directors") or personas.DEFAULT_BOARD)
-                 if k in personas.KEYS] or personas.DEFAULT_BOARD
+                 if k in personas.KEYS or k in custom_keys] or personas.DEFAULT_BOARD
     question = (body.get("question") or "").strip() or \
         "Vet the plan so far — what's the one thing I should change before continuing?"
     work_idea = planner._working_idea(s)
     plan_text = planner.bundle_markdown(work_idea, s.get("files") or {})
     try:
         with _run_slot(s.get("user"), s.get("stack")):
-            res, cost = board.convene(work_idea, plan_text, question, directors, mock=MOCK)
+            res, cost = board.convene(work_idea, plan_text, question, directors, mock=MOCK,
+                                      extra_personas=customs)
             toks = pipeline.LEDGER.tokens()
     except BusyError as be:
         return _busy_response(be)
@@ -951,6 +959,67 @@ async def api_plan_board(sid: str, request: Request):
     extra = {"directors": directors} if picked else {}   # persist a freshly chosen board for later steps
     nc, nt = _fold_usage(sid, s, cost, toks, **extra)
     return {**res, "cost": nc, "tokens": nt}
+
+
+_MAX_CUSTOM_DIRECTORS = 8
+
+
+@app.post("/api/plan/{sid}/director/forge")
+async def api_director_forge(sid: str, request: Request):
+    """Forge a CUSTOM board director from a description (distill → draft → QA). Returns a DRAFT persona
+    (with its trace) that the operator can approve (save) or retry; nothing is seated until they save.
+    Runs on the owner's bound key, same as every engine op."""
+    s = store.plan_get(sid)
+    if not s or not _owns(request, s):
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    if (wall := _key_wall(s)):
+        return wall
+    body = await request.json()
+    desc = (body.get("description") or "").strip()
+    if len(desc) < 4:
+        return JSONResponse({"error": "Describe the director you want."}, status_code=400)
+    if len(desc) > 600:
+        return JSONResponse({"error": "Keep it under 600 characters."}, status_code=400)
+    if len(s.get("custom_directors") or []) >= _MAX_CUSTOM_DIRECTORS:
+        return JSONResponse({"error": "You've already forged a full bench of custom directors."},
+                            status_code=409)
+    existing = list(personas.KEYS) + [p["key"] for p in (s.get("custom_directors") or [])]
+    try:
+        with _run_slot(s.get("user"), s.get("stack")):
+            persona, cost = director_forge.forge(desc, existing_keys=existing, mock=MOCK)
+            toks = pipeline.LEDGER.tokens()
+    except BusyError as be:
+        return _busy_response(be)
+    except Exception as e:  # noqa: BLE001
+        return _engine_error(e)
+    _meter(s.get("user"), cost)
+    nc, nt = _fold_usage(sid, s, cost, toks)
+    return {"persona": persona, "cost": nc, "tokens": nt}
+
+
+@app.post("/api/plan/{sid}/director/save")
+async def api_director_save(sid: str, request: Request):
+    """Seat a forged director on the board: persist it to the session's custom_directors registry (so
+    board.convene can resolve it) and add it to the active board. Owner only."""
+    s = store.plan_get(sid)
+    if not s or not _owns(request, s):
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    p = (await request.json()).get("persona") or {}
+    if not (p.get("key") and p.get("name") and p.get("voice")):
+        return JSONResponse({"error": "Forge a director first."}, status_code=400)
+    customs = list(s.get("custom_directors") or [])
+    if len(customs) >= _MAX_CUSTOM_DIRECTORS:
+        return JSONResponse({"error": "You've already forged a full bench of custom directors."},
+                            status_code=409)
+    clean = {k: p.get(k) for k in ("key", "name", "first", "blurb", "domains", "voice")}
+    clean["custom"] = True
+    if not any(c["key"] == clean["key"] for c in customs):   # idempotent on re-save
+        customs.append(clean)
+    directors = list(s.get("directors") or [])
+    if clean["key"] not in directors:                        # seat them on the active board
+        directors.append(clean["key"])
+    store.plan_save(sid, custom_directors=customs, directors=directors)
+    return _plan_state(store.plan_get(sid))
 
 
 @app.post("/api/plan/{sid}/chat")
@@ -1350,7 +1419,26 @@ body.hasbar .workspace{padding-bottom:74px}
 .bdirs{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
 .bchip{font-size:12px;font-weight:700;padding:5px 10px;border:1px solid var(--line);background:#fff;cursor:pointer;color:var(--ink)}
 .bchip.on{background:#f0f0f0;border-color:#444;color:var(--link)}
+.bchip.custom{border-style:dashed}
 .convene{width:100%}
+/* Forge a custom director (sidebar input + modal tree + result card) */
+.forge{margin-top:12px;border-top:1px solid var(--line);padding-top:10px}
+.forge-h{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+.forge-sub{font-size:11.5px;color:var(--muted);margin:4px 0 6px;line-height:1.35}
+.forge textarea{width:100%;border:1px solid var(--line);background:#fff;font:inherit;font-size:13px;padding:7px 9px;resize:vertical}
+.forge-go{margin-top:6px;width:100%;background:var(--ink);color:#fff;border:1px solid var(--ink);font-weight:700;font-size:13px;padding:8px}
+.forgetree{display:flex;flex-direction:column;gap:6px;margin:10px 0}
+.ftstep{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted);padding:7px 9px;border:1px solid var(--line);background:#fafafa}
+.ftstep .ftleaf{filter:grayscale(1);opacity:.45;transition:all .2s}
+.ftstep.running{color:var(--ink)}.ftstep.running .ftleaf{filter:grayscale(.3);opacity:.9}
+.ftstep.done{color:var(--ink)}.ftstep.done .ftleaf{filter:none;opacity:1}
+.ftnote{margin-left:auto;font-size:11.5px;color:var(--muted);font-style:italic;text-align:right;max-width:52%}
+.forgecard{border:1px solid var(--line);background:#fafafa;padding:12px 14px;margin-top:8px}
+.fc-name{font-size:15px;font-weight:700}.fc-first{color:var(--muted);font-weight:400;font-size:13px}
+.fc-blurb{color:var(--muted);font-size:12.5px;margin:2px 0 8px}
+.fc-voice{font-size:13.5px;line-height:1.5}
+.fc-doms{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.fdom{font-size:11px;font-weight:700;color:var(--muted);border:1px solid var(--line);padding:2px 7px;border-radius:10px}
 .boardpick{margin:0 0 12px}.boardpick .lab{font-size:13px;color:var(--muted);font-weight:700;text-align:left}
 .boardpick .bp-head{display:flex;align-items:center;gap:8px;width:100%;background:none;border:0;padding:0;cursor:pointer;font:inherit}
 .bp-caret{margin-left:auto;color:var(--muted);font-size:11px;transition:transform .15s}
@@ -1545,6 +1633,13 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <div class=secbody><p class=bhelp>Tap to add or drop a director, then convene them on your plan.</p>
 <div class=bdirs id=boarddirs></div>
 <button type=button class=convene id=convene onclick=convene()>Convene the board</button>
+<div class=forge>
+<div class=forge-h>Forge your own director</div>
+<p class=forge-sub>Describe the advisor you wish you had. We can't say we trained them on anyone real… but we can't stop you from asking.</p>
+<label for=forgeinput class=sr-only>Describe your ideal director</label>
+<textarea id=forgeinput rows=2 placeholder="e.g. a ruthless ops nerd who has scaled 3 agencies and hates busywork"></textarea>
+<button type=button class=forge-go onclick=openForge()>\\u2726 Forge a director \\u2192</button>
+</div>
 <div class=disc>AI composite directors, not real people, not professional advice.</div></div></div>
 <div class="sec collap open" id=researchsec><button type=button class=sechead aria-expanded=true onclick="toggleSec('researchsec')"><h3>Research, graded</h3><span class=caret aria-hidden=true>▸</span></button>
 <div class=secbody><div id=research></div></div></div>
@@ -1580,7 +1675,7 @@ function requireKey(){               // gate any API-calling button: no key → 
   return true;
 }
 // The bail-out button: send the procrastinator to a random snarky Google search.
-const GOOFS=["videos of cats", "ways to waste time on the internet", "how to sell pogs", "is a hotdog a sandwich", "are birds real", "how many golf balls fit in a school bus", "capybara compilation", "how do magnets work", "longest yawn world record", "cat playing piano", "how to do a kickflip", "best paper airplane design", "why do cats knock things off tables", "goat screaming like a human", "is cereal a soup", "what year did the romans fall asleep", "do fish get thirsty", "how long can a snail nap", "world's largest ball of twine", "can you hear a hug", "why is the sky not green", "how to win a staring contest against a pigeon", "is water wet", "do trees talk to each other", "how many licks to the center of a tootsie pop", "can a duck climb a ladder", "why do we say um", "history of the high five", "who invented the wheel and why", "can you outrun a goose", "how to fold a fitted sheet", "why do dogs tilt their heads", "is a tomato a fruit lawsuit", "longest recorded sneeze", "how do they get the caramel in the candy bar", "why is yawning contagious", "do penguins have knees", "how to whistle with your fingers", "what does a quokka sound like", "competitive cup stacking finals", "extreme ironing world championship", "octopus solving a puzzle", "why do we get goosebumps", "can plants feel music", "how to skip a rock 50 times", "what is the speed of dark", "do cows have best friends", "why do feet smell like corn chips", "facts about mantis shrimp", "how long can a packing peanuts hold its breath", "weird history of hedgehogs", "is pogs actually weird", "how to fold a paper crane", "do cows dream", "how long can a emus nap", "unboxing a unicycles", "how long can a claw machines hold its breath", "do geese dream", "why do parrots hum the wrong tune", "weird history of llamas", "the mariana trench but in slow motion", "ranking every bagpipes", "top 10 owls", "videos of roman plumbing", "are robots real", "what if bees could win a staring contest", "a brief history of axolotls", "unboxing a kombucha", "unboxing a tamagotchis", "ferrets compilation", "facts about manatees", "can you balance a spoon on your nose a extreme ironing", "how to juggle", "why is quokkas so strangely calming", "ranking every crop circles", "competitive curling highlights", "is the dewey decimal system actually majestic", "is fax machines actually mildly cursed", "slow motion raccoons", "what if bees could throw a boomerang", "slow motion crop circles", "why we stopped using monorails", "suspiciously round cheese rolling explained", "videos of bubble baths", "ranking every the mariana trench", "how do parrots work", "why is bungee cords so needlessly complicated", "misunderstood the loch ness monster explained", "a brief history of traffic cones", "what does a cheese rolling sound like", "competitive velcro highlights", "how to win at the loch ness monster", "videos of ball pits", "the science of whoopee cushions", "how do dogs work", "what if goldfish could yodel", "strangely calming monorails explained", "the science of gurning", "competitive ancient memes highlights", "slow motion garden gnomes", "how do hamsters work", "oddly satisfying otters", "slow motion fidget spinners", "ranking every kazoos", "weird history of narwhals", "weird history of sloths", "ranking every beanie babies", "how do horses work", "expired coupons world record", "how long can a escalators stand on one leg", "what does a gurning sound like", "slow motion hedgehogs", "best bagpipes for beginners", "the science of mothman sightings", "how to win at drop bears", "why is pogs so low key terrifying", "facts about stilts", "yo-yos but in slow motion", "what if hamsters could tap dance", "slow motion mothman sightings", "how to crack an egg with one hand", "how to win at kazoos", "unboxing a the oxford comma", "facts about fidget spinners", "why do peacocks tilt their heads", "overrated kombucha explained", "what does a staplers sound like", "ranking every trampolines", "how long can a staplers go without snacks", "slow motion cardboard tube fighting", "best flamingos for beginners", "claw machines compilation", "a brief history of beanie babies", "laser discs compilation", "top 10 cats", "unstoppable yetis explained", "how long can a ostriches go without snacks", "videos of synchronized swimming", "how they make monorails", "best sloths for beginners", "how they make cardboard tube fighting", "what if turkeys could open a coconut", "are ants real", "why is wind chimes so low key terrifying", "unboxing a emus", "roman plumbing compilation", "pelicans compilation", "ranking every medieval peasants", "do goats dream", "why is synchronized swimming so misunderstood", "a brief history of the dewey decimal system", "facts about narwhals", "is fidget spinners actually suspiciously round", "can you do a cartwheel a competitive eating", "best ostriches for beginners", "how do goldfish work", "a brief history of otters", "how to yodel", "the science of harmonicas", "weird history of pool noodles", "best cheese rolling for beginners", "is rubber ducks actually low key terrifying", "how do raccoons work", "are crabs real", "can you balance a spoon on your nose a wife carrying", "best bubble wrap for beginners", "tiny snow globes doing businessy things", "what does a worm charming sound like", "weird history of expired coupons", "what if horses could yodel", "competitive mantis shrimp highlights", "why do possums stare into the void", "what if turkeys could parallel park a unicycle", "weird history of drop bears", "are cats real", "oddly satisfying claw machines", "slow motion yo-yos", "how to beatbox", "best tamagotchis for beginners", "bog snorkeling but in slow motion", "how do squirrels work", "ranking every competitive thumb wrestling", "weird history of bigfoot footage", "are ducks real", "can you crack an egg with one hand a medieval peasants", "weird sourdough starters explained", "best pelicans for beginners", "how long can a professional sleeping wait in line", "ancient memes but in slow motion", "facts about crop circles", "why we stopped using cheese rolling", "best whoopee cushions for beginners", "ranking every bungee cords", "what if turkeys could fold a fitted sheet", "ranking every hedgehogs", "ranking every cloud watching", "competitive the oxford comma highlights", "suspiciously round jackalopes explained", "how long can a leaf piles hold its breath", "weird history of ostriches", "weird history of the oxford comma", "why is mothman sightings so needlessly complicated", "why we stopped using pinball machines", "how they make theremins", "competitive harmonicas highlights", "slow motion segways", "are geese real", "best cloud watching for beginners", "how long can a snow globes stand on one leg", "best alpacas for beginners", "unboxing a sourdough starters", "tiny the oxford comma doing official things", "oddly satisfying mantis shrimp", "weird history of harmonicas", "a brief history of the bermuda triangle", "are goldfish real", "is flamingos actually unstoppable", "videos of quokkas", "do owls dream", "lawn flamingos compilation", "manatees compilation", "can you throw a boomerang a flamingos", "can you peel a banana from the bottom a bungee cords", "how to balance a spoon on your nose", "how they make whoopee cushions", "unboxing a revolving doors", "why we stopped using vending machines", "why is the dewey decimal system so aggressively cute", "unstoppable traffic cones explained", "weird history of crop circles", "how to skip a rock", "why do pigeons stare into the void", "why is floppy disks so low key terrifying", "ranking every bubble baths", "aggressively cute the mariana trench explained", "a brief history of viking helmets", "do ducks dream", "can you spin a basketball a lawn flamingos", "tiny leaf piles doing majestic things", "the science of crop circles", "best unicycles for beginners", "how long can a bubble wrap stand on one leg", "how do ants work", "top 10 horses", "competitive pinball machines highlights", "how to win at tamagotchis", "ostriches compilation", "competitive capybaras highlights", "top 10 dogs", "top 10 geese", "what if dogs could moonwalk", "what if cows could fold a fitted sheet", "competitive wife carrying highlights", "top 10 turkeys", "how to shuffle cards like a dealer", "how they make roman plumbing", "is theremins actually suspiciously round", "quokkas but in slow motion", "tiny penny farthings doing majestic things", "a brief history of monorails", "ranking every lawn flamingos", "can you beatbox a synchronized swimming", "the science of otters", "can you solve a rubiks cube a competitive thumb wrestling", "is ostriches actually weird", "the science of velcro", "why do squirrels ignore you on purpose", "how to peel a banana from the bottom", "how to win at emus", "escalators compilation", "what if geese could shuffle cards like a dealer", "slow motion ancient memes", "weird history of penny farthings", "do goldfish dream", "videos of segways", "how long can a the dewey decimal system sit still", "do horses dream", "how to win at rubber ducks", "tiny ostriches doing dramatic things", "weird history of shin kicking", "a brief history of pogo sticks", "oddly satisfying duct tape", "the science of medieval peasants", "slow motion whoopee cushions", "how they make mantis shrimp", "yo-yos world record", "ranking every the loch ness monster", "how they make claw machines", "best lava lamps for beginners", "pogs but in slow motion", "how they make cheese rolling", "do turkeys dream", "packing peanuts but in slow motion", "weird history of escalators", "tiny cheese rolling doing very serious things", "videos of competitive thumb wrestling", "facts about cloud watching", "best pogo sticks for beginners", "how long can a emus hold its breath", "videos of curling", "how long can a curling stand on one leg", "videos of sloths", "do seagulls dream", "how do pigeons work", "tiny ball pits doing tiny things", "extremely normal tardigrades explained", "competitive napping compilation", "best expired coupons for beginners", "how to win at ferrets", "how to win at the dewey decimal system", "competitive claw machines highlights", "tiny axolotls doing dramatic things", "are goats real", "the science of tamagotchis", "a brief history of cheese rolling", "a brief history of stilts", "why do bees clap at the wrong time", "weird history of tamagotchis", "what does a tardigrades sound like", "the science of dial up internet", "how to win at bigfoot footage", "ranking every mothman sightings", "videos of raccoons", "slow motion cave paintings", "top 10 crabs", "how to win at cloud watching", "oddly satisfying quokkas", "facts about monorails", "tiny narwhals doing dramatic things", "do raccoons dream", "can you throw a boomerang a bungee cords", "a brief history of yetis", "top 10 goldfish", "why we stopped using emus", "oddly satisfying expired coupons", "videos of worm charming", "why we stopped using bog snorkeling", "why is velcro so strangely calming", "why do goldfish show up early", "videos of capybaras", "how to win at raccoons", "what if goats could open a coconut", "how they make competitive napping", "what does a bigfoot footage sound like", "videos of cardboard tube fighting", "the dewey decimal system world record", "how to win at mothman sightings", "synchronized swimming world record", "tiny pagers doing dramatic things", "ball pits but in slow motion", "needlessly complicated vending machines explained", "why is professional sleeping so mildly cursed", "facts about theremins", "strangely calming tardigrades explained", "why we stopped using the oxford comma", "tiny kombucha doing tiny things", "why is wombats so overrated", "why we stopped using capybaras", "why we stopped using hedgehogs", "facts about cave paintings", "tiny drop bears doing majestic things", "why we stopped using penny farthings", "the science of ostriches", "facts about duct tape", "is alpacas actually aggressively cute", "ranking every manatees", "can you whistle with two fingers a pelicans", "how to win at hedgehogs", "do hamsters dream", "the science of lawn flamingos", "ranking every accordions", "best leaf piles for beginners", "ranking every fidget spinners", "how to win at revolving doors", "can you moonwalk a rubber ducks", "what does a beanie babies sound like", "what if squirrels could crack an egg with one hand", "what if crabs could throw a boomerang", "unstoppable tamagotchis explained", "how do goats work", "what does a mantis shrimp sound like", "is escalators actually strangely calming", "top 10 squirrels", "best pagers for beginners", "is competitive eating actually mildly cursed", "competitive gurning highlights", "how long can a worm charming hold its breath", "competitive staplers highlights", "misunderstood flamingos explained", "why is bigfoot footage so weird", "floppy disks but in slow motion", "tiny the mariana trench doing dramatic things", "videos of wife carrying", "wind chimes world record", "why is ferrets so majestic", "how long can a beanie babies wait in line", "do parrots dream", "what does a zeppelins sound like", "best garden gnomes for beginners", "best raccoons for beginners", "how long can a emus stand on one leg", "oddly satisfying velcro", "how they make extreme ironing", "why is zip ties so suspiciously round", "can you shuffle cards like a dealer a yo-yos", "needlessly complicated cheese rolling explained", "facts about worm charming", "weird history of extreme ironing", "the science of shin kicking", "tiny alpacas doing businessy things", "how do ducks work", "is wombats actually strangely calming", "what does a narwhals sound like", "how do geese work", "wind chimes but in slow motion", "what does a stilts sound like", "how do possums work", "can you win a staring contest a capybaras", "facts about the dewey decimal system", "stilts world record", "slow motion pogs", "unboxing a fidget spinners", "why we stopped using stilts", "the science of leaf piles", "viking helmets but in slow motion", "can you win a staring contest a gurning", "do crabs dream", "weird zip ties explained", "why is worm charming so weird", "unboxing a the mariana trench", "is wife carrying actually strangely calming", "competitive whoopee cushions highlights", "facts about jackalopes", "overrated vending machines explained", "overrated zeppelins explained", "are possums real", "why is ostriches so mildly cursed", "wife carrying but in slow motion", "videos of claw machines", "videos of fidget spinners", "competitive lawn flamingos highlights", "how to win at roman plumbing", "unboxing a professional sleeping", "alpacas world record", "how long can a whoopee cushions go without snacks", "a brief history of extreme ironing", "how do cats work", "cheese rolling compilation", "rubber ducks world record", "oddly satisfying crop circles", "can you do a kickflip a cardboard tube fighting", "how to tie a bow tie", "why do raccoons circle the parking lot twice", "what does a roman plumbing sound like", "can you fold a paper crane a synchronized swimming", "how long can a unicycles stay focused", "the science of pagers", "how they make professional sleeping", "capybaras compilation", "facts about whoopee cushions", "why we stopped using claw machines", "a brief history of synchronized swimming", "tiny the loch ness monster doing dramatic things", "best zip ties for beginners", "why is lawn flamingos so unstoppable", "how they make llamas", "what if ants could peel a banana from the bottom", "a brief history of llamas", "how they make bungee cords", "what does a pool noodles sound like", "weird history of mothman sightings", "best traffic cones for beginners", "how do cows work", "top 10 peacocks", "how to win at yo-yos", "what if goats could shuffle cards like a dealer", "weird history of competitive napping", "mildly cursed professional sleeping explained", "videos of crop circles", "are hamsters real", "what does a wind chimes sound like", "videos of the bermuda triangle", "accordions but in slow motion", "why we stopped using extreme ironing", "the science of yetis", "facts about kombucha", "how long can a axolotls wait in line", "how to whistle with two fingers", "how they make lawn flamingos", "tamagotchis but in slow motion", "how to parallel park a unicycle", "slow motion expired coupons", "ranking every traffic cones", "what does a toe wrestling sound like", "how they make mothman sightings", "weird history of sourdough starters", "slow motion curling", "pelicans but in slow motion", "ranking every bog snorkeling", "best puffins for beginners"];
+const GOOFS=["is a hotdog a sandwich", "are birds real", "how many golf balls fit in a school bus", "why do cats knock things off tables", "goat screaming like a human", "is cereal a soup", "do fish get thirsty", "how long can a snail nap", "world's largest ball of twine", "can you outrun a goose", "how to fold a fitted sheet", "why do we say um", "who invented the wheel and why", "how many licks to the center of a tootsie pop", "do penguins have knees", "why is yawning contagious", "capybara compilation", "competitive cup stacking finals", "extreme ironing world championship", "octopus solving a puzzle", "why do feet smell like corn chips", "is water wet", "do trees talk to each other", "how to win a staring contest against a pigeon", "longest recorded sneeze", "how do they get the caramel in the candy bar", "what does a quokka sound like", "why do dogs tilt their heads", "the history of the high five", "can a duck climb a ladder", "videos of cats being unimpressed", "how to sell pogs in 2026", "ways to waste time on the internet", "what is the speed of dark", "do cows have best friends", "cheese rolling gloucester injuries", "competitive wife carrying championship", "why do we get goosebumps", "how to skip a rock 50 times", "is a tomato a fruit lawsuit", "man vs raccoon who would win", "bigfoot caught on ring camera", "how to whistle with two fingers", "why do escalators feel weird when stopped", "how do they paint the lines on the road", "why does the alphabet song end so suddenly", "competitive thumb wrestling rules", "what would happen if everyone jumped at once", "how to look busy at work", "why do we park in driveways and drive on parkways", "medieval people reacting to a zipper", "how long could you survive in a ball pit", "world record for most t-shirts worn at once", "do ants have rush hour", "how to convincingly fake a sneeze", "why is it called a building if it is already built", "can you hear a hug", "how to win an argument with a cat", "is it weird to name your roomba", "why do snacks taste better when stolen", "do penguins get cold feet", "how to moonwalk badly", "why is the loch ness monster still missing", "quokka selfie compilation", "how to yodel quietly"];
 function goofOff(){
   const q=GOOFS[Math.floor(Math.random()*GOOFS.length)];
   location.href='https://www.google.com/search?q='+encodeURIComponent(q);
@@ -2264,14 +2359,20 @@ function toggleBoard(key,btn){
   if(btn){btn.classList.toggle('on',on);btn.setAttribute('aria-pressed',String(on));}
   const c=document.getElementById('bp-n'); if(c)c.textContent=BOARD.length?` (${BOARD.length} picked)`:'';   // live count in the collapsed header
 }
+let CUSTOM_DIRECTORS=[];
 function renderBoard(s){
   const sec=document.getElementById('boardsec'); if(!sec)return;
   if(s.status==='researching'){sec.style.display='none';return;}
   sec.style.display='';
-  // Chips reflect the active board; tap to add/drop a director for on-demand convening.
+  CUSTOM_DIRECTORS=s.customDirectors||[];
+  // Chips reflect the active board; tap to add/drop a director for on-demand convening. Custom-forged
+  // directors are listed alongside the built-ins (flagged with a ✦).
   if(SESSION_BOARD===null) SESSION_BOARD=(s.directors&&s.directors.length?s.directors.slice():BOARD.slice());
-  document.getElementById('boarddirs').innerHTML=(CFG.archetypes||[]).map(a=>
-    `<button type=button class="bchip${SESSION_BOARD.includes(a.key)?' on':''}" aria-pressed=${SESSION_BOARD.includes(a.key)} onclick="toggleSessionBoard('${a.key}',this)" title="${esc(a.first?a.first+', ':'')}${esc(a.blurb)}">${esc(a.name)}</button>`).join('');
+  const all=(CFG.archetypes||[]).concat(CUSTOM_DIRECTORS);
+  document.getElementById('boarddirs').innerHTML=all.map(a=>{
+    const custom=CUSTOM_DIRECTORS.some(c=>c.key===a.key);
+    return `<button type=button class="bchip${custom?' custom':''}${SESSION_BOARD.includes(a.key)?' on':''}" aria-pressed=${SESSION_BOARD.includes(a.key)} onclick="toggleSessionBoard('${a.key}',this)" title="${esc(a.first?a.first+', ':'')}${esc(a.blurb||'')}">${custom?'\\u2726 ':''}${esc(a.name)}</button>`;
+  }).join('');
 }
 let SESSION_BOARD=null;
 function toggleSessionBoard(key,el){
@@ -2280,6 +2381,75 @@ function toggleSessionBoard(key,el){
   if(i>=0){SESSION_BOARD.splice(i,1);}else{SESSION_BOARD.push(key);}
   el.classList.toggle('on',on);el.setAttribute('aria-pressed',String(on));
 }
+// ── Forge a custom director: distill → draft → QA tree in a modal, then approve / retry / cancel ──
+let FORGE_DRAFT=null, FORGE_DESC='', FORGE_TIMER=null, FORGE_BUSY=false;
+const FORGE_STEPS=[{k:'distill',l:'Distilling the archetype'},{k:'draft',l:'Drafting the director'},{k:'qa',l:"QA: checking they're distinct + useful"}];
+function openForge(){
+  if(!requireKey())return;
+  const desc=((document.getElementById('forgeinput')||{}).value||'').trim();
+  if(desc.length<4){toast('Describe the director you want first.','err');const t=document.getElementById('forgeinput');if(t)t.focus();return;}
+  FORGE_DESC=desc;
+  document.getElementById('modal-title').textContent='Forging your director';
+  document.getElementById('modal-body').innerHTML=
+    `<p class=mfb-hint>Running a quick research + QA pass on: <i>${esc(desc.length>120?desc.slice(0,120)+'\\u2026':desc)}</i></p>`+
+    `<div class=forgetree id=forgetree>`+FORGE_STEPS.map(st=>`<div class=ftstep data-k=${st.k}><span class=ftleaf aria-hidden=true>\\uD83C\\uDF43</span><span class=ftlabel>${esc(st.l)}</span><span class=ftnote></span></div>`).join('')+`</div>`+
+    `<div class=forgeout id=forgeout></div>`;
+  document.getElementById('modal-actions').innerHTML=`<button type=button class=ghost onclick=cancelForge()>Cancel</button>`;
+  _openModal('#modal-title');
+  runForge();
+}
+function _forgeStep(k,state,note){const row=document.querySelector('#forgetree .ftstep[data-k="'+k+'"]');if(!row)return;
+  row.classList.remove('running','done');if(state)row.classList.add(state);if(note!=null){const n=row.querySelector('.ftnote');if(n)n.textContent=note;}}
+function runForge(){
+  FORGE_BUSY=true; FORGE_DRAFT=null;
+  const out=document.getElementById('forgeout'); if(out)out.innerHTML='';
+  FORGE_STEPS.forEach(st=>_forgeStep(st.k,''));
+  // animate the tree greening up while the request is in flight (snaps to done on response)
+  let i=0; _forgeStep(FORGE_STEPS[0].k,'running');
+  if(FORGE_TIMER)clearInterval(FORGE_TIMER);
+  FORGE_TIMER=setInterval(()=>{ if(i<FORGE_STEPS.length){_forgeStep(FORGE_STEPS[i].k,'done');i++; if(i<FORGE_STEPS.length)_forgeStep(FORGE_STEPS[i].k,'running');} },1400);
+  _aiRun('/api/plan/'+SID+'/director/forge',{description:FORGE_DESC}).then(async r=>{
+    const d=await r.json(); clearInterval(FORGE_TIMER); FORGE_TIMER=null; FORGE_BUSY=false;
+    if(!r.ok){ FORGE_STEPS.forEach(st=>_forgeStep(st.k,'')); showForgeError(d.error||'Could not forge a director.'); return; }
+    if(d.cost!=null)meterTick({id:SID,cost:d.cost,tokens:d.tokens});
+    FORGE_DRAFT=d.persona||null;
+    const trace={}; ((FORGE_DRAFT&&FORGE_DRAFT.trace)||[]).forEach(t=>{trace[t.step]=t.note;});
+    FORGE_STEPS.forEach(st=>_forgeStep(st.k,'done',trace[st.k]||''));
+    showForgeResult();
+  }).catch(()=>{ if(FORGE_TIMER)clearInterval(FORGE_TIMER); FORGE_TIMER=null; FORGE_BUSY=false; showForgeError('Network error.'); });
+}
+function showForgeResult(){
+  const p=FORGE_DRAFT, out=document.getElementById('forgeout'); if(!out)return;
+  if(!p){showForgeError('No director came back. Try again.');return;}
+  const doms=(p.domains||[]).slice(0,6).map(d=>`<span class=fdom>${esc(d)}</span>`).join('');
+  out.innerHTML=`<div class=forgecard><div class=fc-name>\\u2726 ${esc(p.name)}${p.first?` <span class=fc-first>(${esc(p.first)})</span>`:''}</div>`+
+    `<div class=fc-blurb>${esc(p.blurb||'')}</div>`+
+    `<div class="fc-voice md">${mdToHtml(p.voice||'')}</div>`+
+    (doms?`<div class=fc-doms>${doms}</div>`:'')+`</div>`;
+  document.getElementById('modal-actions').innerHTML=
+    `<button type=button class=ghost onclick=cancelForge()>Cancel</button>`+
+    `<button type=button class=ghost onclick=runForge()>\\u21bb Retry</button>`+
+    `<button type=button class=mfb-go onclick=approveForge()>\\u2713 Seat on my board</button>`;
+}
+function showForgeError(msg){
+  const out=document.getElementById('forgeout'); if(out)out.innerHTML=`<div class=ferr>${esc(msg)}</div>`;
+  document.getElementById('modal-actions').innerHTML=
+    `<button type=button class=ghost onclick=cancelForge()>Cancel</button>`+
+    `<button type=button class=mfb-go onclick=runForge()>\\u21bb Retry</button>`;
+}
+async function approveForge(){
+  if(!FORGE_DRAFT)return;
+  try{
+    const r=await fetch('/api/plan/'+SID+'/director/save',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({persona:FORGE_DRAFT})});
+    const s=await r.json();
+    if(!r.ok){showForgeError(s.error||'Could not seat the director.');return;}
+    SESSION_BOARD=null;                 // re-seed the board chips (the new director is now seated)
+    const fi=document.getElementById('forgeinput'); if(fi)fi.value='';
+    _closeModal(); render(s); toast('\\u2726 '+(FORGE_DRAFT.name||'Director')+' seated on your board.','ok');
+    FORGE_DRAFT=null;
+  }catch(e){showForgeError('Network error.');}
+}
+function cancelForge(){ if(FORGE_TIMER){clearInterval(FORGE_TIMER);FORGE_TIMER=null;} FORGE_DRAFT=null; FORGE_BUSY=false; _closeModal(); }
 // Ask-an-expert + convene open the advisor drawer (a styled flyout, not a browser dialog).
 function ask(key){openDrawer('expert',key);}
 function convene(){openDrawer('board');}

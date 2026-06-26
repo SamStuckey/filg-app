@@ -107,7 +107,8 @@ def init() -> None:
                 # Migration for DBs created before later columns existed (SQLite has no ADD COLUMN IF
                 # NOT EXISTS) — add any missing ones, ignore if already present.
                 have = {r["name"] for r in con.execute("PRAGMA table_info(plan_sessions)")}
-                for col in ("shaped", "vetting", "directors", "board", "tree", "chat", "progress"):
+                for col in ("shaped", "vetting", "directors", "board", "tree", "chat", "progress",
+                            "custom_directors"):
                     if col not in have:
                         con.execute(f"ALTER TABLE plan_sessions ADD COLUMN {col} TEXT")
                 if "shared" not in have:
@@ -256,7 +257,8 @@ def coupon_status(code: str) -> dict | None:
 
 # ── Plan-builder sessions ────────────────────────────────────────────────────
 _PLAN_JSON = ("research", "files", "proposal", "history",  # columns stored as JSON
-              "shaped", "vetting", "directors", "board", "tree", "chat", "progress")
+              "shaped", "vetting", "directors", "board", "tree", "chat", "progress",
+              "custom_directors")
 
 
 def plan_create(session_id: str, user: str, idea: str, directors: list | None = None) -> None:

@@ -177,10 +177,15 @@ def get(key: str) -> dict | None:
     return BY_KEY.get(key)
 
 
+def system_for_persona(persona: dict) -> str:
+    """System block for ANY persona dict — a built-in or a custom-forged one (director_forge):
+    shared director base + this persona's voice. Custom directors flow through the board unchanged."""
+    return f"{skills.system('director_base')}\n\n## Your persona\n\n{persona['voice']}"
+
+
 def system_for(key: str) -> str:
-    """The full system block for a persona: shared director base + this persona's voice."""
-    p = BY_KEY[key]
-    return f"{skills.system('director_base')}\n\n## Your persona\n\n{p['voice']}"
+    """The full system block for a registered persona: shared director base + this persona's voice."""
+    return system_for_persona(BY_KEY[key])
 
 
 def _score(persona: dict, text: str) -> int:

@@ -357,7 +357,8 @@ def advance(session: dict, choice: str, note: str | None, mock: bool = False,
     # The board reviews the section just finalized; its takeaway then steers the next draft.
     if directors:
         review, bc = board.review_section(idea, section["title"], draft,
-                                          bundle_markdown(idea, files), directors, mock=mock)
+                                          bundle_markdown(idea, files), directors, mock=mock,
+                                          extra_personas=session.get("custom_directors"))
         reviews.append({"section": section["file"], "title": section["title"], **review})
         cost = round(cost + bc, 4)
 
@@ -391,7 +392,7 @@ def root_node(proposal: dict) -> dict:
 
 def forward(idea: str, research_data: dict, node: dict, feedback: str | None,
             directors: list | None = None, founder: str | None = None,
-            mock: bool = False) -> tuple[dict, float]:
+            mock: bool = False, extra_personas=None) -> tuple[dict, float]:
     """Finalize `node`'s section (re-synthesizing if `feedback` steers it), optionally let the board
     review it, then draft the next section. Returns (child_node_content, cost). When the section just
     finalized is the last one, the child is a terminal 'done' node (no draft)."""
@@ -412,7 +413,8 @@ def forward(idea: str, research_data: dict, node: dict, feedback: str | None,
     files[section["file"]] = final
     if directors:
         review, bc = board.review_section(idea, section["title"], final,
-                                          bundle_markdown(idea, files), directors, mock=mock)
+                                          bundle_markdown(idea, files), directors, mock=mock,
+                                          extra_personas=extra_personas)
         reviews = reviews + [{"section": section["file"], "title": section["title"], **review}]
         cost += bc
     if step + 1 < N:
