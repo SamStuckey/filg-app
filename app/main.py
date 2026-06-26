@@ -1487,6 +1487,16 @@ body.hasbar .workspace{padding-bottom:74px}
 .modal h3{font-size:18px;font-weight:700;margin:0 0 8px}
 .modal #modal-body{font-size:14px;color:var(--muted);margin-bottom:16px}.modal #modal-body p{margin:0}
 .modal-actions{display:flex;justify-content:flex-end;gap:10px}
+/* medium-large modal for popped-out sidebar sections */
+.modal.big{width:min(760px,94vw)}
+.modal.big #modal-body{font-size:14px;color:var(--ink);max-height:68vh;overflow:auto}
+/* the "open in a window" button on every collapsible sidebar section, next to the caret */
+.sec.collap{position:relative}
+.sec-pop{position:absolute;top:11px;right:30px;background:none;border:0;color:var(--muted);font-size:14px;line-height:1;cursor:pointer;padding:2px 4px}
+.sec-pop:hover{color:var(--ink)}
+/* the straight read, now rendered inside its sidebar section (no inner card chrome) */
+.vet.sr{border:0;background:none;padding:0}
+.vet.sr .vetbody{display:block;margin-top:0}
 .cmtpop{position:absolute;z-index:60;width:288px;background:var(--card);border:1px solid #888;padding:10px 12px;opacity:0;visibility:hidden;transition:opacity .12s}
 .cmtpop.show{opacity:1;visibility:visible}
 .cmtpop .cmtpq{font-size:12px;color:var(--muted);font-style:italic;margin-bottom:7px;max-height:48px;overflow:hidden}
@@ -1618,6 +1628,10 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <button type=button class=drawer-rail onclick="document.body.classList.remove('drawer-collapsed')" aria-label="Open tools">&#9776; Tools</button>
 <aside class=side>
 <div class=drawerhead><b>Tools</b><button type=button class=drawerx onclick="document.body.classList.add('drawer-collapsed')" aria-label="Collapse tools">&#8249;</button></div>
+<div class="sec collap" id=straightsec style="display:none"><button type=button class=sechead aria-expanded=false onclick="toggleSec('straightsec')"><h3>The straight read</h3><span class=caret aria-hidden=true>▸</span></button>
+<div class=secbody><div id=vet></div></div></div>
+<div class="sec collap" id=takeawaysec style="display:none"><button type=button class=sechead aria-expanded=false onclick="toggleSec('takeawaysec')"><h3>Your board weighed in</h3><span class=caret aria-hidden=true>▸</span></button>
+<div class=secbody><div id=boardround></div></div></div>
 <div class="sec collap" id=chatsec style="display:none"><button type=button class=sechead aria-expanded=false onclick="toggleSec('chatsec')"><h3>Chat with your plan</h3><span class=caret aria-hidden=true>▸</span></button>
 <div class=secbody>
 <div class=chatlog id=chatlog></div>
@@ -1653,7 +1667,6 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <div class=planwrap id=planwrap style="display:none"><div class=plantabs id=plantabs role=tablist aria-label="Your plan, part by part"></div></div>
 <div id=planview style="display:none"></div>
 <div id=node></div>
-<div id=boardround></div>
 <div class=err id=err2></div>
 </main>
 <div class=actionbar id=actionbar aria-label="Plan step actions"></div>
@@ -1847,7 +1860,7 @@ function render(s){
     document.getElementById('node').innerHTML='<div class=node><h3>Hit a snag</h3><p class=lead>'+esc(s.error||'Something went wrong.')+'</p>'+fix+'<button type=button class=ghost onclick=newPlan()>Start over</button></div>';
     say('Something went wrong: '+(s.error||'')); return;
   }
-  renderResearch(s);renderAnswer(s);renderVet(s);renderNode(s);renderPlanTabs(s);renderAddons(s);renderBoard(s);renderBoardRound(s);renderChat(s);renderStack(s);syncSidebar(s);
+  renderResearch(s);renderAnswer(s);renderVet(s);renderNode(s);renderPlanTabs(s);renderAddons(s);renderBoard(s);renderBoardRound(s);renderChat(s);renderStack(s);syncSidebar(s);maybeGreetStraightRead(s);
   if(s.done&&SID&&location.pathname!=='/plan/'+SID)history.pushState({plan:SID},'','/plan/'+SID);   // finished plan gets a clean URL (revisit + bookmark)
   if(s.done)say('Your plan is complete, all '+s.total+' parts ready to download.');
   else if(s.vetting&&s.vetting.verdict)say('Research graded. Verdict: '+s.vetting.verdict+'. Ready to build part '+((s.step||0)+1)+'.');
@@ -1867,6 +1880,8 @@ function syncSidebar(s){
   setOpen('researchsec',phase==='intro');
   setOpen('expertsec',phase==='build');
   setOpen('boardsec',phase==='build');
+  setOpen('straightsec',phase==='intro');    // the straight read leads the first view
+  setOpen('takeawaysec',phase==='build');
 }
 let CHAT_BUSY=false;
 function renderChat(s){
@@ -1911,8 +1926,10 @@ function skepticCardHtml(sk){
 }
 function renderBoardRound(s){
   const el=document.getElementById('boardround'); if(!el)return;
+  const sec=document.getElementById('takeawaysec');
   const reviews=s.board||[];
-  if(!reviews.length){el.innerHTML='';return;}
+  if(!reviews.length){el.innerHTML='';if(sec)sec.style.display='none';return;}
+  if(sec)sec.style.display='';   // board takeaway lives in the left sidebar now (color coding kept)
   const r=reviews[reviews.length-1];   // the board's take on the section just finalized
   const balloons=(r.directors||[]).map((d,i)=>{
     const id='bal_'+i;
@@ -1958,8 +1975,7 @@ function renderAnswer(s){
   const stamp=v?`<span class="verdict ${esc(v)}">${esc(v)}</span>`:'';   // PURSUE/PIVOT/KILL sits next to the headline
   a.innerHTML=`<button type=button class=sum-head aria-expanded="${SUM_OPEN}" onclick=toggleSummary()><span class=sum-headl>${stamp}<h2>${esc(p.title)}</h2></span><span class=sum-caret aria-hidden=true>\\u25be</span></button>`+
     `<div class=sum-body><p class=tag>Your offer, with the research graded, vendor spin labeled, not laundered.</p>`+
-    `<p><b>What you'd sell:</b> ${esc(p.offer)}</p><p><b>How you'd sell it:</b> ${esc(p.gtm)}</p>`+
-    `<div id=vet class=straightread></div></div>`;   // the straight read renders here, as a nested collapsible
+    `<p><b>What you'd sell:</b> ${esc(p.offer)}</p><p><b>How you'd sell it:</b> ${esc(p.gtm)}</p></div>`;
 }
 let BUILT={}, SECMETA={}, PLAN_TAB=-99;
 // "Your plan" + the decision tree, merged into a center-column tab strip. Each part of the plan is a
@@ -2321,10 +2337,10 @@ let VET_OPEN=true, VET_STEPPED=false;
 function toggleVet(){VET_OPEN=!VET_OPEN;const c=document.getElementById('vetcard');if(c){c.classList.toggle('open',VET_OPEN);const h=c.querySelector('.vethead');if(h)h.setAttribute('aria-expanded',String(VET_OPEN));}}
 function renderVet(s){
   const el=document.getElementById('vet'); if(!el)return;
+  const sec=document.getElementById('straightsec');
   const v=s.vetting, sh=s.shaped;
-  if(!v&&!sh){el.innerHTML='';return;}
-  if(s.step===0&&!s.done){VET_STEPPED=false;}                 // back at the first part → eligible to auto-collapse again
-  else if(!VET_STEPPED){VET_OPEN=false;VET_STEPPED=true;}     // collapse once they click through to the next part
+  if(!v&&!sh){el.innerHTML='';if(sec)sec.style.display='none';return;}
+  if(sec)sec.style.display='';   // the straight read now lives in the left sidebar (poppable to a modal)
   const react=(v&&v.reaction)?`<p class=filgreact>${esc(v.reaction)}</p>`:'';
   const thesis=sh&&sh.thesis?`<p class=thesis><b>Your focus:</b> ${esc(sh.thesis)}</p>`:'';
   const edge=sh&&sh.founder_edge?`<p class=vrow><b>Your edge:</b> ${esc(sh.founder_edge)}</p>`:'';
@@ -2336,8 +2352,7 @@ function renderVet(s){
   const PM=(v&&v.premortem)||[];   // the assumption check — the skeptic pass on the operator's OWN plan
   const pm=PM.length?('<div class=premortem><div class=pmh>🧪 Assumptions your plan rests on</div>'+
     PM.map(a=>`<div class="pmrow pm-${esc(a.status)}"><span class="pmstatus pm-${esc(a.status)}">${esc(a.status)}</span><div class=pmtext><b>${esc(a.assumption)}</b>${a.why?`<span class=pmwhy>${esc(a.why)}</span>`:''}</div></div>`).join('')+'</div>'):'';
-  el.innerHTML=`<div class="vet${VET_OPEN?' open':''}" id=vetcard><button type=button class=vethead onclick=toggleVet() aria-expanded="${VET_OPEN}"><span class=vtitle>The straight read</span><span class=vcaret aria-hidden=true>▸</span></button>`+
-    `<div class=vetbody>${react}${thesis}${edge}${alts}${reason}${risk}${test}${cq}${pm}</div></div>`;
+  el.innerHTML=`<div class="vet sr"><div class=vetbody>${react}${thesis}${edge}${alts}${reason}${risk}${test}${cq}${pm}</div></div>`;
 }
 // Board selection state (keys); seeded from the default board, editable in intake + sidebar.
 let BOARD=(CFG.defaultBoard||[]).slice();
@@ -2497,15 +2512,58 @@ function _openModal(focusSel){
   const m=document.getElementById('modal');
   m.classList.add('open');m.setAttribute('aria-hidden','false');
   document.getElementById('modalback').classList.add('show');
-  setTimeout(()=>{const el=m.querySelector(focusSel);if(el)el.focus();},60);
+  setTimeout(()=>{if(!focusSel)return;const el=m.querySelector(focusSel);if(el)el.focus();},60);
 }
 function _closeModal(val){
   const m=document.getElementById('modal');
   if(!m.classList.contains('open'))return;
+  _returnPopped();   // a popped-out sidebar section goes back to the drawer
   m.classList.remove('open');m.setAttribute('aria-hidden','true');
   document.getElementById('modalback').classList.remove('show');
   if(MODAL_TRIGGER&&MODAL_TRIGGER.focus){MODAL_TRIGGER.focus();MODAL_TRIGGER=null;}
   const r=MODAL_RESOLVE;MODAL_RESOLVE=null;if(r)r(val);
+}
+// ── Pop a sidebar section's content into a medium-large modal (work inline in the drawer OR in a
+// window). We MOVE the live .secbody node (not a clone) so handlers + ids stay intact, then move it
+// back on close. Opening the modal collapses the inline section.
+let POPPED=null;
+function _returnPopped(){
+  if(!POPPED)return;
+  const body=document.querySelector('#modal-body > .secbody');
+  if(body&&POPPED.ph&&POPPED.ph.parentNode){POPPED.ph.parentNode.insertBefore(body,POPPED.ph);}
+  if(POPPED.ph&&POPPED.ph.parentNode)POPPED.ph.parentNode.removeChild(POPPED.ph);
+  document.getElementById('modal').classList.remove('big');
+  POPPED=null;
+}
+function popSection(id){
+  const sec=document.getElementById(id); if(!sec)return;
+  const body=sec.querySelector('.secbody'); if(!body)return;
+  if(POPPED)_returnPopped();
+  setOpen(id,false);   // collapse the inline section — the content now lives in the modal
+  const h3=sec.querySelector('h3');
+  const ph=document.createComment('pop:'+id); body.parentNode.insertBefore(ph,body); POPPED={id,ph};
+  document.getElementById('modal-title').textContent=h3?h3.textContent:'';
+  const mb=document.getElementById('modal-body'); mb.innerHTML=''; mb.appendChild(body);
+  document.getElementById('modal-actions').innerHTML=`<button type=button class=mfb-go onclick=_closeModal()>Done</button>`;
+  document.getElementById('modal').classList.add('big');
+  _openModal();
+}
+function addSecPops(){   // inject the "open in a window" button onto every collapsible sidebar section
+  document.querySelectorAll('.side .sec.collap').forEach(sec=>{
+    if(!sec.id||sec.querySelector('.sec-pop'))return;
+    const b=document.createElement('button');
+    b.type='button'; b.className='sec-pop'; b.title='Open in a window'; b.setAttribute('aria-label','Open in a window');
+    b.innerHTML='\\u29C9';
+    b.addEventListener('click',function(e){e.stopPropagation();popSection(sec.id);});
+    sec.appendChild(b);
+  });
+}
+let GREETED_SID=null;
+function maybeGreetStraightRead(s){   // first build view → greet with the straight read in a modal
+  if(!s||s.done||s.status!=='building'||(s.step||0)!==0)return;
+  if(!(s.vetting||s.shaped)||GREETED_SID===s.id)return;
+  GREETED_SID=s.id;
+  setTimeout(()=>{const sec=document.getElementById('straightsec');if(sec&&sec.style.display!=='none')popSection('straightsec');},450);
 }
 function uiConfirm(title,msg,okLabel){
   return new Promise(res=>{MODAL_RESOLVE=res;
@@ -2869,7 +2927,7 @@ async function signinEmail(){
 async function signout(){await sb.auth.signOut();session=null;me=null;newPlan();renderAuth();}
 function show(id){['intake','workspace','profile'].forEach(x=>{const e=document.getElementById(x);if(e)e.style.display=(x===id?(x==='workspace'?'block':'block'):'none');});
   document.body.classList.toggle('ws',id==='workspace');}   // ws → left tools drawer + full-width main
-function newPlan(){SIDEBAR_PHASE=null;ACT_RESEARCH=false;ACT_PROG_N=0;ACT_ID=null;VET_OPEN=true;VET_STEPPED=false;Activity.stopAll();closeViewer();SID=null;
+function newPlan(){SIDEBAR_PHASE=null;ACT_RESEARCH=false;ACT_PROG_N=0;ACT_ID=null;VET_OPEN=true;VET_STEPPED=false;GREETED_SID=null;Activity.stopAll();closeViewer();SID=null;
   // render a FRESH intake — clear any in-flight button/idea/error left over from a prior build or sign-out
   const g=document.getElementById('go'); if(g){g.disabled=false;g.textContent='Build my plan →';}
   const idea=document.getElementById('idea'); if(idea)idea.value='';
@@ -2957,6 +3015,7 @@ document.addEventListener('keydown',function(e){
   }
 });
 initAuth();
+addSecPops();   // inject the "open in a window" button onto each collapsible sidebar section
 </script>
 <div class=vibestrip aria-hidden=true><div class=vibetrack><span class=vibe>This UI was vibe coded AF and I know it's butt-ugly but I will never update it, because I believe in my soul that Craigslist was the height of web design and since we started complicating it things have gotten steadily worse in the world and I can't prove that there's a correlation but also you can't prove there's not and anyways it's an app meant for automating planning and building your business so it would kinda be a bad look if I hadn't automated the building of it to some extent and honestly the algorithm stuff was hard and UI is easy so it just made sense to leave it, anyway I'm not a designer I want to get paid to drink coffee and push buttons with my dog curled up between my legs and then a little pillow on top of him to hold my laptop. Really I think if we could all just agree to collectively move on from design and style and good taste in general the world might be a better place, you know? It's just like we've so completely commoditised every aspect of self worth and beauty and it all kind of starts with the concept of aesthetic beauty, like the way one thing looks can really be better than another way, when really it's all just light, and even that's a pretty big maybe considering the light is just signals in our little meat brains that we can't definitively prove exist, and the fact that we even have the ability to conceive of the absurdity of that thought makes any sort of external aesthetic consideration seem silly. I mean everything is silly in the grand scheme of things, and what does it even mean to be silly? There I go placing 'aesthetic' value on the concept of value itself, like I know wtf I'm talking about (I don't). And as long as I'm yapping about aesthetics and absurdity... who the hell was in the room when they came up with 'professionalism'? Like really, of all the personalities in the universe we went with the most boring possible one, based on the human equivalent of a cardboard charcuterie sampler. Like is it really that weird that I wanted to name my app 'Fuck it, let's go'? We all say fuck. You say fuck. You are saying it in your head right now, who cares? Why do we all have to pretend we don't say fuck on LinkedIn? That's weird. I mean if you actually do NOT say fuck then that makes you weird. Not qualitatively bad, but empirically weird in the sense of deviation from the norm. And we all just agreed at some point to pretend to be people who don't say "fuck" for most of our waking social lives.. that seems nuts. I want to say fuck on LinkedIn. Do you want to say fuck on LinkedIn? I'll bet you do. If you are the type of person still reading this you absolutely want to say swears on LinkedIn, and that make you my kind of person. I support you. I believe in you. I.. love you? I love the idea of you. I'm glad you're here, honestly. You are the person this was built for. Go build a business, seriously people do it every day. They have been doing it for millennia. Your ancestors survived war and famine and saber tooth tigers and shit (don't come after me science nerd, I don't care if they co existed, I don't know, and I'm not gonna look it up.) They did all that and all got laid at least once over and over just to make you here now and that means you have it in your genes, in your BONES. Success is in you, you are the proof. You can start a fucking business. Go do it. Say fuck on LinkedIn. Make a million bucks. Buy a tuxedo and rip the sleeves off and keep it on for a month, don't even take it off to shower. Why would you? You are a winner. You are success incarnate. You do what you want. You are gonna make it. You are gonna prove your first crush that shot you down wrong. You are gonna make your dad proud. You are gonna be the best thing that ever happened to your friends and family and everyone that ever believed in you. I believe in you! You've got tenacity, if nothing else. Why are you still reading this anyway? THAT is weird. But like good weird. But there I go qualifying things as good and bad again. Go make some money. FUCK!</span></div></div>
 </div></body></html>"""
