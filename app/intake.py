@@ -33,9 +33,12 @@ _MOCK_SHAPED = {
     "clarifying_question": None,
 }
 
+_MODEL_TYPES = {"full-time", "side-hustle", "seasonal", "one-shot", "gig", "scalable"}
+
 _MOCK_VET = {
     "reaction": "Cool idea. Let's turn it into something you can actually sell.",
     "verdict": "pursue",
+    "model_type": "side-hustle",
     "scores": {"demand": 4, "market": 4, "willingness_to_pay": 4, "founder_fit": 5, "execution_risk": 3},
     "reason": "Real, proven demand for outsourced sales and a clear founder edge; the risk is "
               "operational, not whether anyone wants it.",
@@ -81,15 +84,28 @@ def vet(idea: str, shaped: dict, research: dict | None = None, mock: bool = Fals
     out = call("vet", SONNET, max_tokens=700, system=skills.system("vet"), cache=True, prompt=(
         f"OPERATOR'S RAW INPUT:\n{idea}\n\nFOCUSED THESIS (from intake):\n{shaped.get('thesis', '')}\n\n"
         f"FOUNDER EDGE:\n{shaped.get('founder_edge', '(none named)')}\n\n"
-        f"GATE-CLEARED EVIDENCE (context only):\n{cited or '- (no research yet)'}\n\nVet it now."))
+        f"GATE-CLEARED EVIDENCE (context only):\n{cited or '- (no research yet)'}\n\n"
+        "Also classify the REALISTIC shape of this as ONE model_type, weighing market competition and "
+        "whether it's a quick hustle vs a durable business:\n"
+        "- full-time: can realistically be a full income business\n"
+        "- side-hustle: earns on the side, hard to go full-time on\n"
+        "- seasonal: revenue clusters in a season/window\n"
+        "- one-shot: a single project or sale, not recurring\n"
+        "- gig: per-task freelance income, trades time for money\n"
+        "- scalable: can grow well beyond the founder's own hours\n"
+        'Add "model_type" to your JSON. Vet it now.'))
     data = extract_json(out)
     data = data if isinstance(data, dict) else {}  # tolerate a non-object reply
     verdict = str(data.get("verdict", "pursue")).lower()
     if verdict not in ("pursue", "pivot", "kill"):
         verdict = "pursue"
+    model_type = str(data.get("model_type", "")).lower().strip().replace(" ", "-")
+    if model_type not in _MODEL_TYPES:
+        model_type = ""   # unknown/missing → no badge
     return {
         "reaction": (data.get("reaction") or "").strip(),
         "verdict": verdict,
+        "model_type": model_type,
         "scores": data.get("scores") or {},
         "reason": (data.get("reason") or "").strip(),
         "biggest_risk": (data.get("biggest_risk") or "").strip(),

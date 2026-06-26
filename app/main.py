@@ -1437,6 +1437,12 @@ body.hasbar .workspace{padding-bottom:74px}
 .vet .filgreact{font-weight:700;font-size:16px;line-height:1.3;color:var(--ink);margin:0 0 12px}
 .verdict{font-size:12px;font-weight:700;padding:2px 9px;border:1px solid var(--line);text-transform:uppercase;letter-spacing:.04em}
 .verdict.pursue{color:var(--ok);border-color:var(--ok)}.verdict.pivot{color:var(--warn);border-color:var(--warn)}.verdict.kill{color:var(--kill);border-color:var(--kill)}
+/* business-model shape, a secondary badge next to the verdict */
+.modelbadge{font-size:11px;font-weight:700;padding:2px 8px;border:1px solid var(--line);text-transform:uppercase;letter-spacing:.04em;color:var(--muted);background:#f4f4f4}
+.modelbadge.mt-full-time{color:var(--ink);border-color:#888}
+.modelbadge.mt-scalable{color:var(--link);border-color:var(--link)}
+.modelbadge.mt-side-hustle{color:var(--warn);border-color:var(--warn)}
+.modelbadge.mt-one-shot,.modelbadge.mt-gig{color:var(--muted)}
 .vet .thesis{font-size:14px;margin:0 0 10px}.vet .vrow{font-size:13px;color:var(--muted);margin:3px 0}.vet .vrow b{color:var(--ink)}
 .premortem{margin-top:12px;border-top:1px solid var(--line);padding-top:10px}
 .pmh{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:8px}
@@ -1477,6 +1483,17 @@ body.hasbar .workspace{padding-bottom:74px}
 .rqrows{margin-top:8px;display:flex;flex-direction:column;gap:5px}
 .rqrow{font-size:12px;color:var(--ink);line-height:1.35}
 .rqsrc{color:var(--muted);font-size:11px}
+.factsep{margin:14px 0 8px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);border-top:1px solid var(--line);padding-top:10px}
+/* decision tree (sidebar tab) — interactive, descriptive node map */
+#dtree{display:flex;flex-direction:column;gap:1px}
+.dnode{display:block;width:100%;text-align:left;background:none;border:0;border-left:2px solid transparent;font:inherit;color:var(--ink);font-size:12.5px;line-height:1.35;padding:6px 8px;cursor:pointer}
+.dnode:hover{background:#f4f4f4}
+.dnode.path{border-left-color:var(--line)}
+.dnode.on{background:#eef3ff;border-left-color:var(--link);color:var(--link)}
+.dnode .dtitle{font-weight:700}
+.dnode .dsub{display:block;font-size:11px;color:var(--muted);font-weight:400}
+.dnode.on .dsub{color:var(--link)}
+.dnode .ds{display:block;font-size:11px;color:var(--muted);font-weight:400;margin-top:2px;font-style:italic}
 .boardpick{margin:0 0 12px}.boardpick .lab{font-size:13px;color:var(--muted);font-weight:700;text-align:left}
 .boardpick .bp-head{display:flex;align-items:center;gap:8px;width:100%;background:none;border:0;padding:0;cursor:pointer;font:inherit}
 .bp-caret{margin-left:auto;color:var(--muted);font-size:11px;transition:transform .15s}
@@ -1685,6 +1702,8 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <div class=secbody><div id=vet></div></div></div>
 <div class="sec collap" id=takeawaysec style="display:none"><button type=button class=sechead aria-expanded=false onclick="toggleSec('takeawaysec')"><h3>Your board weighed in</h3><span class=caret aria-hidden=true>▸</span></button>
 <div class=secbody><div id=boardround></div></div></div>
+<div class="sec collap" id=dtreesec style="display:none"><button type=button class=sechead aria-expanded=false onclick="toggleSec('dtreesec')"><h3>Decision tree</h3><span class=caret aria-hidden=true>▸</span></button>
+<div class=secbody><p class=bhelp>Every part you build is a node. The highlighted path is your current plan; click any node to jump there, then back up and branch a different direction if you want.</p><div id=dtree></div></div></div>
 <div class="sec collap" id=chatsec style="display:none"><button type=button class=sechead aria-expanded=false onclick="toggleSec('chatsec')"><h3>Chat with your plan</h3><span class=caret aria-hidden=true>▸</span></button>
 <div class=secbody>
 <div class=chatlog id=chatlog></div>
@@ -1705,19 +1724,18 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <p class=forge-sub>Describe the advisor you wish you had. We can't say we trained them on anyone real… but we can't stop you from asking.</p>
 <label for=forgeinput class=sr-only>Describe your ideal director</label>
 <textarea id=forgeinput rows=2 placeholder="e.g. a ruthless ops nerd who has scaled 3 agencies and hates busywork"></textarea>
-<button type=button class=forge-go onclick=openForge()>\\u2726 Forge a director \\u2192</button>
+<button type=button class=forge-go onclick=openForge()>✦ Forge a director →</button>
 </div>
 <div class=disc>AI composite directors, not real people, not professional advice.</div></div></div>
-<div class="sec collap open" id=researchsec><button type=button class=sechead aria-expanded=true onclick="toggleSec('researchsec')"><h3>Research, graded</h3><span class=caret aria-hidden=true>▸</span></button>
-<div class=secbody><div id=research></div></div></div>
-<div class="sec collap" id=rqsec style="display:none"><button type=button class=sechead aria-expanded=false onclick="toggleSec('rqsec')"><h3>Query your research</h3><span class=caret aria-hidden=true>▸</span></button>
+<div class="sec collap open" id=researchsec><button type=button class=sechead aria-expanded=true onclick="toggleSec('researchsec')"><h3>Check the facts</h3><span class=caret aria-hidden=true>▸</span></button>
 <div class=secbody>
 <p class=bhelp>Ask a question against your graded research. <b>Quick check</b> reads what's already there (and will say when it's not sure); <b>Go deeper</b> spawns fresh research.</p>
 <label for=rqinput class=sr-only>Your research question</label>
 <textarea id=rqinput rows=2 placeholder="e.g. how price-sensitive is this buyer, really?"></textarea>
-<div class=rqacts><button type=button class=ghost onclick="runResearchQuery('quick')">Quick check</button><button type=button class=rq-go onclick="runResearchQuery('deep')">\\uD83D\\uDD0E Go deeper</button></div>
+<div class=rqacts><button type=button class=ghost onclick="runResearchQuery('quick')">Quick check</button><button type=button class=rq-go onclick="runResearchQuery('deep')">🔎 Go deeper</button></div>
 <div class=rqout id=rqout></div>
-<div class=disc>Quick reads only your gathered research; Go deeper pulls + grades new sources.</div></div></div>
+<div class=factsep>The graded research</div>
+<div id=research></div></div></div>
 </aside>
 <main class=main>
 <div class=runner id=runner aria-live=polite hidden>
@@ -1921,7 +1939,7 @@ function render(s){
     document.getElementById('node').innerHTML='<div class=node><h3>Hit a snag</h3><p class=lead>'+esc(s.error||'Something went wrong.')+'</p>'+fix+'<button type=button class=ghost onclick=newPlan()>Start over</button></div>';
     say('Something went wrong: '+(s.error||'')); return;
   }
-  renderResearch(s);renderAnswer(s);renderVet(s);renderNode(s);renderPlanTabs(s);renderAddons(s);renderBoard(s);renderBoardRound(s);renderChat(s);renderStack(s);syncSidebar(s);maybeGreetStraightRead(s);
+  renderResearch(s);renderAnswer(s);renderVet(s);renderNode(s);renderPlanTabs(s);renderAddons(s);renderBoard(s);renderBoardRound(s);renderDecisionTree(s);renderChat(s);renderStack(s);syncSidebar(s);maybeGreetStraightRead(s);
   if(s.done&&SID&&location.pathname!=='/plan/'+SID)history.pushState({plan:SID},'','/plan/'+SID);   // finished plan gets a clean URL (revisit + bookmark)
   if(s.done)say('Your plan is complete, all '+s.total+' parts ready to download.');
   else if(s.vetting&&s.vetting.verdict)say('Research graded. Verdict: '+s.vetting.verdict+'. Ready to build part '+((s.step||0)+1)+'.');
@@ -2005,7 +2023,6 @@ function renderBoardRound(s){
 function renderResearch(s){
   const R=s.research||{};
   const rows=R.rows||[], owned=R.owned_lanes||[];
-  const rq=document.getElementById('rqsec'); if(rq)rq.style.display=(rows.length||owned.length)?'':'none';   // query-your-research available once research exists
   const el=document.getElementById('research');
   if(!rows.length&&!owned.length){el.innerHTML='<p style="color:var(--muted);font-size:13px;margin:0">Grading sources…</p>';return;}
   const ownerOf={}; owned.forEach(o=>{ownerOf[o.lane]=o;});
@@ -2060,7 +2077,10 @@ function renderAnswer(s){
   const a=document.getElementById('answer'); a.classList.toggle('collapsed',!SUM_OPEN);
   const v=(s.vetting||{}).verdict||'';
   const stamp=v?`<span class="verdict ${esc(v)}">${esc(v)}</span>`:'';   // PURSUE/PIVOT/KILL sits next to the headline
-  a.innerHTML=`<button type=button class=sum-head aria-expanded="${SUM_OPEN}" onclick=toggleSummary()><span class=sum-headl>${stamp}<h2>${esc(p.title)}</h2></span><span class=sum-caret aria-hidden=true>\\u25be</span></button>`+
+  const mt=(s.vetting||{}).model_type||'';                              // its realistic shape, next to the verdict
+  const MT_LABELS={'full-time':'Full time','side-hustle':'Side hustle','seasonal':'Seasonal','one-shot':'One shot','gig':'Gig','scalable':'Scalable'};
+  const mtb=(mt&&MT_LABELS[mt])?`<span class="modelbadge mt-${esc(mt)}">${esc(MT_LABELS[mt])}</span>`:'';
+  a.innerHTML=`<button type=button class=sum-head aria-expanded="${SUM_OPEN}" onclick=toggleSummary()><span class=sum-headl>${stamp}${mtb}<h2>${esc(p.title)}</h2></span><span class=sum-caret aria-hidden=true>\\u25be</span></button>`+
     `<div class=sum-body><p class=tag>Your offer, with the research graded, vendor spin labeled, not laundered.</p>`+
     `<p><b>What you'd sell:</b> ${esc(p.offer)}</p><p><b>How you'd sell it:</b> ${esc(p.gtm)}</p></div>`;
 }
@@ -2254,10 +2274,13 @@ function openCmtPop(anchorEl, prefill){
   clearCmtTarget(); if(anchorEl)anchorEl.classList.add('cmt-target');
   document.getElementById('cmtquote').textContent='\\u201c'+(CMT_QUOTE.length>90?CMT_QUOTE.slice(0,90)+'\\u2026':CMT_QUOTE)+'\\u201d';
   document.getElementById('cmtnote').value=prefill||'';
-  const r=anchorEl?anchorEl.getBoundingClientRect():{left:40,bottom:80};
-  pop.style.left=Math.max(8,Math.min(window.scrollX+r.left,window.scrollX+window.innerWidth-300))+'px';
-  pop.style.top=(window.scrollY+r.bottom+8)+'px';
-  pop.classList.add('show'); pop.setAttribute('aria-hidden','false');
+  pop.classList.add('show'); pop.setAttribute('aria-hidden','false');   // show first so we can measure it
+  const r=anchorEl?anchorEl.getBoundingClientRect():{left:40,bottom:80,top:60};
+  const pw=pop.offsetWidth||288, ph=pop.offsetHeight||170;
+  pop.style.left=Math.max(8,Math.min(window.scrollX+r.left,window.scrollX+window.innerWidth-pw-8))+'px';
+  let top=window.scrollY+r.bottom+8;
+  if(r.bottom+8+ph>window.innerHeight){top=window.scrollY+r.top-ph-8;if(top<window.scrollY+8)top=window.scrollY+8;}   // flip up if it would run off the bottom
+  pop.style.top=top+'px';
   setTimeout(()=>{const n=document.getElementById('cmtnote');if(n)n.focus();},30);
 }
 function onDraftSelect(e){
@@ -2412,6 +2435,31 @@ async function gotoNode(id){
     REDRAFTS=0;   // navigated to another node — reset the rework counter
     render(s);
   }catch(e){document.getElementById('err2').textContent='Network error.';}
+}
+// The decision tree, back as a sidebar tab: an interactive, descriptive map of every node you've built.
+// The highlighted path is the active plan; click any node to jump there (gotoNode), then back up + branch.
+function renderDecisionTree(s){
+  const sec=document.getElementById('dtreesec'),box=document.getElementById('dtree');
+  if(!sec||!box)return;
+  const t=s.tree;
+  if(!t||!t.show){sec.style.display='none';return;}
+  sec.style.display='';
+  const nodes=t.nodes||[],byId={},kids={};
+  nodes.forEach(n=>{byId[n.id]=n;kids[n.id]=[];});
+  nodes.forEach(n=>{if(n.parent!=null&&kids[n.parent])kids[n.parent].push(n.id);});
+  const path={}; let cur=t.active; while(cur!=null&&byId[cur]){path[cur]=1;cur=byId[cur].parent;}
+  const roots=nodes.filter(n=>n.parent==null).map(n=>n.id);
+  const subOf={}; (s.sections||[]).forEach((x,i)=>{subOf[i]=x.sub;});
+  function row(id,depth){
+    const n=byId[id];
+    const cls='dnode'+(id===t.active?' on':'')+(path[id]?' path':'');
+    const sub=subOf[n.step]?`<span class=dsub>${esc(subOf[n.step])}</span>`:'';
+    const tag=n.feedback?`<span class=ds>\\u21b3 ${esc(n.feedback.slice(0,60))}</span>`:'';
+    let h=`<button type=button class="${cls}" style="padding-left:${8+depth*14}px" onclick="gotoNode('${id}')" aria-current="${id===t.active?'true':'false'}"><span class=dtitle>${esc(n.title||('Part '+(n.step+1)))}</span>${sub}${tag}</button>`;
+    (kids[id]||[]).forEach(c=>{h+=row(c,depth+1);});
+    return h;
+  }
+  box.innerHTML=roots.map(r=>row(r,0)).join('');
 }
 function renderAddons(s){
   const box=document.getElementById('addons'); if(!box||box.dataset.done)return;
@@ -3091,6 +3139,9 @@ window.addEventListener('popstate',routeFromPath);   // browser back/forward dri
 document.addEventListener('click',function(e){   // click outside the crew picker closes it
   const sp=document.getElementById('stackpop');
   if(sp&&!sp.hidden&&!e.target.closest('#stackdial'))closeStackPop();
+  // click outside the inline-comment popover discards it (same as Cancel) + unhighlights the block
+  const cp=document.getElementById('cmtpop');
+  if(cp&&cp.classList.contains('show')&&!e.target.closest('#cmtpop')&&!e.target.closest('.draft')&&!e.target.closest('.cmtmark'))hideCmtPop();
 });
 document.addEventListener('keydown',function(e){
   const drawer=document.getElementById('drawer'), modal=document.getElementById('modal');
