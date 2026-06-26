@@ -10,28 +10,27 @@ GRAB_BAG = "I like basketball, Magic the Gathering, and food, and I'm good at sa
 
 
 def test_coupon_redeem_grants_credits_and_caps():
-    # A coupon redemption grants COUPON_CREDITS plan-unlock credits (capped, not unlimited); a re-redeem
-    # on the same account doesn't burn a use or re-grant; a code is spent once used >= max_uses.
+    # A coupon = a free $7-equivalent: each redemption grants 3 plan-unlock credits and burns one of the
+    # code's uses. The ONLY cap is total uses (no per-account limit — an account may redeem repeatedly).
     from app import store
     store.init()
+    n = store.PDF_CREDITS_PER_PURCHASE
     code = "TESTCAP2"
     con = store._connect()
     with con:
         con.execute("INSERT OR REPLACE INTO coupons (code, max_uses, used, active, created_at) "
-                    "VALUES (?,2,0,1,'t')", (code,))
+                    "VALUES (?,3,0,1,'t')", (code,))
     con.close()
     ok, _ = store.redeem_coupon(code, "a@x.com")
-    assert ok and store.credits_left("a@x.com") == store.COUPON_CREDITS
-    assert store.coupon_status(code)["used"] == 1
-    ok2, reason2 = store.redeem_coupon(code, "a@x.com")          # same account → no second use, no re-grant
-    assert ok2 and reason2 == "already" and store.coupon_status(code)["used"] == 1
-    assert store.credits_left("a@x.com") == store.COUPON_CREDITS
-    ok3, _ = store.redeem_coupon(code, "b@x.com")                # second distinct redeem hits the cap
-    assert ok3 and store.coupon_status(code)["used"] == 2
-    ok4, reason4 = store.redeem_coupon(code, "c@x.com")          # cap reached → spent
+    assert ok and store.credits_left("a@x.com") == n and store.coupon_status(code)["used"] == 1
+    ok2, _ = store.redeem_coupon(code, "a@x.com")                # no per-account cap → redeem again
+    assert ok2 and store.credits_left("a@x.com") == 2 * n and store.coupon_status(code)["used"] == 2
+    ok3, _ = store.redeem_coupon(code, "b@x.com")                # a different account uses the 3rd
+    assert ok3 and store.coupon_status(code)["used"] == 3
+    ok4, reason4 = store.redeem_coupon(code, "c@x.com")          # 100... here 3 uses exhausted → spent
     assert not ok4 and reason4 == "spent" and store.credits_left("c@x.com") == 0
     assert store.redeem_coupon("NOPE", "d@x.com") == (False, "invalid")
-    assert store.coupon_status("FUCKYOUIMNOTGIVINGYOU7BUCKS")["max_uses"] == 100  # standing code seeded
+    assert store.coupon_status("FUCKYOUIMNOTGIVINGYOU7BUCKS")["max_uses"] == 100  # standing code: 100 uses total
 
 
 def test_full_plan_flow_with_board(client):
