@@ -1351,13 +1351,11 @@ button:hover{background:#e8e8e8}button:disabled{opacity:.5;cursor:default}
 .run-spacer{flex:1}
 .run-min{background:none;border:0;color:var(--muted);font-size:12px;cursor:pointer;padding:2px 6px;line-height:1}
 .runner.min .run-min{transform:rotate(-90deg)}
-.runner.min .run-leaves,.runner.min .run-log{display:none}
-.run-leaves{padding:8px 10px;border-bottom:1px solid var(--line);background:#fbfbfa}
-.leaf-cap{font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin:0 0 4px;padding-left:4px}
-/* nested, like the decision tree: indented leaf nodes, each expandable to its own internals */
-.leaftree{display:flex;flex-direction:column}
-.leafnode{display:flex;align-items:center;gap:7px;width:100%;background:none;border:0;border-top:1px dashed var(--line);font:inherit;font-size:13px;color:var(--muted);cursor:pointer;text-align:left;padding:6px 6px 6px 22px}
-.leaftree .leafnode:first-child{border-top:0}
+.runner.min .run-log{display:none}
+/* The fan-out leaves are part of the SAME tree as the spew steps: they nest one level under the
+   "Planning the research fan-out" line, inside the op card body. Each leaf expands to its internals. */
+.leaftree.leafnest{display:flex;flex-direction:column;font-family:ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;margin:2px 0 6px 12px;border-left:2px solid var(--line);padding-left:8px}
+.leafnode{display:flex;align-items:center;gap:7px;width:100%;background:none;border:0;font:inherit;font-size:12.5px;color:var(--muted);cursor:pointer;text-align:left;padding:5px 4px 5px 8px}
 .leafnode .leaf-ico{filter:grayscale(1);opacity:.45;transition:filter .25s,opacity .25s;flex:none}
 .leafnode.done{color:var(--ink)}
 .leafnode.done .leaf-ico{filter:none;opacity:1}
@@ -1365,9 +1363,9 @@ button:hover{background:#e8e8e8}button:disabled{opacity:.5;cursor:default}
 .leafnode .leaf-q{color:var(--muted);font-weight:400;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .leafnode .lcaret{margin-left:auto;flex:none;font-size:10px;opacity:.55;transition:transform .15s}
 .leafnode.open .lcaret{transform:rotate(90deg)}
-.leafbody{display:none;padding:2px 10px 10px 40px;font-size:12.5px;line-height:1.5}
+.leafbody{display:none;padding:0 8px 8px 26px;font-size:12px;line-height:1.5}
 .leafnode.open + .leafbody{display:block}
-.leafbody .lq{color:var(--muted);margin:0 0 8px}
+.leafbody .lq{color:var(--muted);margin:0 0 7px}
 .leafbody .src{padding:6px 0;border-top:1px dashed var(--line);overflow-wrap:anywhere}
 .leafbody .src:first-child{border-top:0}
 .leafbody .src .note{color:var(--muted)}
@@ -1383,7 +1381,7 @@ button:hover{background:#e8e8e8}button:disabled{opacity:.5;cursor:default}
 .ah .alabel{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ah .caret{flex:none;font-size:11px;opacity:.6}
 .atask.collapsed .abody{display:none}
-.abody{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.5;padding:0 12px 9px 12px;max-height:108px;overflow-y:auto}
+.abody{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.5;padding:0 12px 9px 12px}
 .aline{display:flex;align-items:flex-start;gap:9px;padding:1px 0;background:none;color:var(--muted)}
 .aline.done{color:#444}
 .aline.active{color:var(--ink);font-weight:600}
@@ -1479,7 +1477,6 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <main class=main>
 <div class=runner id=runner aria-live=polite hidden>
 <div class=run-head><span class=run-dot aria-hidden=true></span><span class=run-title id=run-title>The machine, working</span><span class=run-spacer></span><button type=button class=run-min id=run-min onclick="document.getElementById('runner').classList.toggle('min')" aria-label="Collapse or expand the runner">&#9662;</button></div>
-<div class=run-leaves id=run-leaves hidden></div>
 <div class=run-log id=runner-log></div>
 </div>
 <div id=viewer style="display:none"></div>
@@ -1559,8 +1556,9 @@ function _drainProgress(s){
   const prog=s.progress||[];
   for(let i=ACT_PROG_N;i<prog.length;i++){
     const ln=prog[i]||'';
-    if(ln.indexOf('\\u00A7LANES\\u00A7')===0){ try{Activity.leaves(JSON.parse(ln.slice(7)));}catch(e){} }
+    if(ln.indexOf('\\u00A7LANES\\u00A7')===0){ try{Activity.leaves(ACT_ID,JSON.parse(ln.slice(7)));}catch(e){} }
     else if(ln.indexOf('\\u00A7LANEDONE\\u00A7')===0){ Activity.leafDone(parseInt(ln.slice(10),10)); }
+    else if(ln.indexOf('\\uD83D\\uDD0E')===0){ /* "🔎 X is digging into: <lane>" — now shown as the nested leaf, skip */ }
     else Activity.push(ACT_ID,ln);
   }
   ACT_PROG_N=Math.max(ACT_PROG_N,prog.length);
@@ -2262,8 +2260,8 @@ const Activity={
     li.innerHTML='<span class=aglyph aria-hidden=true></span><span class=atext></span>';
     li.querySelector('.atext').textContent=text||'';
     body.appendChild(li);
-    while(body.children.length>60)body.removeChild(body.firstChild);
-    body.scrollTop=body.scrollHeight;
+    while(body.children.length>80)body.removeChild(body.firstChild);
+    const log=this._log(); if(log)log.scrollTop=log.scrollHeight;   // outer log scrolls; card bodies show full
     return li;
   },
   _advance(t,text){ if(t.line)t.line.classList.replace('active','done'); t.line=this._line(t.body,text,false); },
@@ -2290,33 +2288,37 @@ const Activity={
     delete this.tracks[id]; this.n=Math.max(0,this.n-1); this._live=Math.max(0,this._live-1);
     this._trim(); this._busy();
   },
-  // ── research fan-out leaves: a nested tree, one 🍃 per lane, grey → green as each lane returns.
-  // Each leaf expands (like the decision tree) to its own internals: the question + graded sources. ──
-  leaves(labels){
-    const box=document.getElementById('run-leaves'); if(!box)return;
+  // ── research fan-out leaves: part of the SAME tree as the spew steps. The leaf nodes nest one level
+  // under the "Planning the research fan-out" step (the current active line) inside the op card, grey →
+  // green as each lane returns. Each leaf expands to its own internals: the question + graded sources. ──
+  leaves(id, labels){
+    const t=this.tracks[id]; if(!t||!t.body)return;
     labels=labels||[]; this._leaflabels=labels;
-    box.hidden=false;
-    box.innerHTML='<div class=leaf-cap>\\uD83C\\uDF43 '+labels.length+' research lanes, fanned out in parallel</div>'+
-      '<div class=leaftree>'+labels.map((ln,i)=>
-        '<button type=button class=leafnode data-i="'+i+'" onclick="Activity.toggleLeaf('+i+')" aria-expanded=false>'+
-          '<span class=leaf-ico aria-hidden=true>\\uD83C\\uDF43</span>'+
-          '<span class=leaf-lbl>Lane '+(i+1)+'</span>'+
-          '<span class=leaf-q>'+esc(ln)+'</span><span class=lcaret aria-hidden=true>\\u25b8</span></button>'+
-        '<div class=leafbody data-i="'+i+'"><div class=lq>'+esc(ln)+'</div>'+
-          '<div class=lsrc data-i="'+i+'"><span class=pending>Researching this lane\\u2026</span></div></div>'
-      ).join('')+'</div>';
+    const box=document.createElement('div'); box.className='leaftree leafnest';
+    box.innerHTML=labels.map((ln,i)=>
+      '<button type=button class=leafnode data-i="'+i+'" onclick="Activity.toggleLeaf('+i+')" aria-expanded=false>'+
+        '<span class=leaf-ico aria-hidden=true>\\uD83C\\uDF43</span>'+
+        '<span class=leaf-lbl>Lane '+(i+1)+'</span>'+
+        '<span class=leaf-q>'+esc(ln)+'</span><span class=lcaret aria-hidden=true>\\u25b8</span></button>'+
+      '<div class=leafbody data-i="'+i+'"><div class=lq>'+esc(ln)+'</div>'+
+        '<div class=lsrc data-i="'+i+'"><span class=pending>Researching this lane\\u2026</span></div></div>'
+    ).join('');
+    // nest it directly under the current step line (Planning the research fan-out)
+    if(t.line&&t.line.parentNode){ t.line.parentNode.insertBefore(box, t.line.nextSibling); }
+    else { t.body.appendChild(box); }
+    this._leafbox=box;
   },
-  toggleLeaf(i){ const box=document.getElementById('run-leaves'); if(!box)return;
+  toggleLeaf(i){ const box=this._leafbox; if(!box)return;
     const btn=box.querySelector('.leafnode[data-i="'+i+'"]'); if(!btn)return;
     const open=btn.classList.toggle('open'); btn.setAttribute('aria-expanded',open?'true':'false'); },
-  leafDone(i){ const box=document.getElementById('run-leaves'); if(!box)return;
+  leafDone(i){ const box=this._leafbox; if(!box)return;
     const el=box.querySelector('.leafnode[data-i="'+i+'"]'); if(el)el.classList.add('done'); },
-  relabelLeaves(owned){ const box=document.getElementById('run-leaves'); if(!box||!owned)return;
+  relabelLeaves(owned){ const box=this._leafbox; if(!box||!owned)return;
     owned.forEach((o,i)=>{ const el=box.querySelector('.leafnode[data-i="'+i+'"] .leaf-lbl');
       if(el){const who=o.owner_first||o.owner_name; if(who)el.textContent=who;} }); },
   // fill each leaf's expandable body with its graded sources once research data lands
   leafDetails(owned, rows){
-    const box=document.getElementById('run-leaves'); if(!box||!this._leaflabels)return;
+    const box=this._leafbox; if(!box||!this._leaflabels)return;
     const JL={TRUST:'trusted',CROSS_CHECK:'cross-check',FLAG_SELF_INTERESTED:'flagged: sells the result'};
     this._leaflabels.forEach((ln,i)=>{
       const cell=box.querySelector('.lsrc[data-i="'+i+'"]'); if(!cell)return;
@@ -2330,7 +2332,7 @@ const Activity={
       }).join('');
     });
   },
-  resetLeaves(){ const box=document.getElementById('run-leaves'); if(box){box.hidden=true;box.innerHTML='';} this._leaflabels=null; },
+  resetLeaves(){ this._leafbox=null; this._leaflabels=null; },   // the old leaf tree lives in its card; cleared with the log
   stopAll(){ for(const id in this.tracks){if(this.tracks[id].timer)clearInterval(this.tracks[id].timer);}
     this.tracks={}; this.n=0; this._live=0; this.resetLeaves();
     const a=this._el(); if(a){a.hidden=true;a.classList.remove('show','min','busy');} const l=this._log(); if(l)l.innerHTML=''; }
