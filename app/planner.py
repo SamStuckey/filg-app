@@ -224,7 +224,8 @@ def _cited_flagged(rows: list) -> tuple[str, str]:
 
 def propose(idea: str, section_key: str, research_data: dict, history: list,
             steer: str | None = None, board_notes: str | None = None,
-            founder: str | None = None, mock: bool = False) -> tuple[str, float]:
+            founder: str | None = None, mock: bool = False,
+            plan_so_far: str | None = None) -> tuple[str, float]:
     """Draft one section. `steer` is a branch instruction (set when re-drafting after a branch with
     a note). `board_notes` are the board's net takeaways on earlier sections — injected so the
     directors actually shape what gets written next, not just comment after the fact. `founder` is the
@@ -251,12 +252,16 @@ def propose(idea: str, section_key: str, research_data: dict, history: list,
     steer_block = f"\n\nOPERATOR DIRECTION (honor this): {steer}" if steer else ""
     board_block = (f"\n\nBOARD GUIDANCE (your directors' net takeaways on earlier sections — honor "
                    f"them):\n{board_notes}") if board_notes else ""
+    # The sections already written — so this one BUILDS ON them (connect, stay consistent, don't repeat)
+    # rather than reading as an unrelated blob.
+    plan_block = (f"\n\nPLAN SO FAR (the sections already written — connect to these and build on them, "
+                  f"do NOT repeat them):\n{plan_so_far}") if plan_so_far else ""
     # Durable instruction (the IP) lives in the synth_section skill → cached system block; only the
     # runtime data (which section, the idea, decisions, graded research, board) goes in the user message.
-    draft = call(f"plan_{section_key}", SONNET, max_tokens=1100,
+    draft = call(f"plan_{section_key}", SONNET, max_tokens=800,
                  system=skills.system("synth_section"), cache=True, prompt=(
         f"SECTION TO WRITE: **{section['title']}** ({section['sub']}).{guide_block}\n\n"
-        f"IDEA:\n{idea}\n\nDECISIONS SO FAR:\n{prior}{founder_block}{steer_block}{board_block}\n\n"
+        f"IDEA:\n{idea}\n\nDECISIONS SO FAR:\n{prior}{plan_block}{founder_block}{steer_block}{board_block}\n\n"
         f"CITED RESEARCH:\n{cited}\n\nFLAGGED (vendor) CLAIMS:\n{flagged}"))
     return draft, round(LEDGER.cost_slice(start), 4)
 
@@ -277,6 +282,13 @@ def _change_note(idea: str, feedback: str | None, section: dict, mock: bool = Fa
         f"In ONE short sentence (no preamble, no quotes), tell them how you folded that note into the "
         f"\"{section['title']}\" section. Be specific about what you actually did with it."))
     return note.strip(), round(LEDGER.cost_slice(start), 4)
+
+
+def _plan_so_far(files: dict) -> str | None:
+    """The sections already written (in order), as context so the NEXT section connects to and builds on
+    them instead of reading as an unrelated blob. Returns None for the first section."""
+    parts = [files[s["file"]] for s in SECTIONS if s.get("file") in (files or {})]
+    return "\n\n---\n\n".join(parts) if parts else None
 
 
 def _board_notes(reviews: list) -> str | None:
@@ -340,7 +352,7 @@ def advance(session: dict, choice: str, note: str | None, mock: bool = False,
     if choice == "not_quite":
         draft, c = propose(idea, section["key"], session["research"], history,
                            steer=_steer(choice, note), board_notes=_board_notes(reviews),
-                           founder=founder, mock=mock)
+                           founder=founder, mock=mock, plan_so_far=_plan_so_far(files))
         return {"proposal": {"section": section["key"], "title": section["title"], "draft": draft},
                 "history": history, "cost": round(cost + c, 4)}
 
@@ -348,7 +360,8 @@ def advance(session: dict, choice: str, note: str | None, mock: bool = False,
     steer = _steer(choice, note)
     if steer:
         draft, c = propose(idea, section["key"], session["research"], history,
-                           steer=steer, board_notes=_board_notes(reviews), founder=founder, mock=mock)
+                           steer=steer, board_notes=_board_notes(reviews), founder=founder, mock=mock,
+                           plan_so_far=_plan_so_far(files))
         cost = round(cost + c, 4)
     else:
         draft = session["proposal"]["draft"]
@@ -365,7 +378,8 @@ def advance(session: dict, choice: str, note: str | None, mock: bool = False,
     if step + 1 < N:
         nxt = SECTIONS[step + 1]
         draft, c = propose(idea, nxt["key"], session["research"], history,
-                           board_notes=_board_notes(reviews), founder=founder, mock=mock)
+                           board_notes=_board_notes(reviews), founder=founder, mock=mock,
+                           plan_so_far=_plan_so_far(files))
         upd = {"files": files, "step": step + 1, "history": history, "cost": round(cost + c, 4),
                "proposal": {"section": nxt["key"], "title": nxt["title"], "draft": draft}}
     else:
@@ -406,7 +420,7 @@ def forward(idea: str, research_data: dict, node: dict, feedback: str | None,
     if fb:  # a forward note adds/extends — re-synthesize this section honoring it, then finalize
         final, c = propose(idea, section["key"], research_data, history,
                            steer=_steer("yes_and", fb), board_notes=_board_notes(node["board"]),
-                           founder=founder, mock=mock)
+                           founder=founder, mock=mock, plan_so_far=_plan_so_far(files))
         cost += c
     else:
         final = node["draft"]
@@ -420,7 +434,8 @@ def forward(idea: str, research_data: dict, node: dict, feedback: str | None,
     if step + 1 < N:
         nxt = SECTIONS[step + 1]
         draft, c = propose(idea, nxt["key"], research_data, history,
-                           board_notes=_board_notes(reviews), founder=founder, mock=mock)
+                           board_notes=_board_notes(reviews), founder=founder, mock=mock,
+                           plan_so_far=_plan_so_far(files))
         cost += c
         change, cc = _change_note(idea, fb, nxt, mock=mock)   # flag how the note shaped the next part
         cost += cc
@@ -441,6 +456,7 @@ def rebranch(idea: str, research_data: dict, node: dict, feedback: str,
     section = SECTIONS[node["step"]]
     draft, c = propose(idea, section["key"], research_data, node["history"],
                        steer=_steer("not_quite", feedback), board_notes=_board_notes(node["board"]),
+                       plan_so_far=_plan_so_far(node.get("files") or {}),
                        founder=founder, mock=mock)
     change, cc = _change_note(idea, feedback, section, mock=mock)
     sib = {"step": node["step"], "section": section["key"], "title": section["title"],
