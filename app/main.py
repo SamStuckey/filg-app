@@ -1083,6 +1083,20 @@ __FILG_HEAD__
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 Arial,Helvetica,sans-serif}
 a{color:var(--link)}
 .page{max-width:980px;margin:0 auto;padding:16px 16px 64px}
+/* Workspace = a pinned, collapsible left tools drawer + full-width main content. */
+.drawerhead{display:none}.drawer-rail{display:none}
+body.ws .page{max-width:none;padding-left:316px;transition:padding-left .2s}
+body.ws .workspace{display:block}
+body.ws .side{position:fixed;left:0;top:0;bottom:0;width:300px;overflow-y:auto;background:var(--paper);border-right:1px solid #888;z-index:60;padding:14px 12px;transition:transform .2s}
+body.ws .side .sec{background:#fff}
+body.ws .drawerhead{display:flex;align-items:center;justify-content:space-between;margin:0 0 8px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+body.ws .drawerhead b{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+.drawerx{background:none;border:0;color:var(--muted);font-size:20px;line-height:1;cursor:pointer;padding:0 6px}
+.drawerx:hover{color:var(--ink)}
+body.ws.drawer-collapsed .side{transform:translateX(-100%)}
+body.ws.drawer-collapsed .page{padding-left:16px}
+body.ws.drawer-collapsed .drawer-rail{display:flex;align-items:center;gap:7px;position:fixed;left:0;top:50%;transform:translateY(-50%);z-index:61;background:#444;color:#fff;border:0;border-radius:0 8px 8px 0;padding:11px 9px;cursor:pointer;font-size:12px;font-weight:700;writing-mode:vertical-rl;letter-spacing:.05em}
+@media(max-width:820px){body.ws .page{padding-left:16px}body.ws .side{box-shadow:2px 0 18px rgba(0,0,0,.25)}}
 .top{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
 .topright{display:flex;align-items:center;gap:12px}
 .modesw{display:inline-flex;border:1px solid #888}
@@ -1338,14 +1352,27 @@ button:hover{background:#e8e8e8}button:disabled{opacity:.5;cursor:default}
 .run-min{background:none;border:0;color:var(--muted);font-size:12px;cursor:pointer;padding:2px 6px;line-height:1}
 .runner.min .run-min{transform:rotate(-90deg)}
 .runner.min .run-leaves,.runner.min .run-log{display:none}
-.run-leaves{padding:11px 14px;border-bottom:1px solid var(--line);background:#fbfbfa}
-.leaf-cap{font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin:0 0 8px}
-.leaf-row{display:flex;flex-wrap:wrap;gap:7px}
-.leaf{display:inline-flex;align-items:center;gap:5px;padding:4px 9px;border:1px solid var(--line);background:#fff;font-size:12px;border-radius:999px;color:var(--muted)}
-.leaf .leaf-ico{filter:grayscale(1);opacity:.45;transition:filter .3s,opacity .3s}
-.leaf.done{border-color:var(--ok);color:var(--ink);background:var(--ok-bg,#eaf4f2)}
-.leaf.done .leaf-ico{filter:none;opacity:1}
-.leaf-lbl{white-space:nowrap;max-width:120px;overflow:hidden;text-overflow:ellipsis}
+.run-leaves{padding:8px 10px;border-bottom:1px solid var(--line);background:#fbfbfa}
+.leaf-cap{font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin:0 0 4px;padding-left:4px}
+/* nested, like the decision tree: indented leaf nodes, each expandable to its own internals */
+.leaftree{display:flex;flex-direction:column}
+.leafnode{display:flex;align-items:center;gap:7px;width:100%;background:none;border:0;border-top:1px dashed var(--line);font:inherit;font-size:13px;color:var(--muted);cursor:pointer;text-align:left;padding:6px 6px 6px 22px}
+.leaftree .leafnode:first-child{border-top:0}
+.leafnode .leaf-ico{filter:grayscale(1);opacity:.45;transition:filter .25s,opacity .25s;flex:none}
+.leafnode.done{color:var(--ink)}
+.leafnode.done .leaf-ico{filter:none;opacity:1}
+.leafnode .leaf-lbl{font-weight:700;flex:none}
+.leafnode .leaf-q{color:var(--muted);font-weight:400;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.leafnode .lcaret{margin-left:auto;flex:none;font-size:10px;opacity:.55;transition:transform .15s}
+.leafnode.open .lcaret{transform:rotate(90deg)}
+.leafbody{display:none;padding:2px 10px 10px 40px;font-size:12.5px;line-height:1.5}
+.leafnode.open + .leafbody{display:block}
+.leafbody .lq{color:var(--muted);margin:0 0 8px}
+.leafbody .src{padding:6px 0;border-top:1px dashed var(--line);overflow-wrap:anywhere}
+.leafbody .src:first-child{border-top:0}
+.leafbody .src .note{color:var(--muted)}
+.leafbody .src .gate{display:block;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;color:var(--muted);margin-top:2px}
+.leafbody .pending{color:var(--muted);font-style:italic}
 .run-log{padding:10px 12px;display:flex;flex-direction:column;gap:7px;max-height:46vh;overflow-y:auto}
 .atask{border:1px solid var(--line);background:#fff;overflow:hidden}
 .atask.done{opacity:.7}
@@ -1357,13 +1384,13 @@ button:hover{background:#e8e8e8}button:disabled{opacity:.5;cursor:default}
 .ah .caret{flex:none;font-size:11px;opacity:.6}
 .atask.collapsed .abody{display:none}
 .abody{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.5;padding:0 12px 9px 12px;max-height:108px;overflow-y:auto}
-.aline{display:flex;align-items:center;gap:9px;padding:1px 0;background:none;color:var(--muted)}
+.aline{display:flex;align-items:flex-start;gap:9px;padding:1px 0;background:none;color:var(--muted)}
 .aline.done{color:#444}
 .aline.active{color:var(--ink);font-weight:600}
-.aline .aglyph{width:12px;flex:none;text-align:center;color:var(--warn)}
+.aline .aglyph{width:12px;flex:none;text-align:center;color:var(--warn);margin-top:1px}
 .aline.active .aglyph::before{content:"\\203A";font-weight:800}
 .aline.done .aglyph::before{content:"\\2713";color:var(--ok)}
-.aline .atext{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.aline .atext{white-space:normal;overflow-wrap:anywhere;min-width:0}
 .authgate{margin:6px 0 2px}.authgate button{width:100%;margin-bottom:8px}
 .gbtn{display:flex;align-items:center;justify-content:center;gap:10px;background:#fff;color:var(--ink);border:1px solid #888;font-weight:700}
 .gicon{width:18px;height:18px;flex:none}
@@ -1376,7 +1403,7 @@ button:hover{background:#e8e8e8}button:disabled{opacity:.5;cursor:default}
 .pcard .act{display:flex;align-items:center;gap:8px;flex:none}.pcard .act button{font-size:13px;padding:8px 12px}
 .pill{font-size:11px;font-weight:700;padding:1px 8px;border:1px solid var(--warn);color:var(--warn)}.pill.done{border-color:var(--ok);color:var(--ok)}
 .empty{color:var(--muted);text-align:center;margin:30px 0}
-@media(max-width:820px){.workspace{grid-template-columns:1fr}.side{position:static}}
+@media(max-width:820px){.workspace{grid-template-columns:1fr}}
 a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--link);outline-offset:2px}
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
 .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
@@ -1421,7 +1448,9 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <div class=cmtpa><button type=button class=ghost onclick=hideCmtPop()>Cancel</button><button type=button onclick=saveComment()>Comment</button></div></div>
 <div class=toasts id=toasts aria-live=polite></div>
 <div class=workspace id=workspace style="display:none">
+<button type=button class=drawer-rail onclick="document.body.classList.remove('drawer-collapsed')" aria-label="Open tools">&#9776; Tools</button>
 <aside class=side>
+<div class=drawerhead><b>Tools</b><button type=button class=drawerx onclick="document.body.classList.add('drawer-collapsed')" aria-label="Collapse tools">&#8249;</button></div>
 <div class=sec><h3>Your plan</h3><ul class=tree id=tree></ul>
 <button id=dl class=dl onclick=download() style="display:none;margin-top:12px">⬇ Download plan (PDF)</button>
 </div>
@@ -1492,8 +1521,7 @@ async function start(){
     if(d.gibberish){showJoke(d);go.disabled=false;go.textContent='Build my plan →';return;}  // nonsense → roast, no run
     if(!r.ok){err.textContent=d.error||'Something went wrong.';if(d.needKey)err.innerHTML+=' <a href=# onclick="keyModal();return false">Add your key →</a>';go.disabled=false;go.textContent='Build my plan →';return;}
     SID=d.id;meterBaseline(d.id);   // baseline at 0 so this run's tokens fully count as research streams in
-    document.getElementById('intake').style.display='none';
-    document.getElementById('workspace').style.display='grid';
+    show('workspace');   // reveal the workspace + apply the ws layout (left tools drawer, full-width main)
     poll();
   }catch(e){err.textContent='Network error.';go.disabled=false;go.textContent='Build my plan →';}
 }
@@ -1537,6 +1565,7 @@ function _drainProgress(s){
   }
   ACT_PROG_N=Math.max(ACT_PROG_N,prog.length);
   if(s.research&&s.research.owned_lanes)Activity.relabelLeaves(s.research.owned_lanes);  // Lane N → owner name
+  if(s.research)Activity.leafDetails(s.research.owned_lanes,s.research.rows);             // fill each leaf's internals
 }
 // ── Model crew: pick-a-tile popover; cheap → premium. n = display name, k = engine stack key
 // (keys are STABLE — the engine/tests/DB key on them; only the labels were renamed). ──────────
@@ -2261,22 +2290,47 @@ const Activity={
     delete this.tracks[id]; this.n=Math.max(0,this.n-1); this._live=Math.max(0,this._live-1);
     this._trim(); this._busy();
   },
-  // ── research fan-out leaves: one 🍃 per lane, grey → green as each lane returns ──
+  // ── research fan-out leaves: a nested tree, one 🍃 per lane, grey → green as each lane returns.
+  // Each leaf expands (like the decision tree) to its own internals: the question + graded sources. ──
   leaves(labels){
     const box=document.getElementById('run-leaves'); if(!box)return;
-    labels=labels||[];
+    labels=labels||[]; this._leaflabels=labels;
     box.hidden=false;
-    box.innerHTML='<div class=leaf-cap>'+labels.length+' research lanes, fanned out in parallel</div>'+
-      '<div class=leaf-row>'+labels.map((ln,i)=>
-        '<span class="leaf" data-i="'+i+'" title="'+esc(ln)+'"><span class=leaf-ico>\\uD83C\\uDF43</span>'+
-        '<span class=leaf-lbl>Lane '+(i+1)+'</span></span>').join('')+'</div>';
+    box.innerHTML='<div class=leaf-cap>\\uD83C\\uDF43 '+labels.length+' research lanes, fanned out in parallel</div>'+
+      '<div class=leaftree>'+labels.map((ln,i)=>
+        '<button type=button class=leafnode data-i="'+i+'" onclick="Activity.toggleLeaf('+i+')" aria-expanded=false>'+
+          '<span class=leaf-ico aria-hidden=true>\\uD83C\\uDF43</span>'+
+          '<span class=leaf-lbl>Lane '+(i+1)+'</span>'+
+          '<span class=leaf-q>'+esc(ln)+'</span><span class=lcaret aria-hidden=true>\\u25b8</span></button>'+
+        '<div class=leafbody data-i="'+i+'"><div class=lq>'+esc(ln)+'</div>'+
+          '<div class=lsrc data-i="'+i+'"><span class=pending>Researching this lane\\u2026</span></div></div>'
+      ).join('')+'</div>';
   },
+  toggleLeaf(i){ const box=document.getElementById('run-leaves'); if(!box)return;
+    const btn=box.querySelector('.leafnode[data-i="'+i+'"]'); if(!btn)return;
+    const open=btn.classList.toggle('open'); btn.setAttribute('aria-expanded',open?'true':'false'); },
   leafDone(i){ const box=document.getElementById('run-leaves'); if(!box)return;
-    const el=box.querySelector('.leaf[data-i="'+i+'"]'); if(el)el.classList.add('done'); },
+    const el=box.querySelector('.leafnode[data-i="'+i+'"]'); if(el)el.classList.add('done'); },
   relabelLeaves(owned){ const box=document.getElementById('run-leaves'); if(!box||!owned)return;
-    owned.forEach((o,i)=>{ const el=box.querySelector('.leaf[data-i="'+i+'"] .leaf-lbl');
+    owned.forEach((o,i)=>{ const el=box.querySelector('.leafnode[data-i="'+i+'"] .leaf-lbl');
       if(el){const who=o.owner_first||o.owner_name; if(who)el.textContent=who;} }); },
-  resetLeaves(){ const box=document.getElementById('run-leaves'); if(box){box.hidden=true;box.innerHTML='';} },
+  // fill each leaf's expandable body with its graded sources once research data lands
+  leafDetails(owned, rows){
+    const box=document.getElementById('run-leaves'); if(!box||!this._leaflabels)return;
+    const JL={TRUST:'trusted',CROSS_CHECK:'cross-check',FLAG_SELF_INTERESTED:'flagged: sells the result'};
+    this._leaflabels.forEach((ln,i)=>{
+      const cell=box.querySelector('.lsrc[data-i="'+i+'"]'); if(!cell)return;
+      const mine=(rows||[]).filter(r=>r.lane===ln);
+      if(!mine.length)return;   // keep the "Researching…" placeholder until this lane has rows
+      cell.innerHTML=mine.map(r=>{
+        const ok=r.mark==='ok', jl=JL[r.judge]||'';
+        const gate=(r.tier||jl)?'<span class=gate>\\u2699 gate: '+esc((r.tier||'').toLowerCase())+(jl?' \\u00b7 '+esc(jl):'')+'</span>':'';
+        return '<div class=src>'+(ok?'\\u2705':'\\u26a0\\ufe0f')+' '+esc(r.text)+
+          '<br><span class=note>'+esc(host(r.url))+', '+esc(r.note)+'</span>'+gate+'</div>';
+      }).join('');
+    });
+  },
+  resetLeaves(){ const box=document.getElementById('run-leaves'); if(box){box.hidden=true;box.innerHTML='';} this._leaflabels=null; },
   stopAll(){ for(const id in this.tracks){if(this.tracks[id].timer)clearInterval(this.tracks[id].timer);}
     this.tracks={}; this.n=0; this._live=0; this.resetLeaves();
     const a=this._el(); if(a){a.hidden=true;a.classList.remove('show','min','busy');} const l=this._log(); if(l)l.innerHTML=''; }
@@ -2481,7 +2535,8 @@ async function signinEmail(){
   toast(error?error.message:'Check your inbox for the sign-in link.',error?'err':'');
 }
 async function signout(){await sb.auth.signOut();session=null;me=null;newPlan();renderAuth();}
-function show(id){['intake','workspace','profile'].forEach(x=>{const e=document.getElementById(x);if(e)e.style.display=(x===id?(x==='workspace'?'grid':'block'):'none');});}
+function show(id){['intake','workspace','profile'].forEach(x=>{const e=document.getElementById(x);if(e)e.style.display=(x===id?(x==='workspace'?'block':'block'):'none');});
+  document.body.classList.toggle('ws',id==='workspace');}   // ws → left tools drawer + full-width main
 function newPlan(){SIDEBAR_PHASE=null;ACT_RESEARCH=false;ACT_PROG_N=0;ACT_ID=null;VET_OPEN=true;VET_STEPPED=false;DTREE_STEP=-99;Activity.stopAll();closeViewer();SID=null;
   // render a FRESH intake — clear any in-flight button/idea/error left over from a prior build or sign-out
   const g=document.getElementById('go'); if(g){g.disabled=false;g.textContent='Build my plan →';}
