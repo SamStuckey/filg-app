@@ -3768,7 +3768,9 @@ function planCardHtml(p,total){
   const acts=`<button onclick="resume('${p.id}')">${p.done?'Open / iterate':'Resume'}</button>`+
     `<button class=gbtn onclick="sharePlan('${p.id}')">${p.shared?'🔗 Shared':'Share'}</button>`+
     `<button class=gbtn onclick="deletePlan('${p.id}')" aria-label="Delete plan">Delete</button>`;   // downloads now live in the "My files" tab
-  return `<div class=pcard><div class=pcard-main><div class=idea>${esc((p.idea||'Untitled').slice(0,90))}</div><div class=meta>${meta} · ${esc(new Date(p.created_at).toLocaleDateString())}</div></div><div class=act><span class="pill ${p.done?'done':''}">${p.done?'done':'WIP'}</span>${acts}</div></div>`;
+  // WIP projects show their progress as N/7 (current part); researching = pre-build; done = done.
+  const pill=p.done?'done':(p.status==='researching'?'WIP':((p.step||0)+1)+'/'+total);
+  return `<div class=pcard><div class=pcard-main><div class=idea>${esc((p.idea||'Untitled').slice(0,90))}</div><div class=meta>${meta} · ${esc(new Date(p.created_at).toLocaleDateString())}</div></div><div class=act><span class="pill ${p.done?'done':''}">${pill}</span>${acts}</div></div>`;
 }
 // "My files" card: re-download a plan's deliverables. PDF only when unlocked (re-download a purchased
 // item); the raw .zip (finished plans) and the LLM hand-off prompt are always free.
