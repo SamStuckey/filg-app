@@ -1223,26 +1223,28 @@ body.hasbar .vibestrip{display:none}   /* don't fight the fixed action bar mid-b
 .laneown{font-weight:700;color:var(--ink)}.lanesub{color:var(--muted)}
 .gate{display:inline-block;margin-top:3px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;color:var(--muted)}
 .badge{font-size:10px;font-weight:700;padding:0 5px;border:1px solid var(--line)}.b-ok{color:var(--ok);border-color:var(--ok)}.b-warn{color:var(--warn);border-color:var(--warn)}
-.tree{list-style:none;padding:0;margin:0}.tree li{padding:9px 0;border-top:1px solid var(--line)}.tree li:first-child{border-top:0}
-.tree .f{display:flex;align-items:center;gap:10px;font-size:14px}
-.tree .built{cursor:pointer}.tree .built .nm{font-weight:700}.tree .pending{opacity:.55}.tree .active .nm{color:var(--link);font-weight:700}
-.tree .ic{width:18px;height:18px;flex:none;display:grid;place-items:center;font-size:12px;border:1px solid var(--line)}
-.tree .done .ic{color:var(--ok);border-color:var(--ok)}.tree .active .ic{color:var(--link);border-color:var(--link)}
-.tree .pending .ic{border:1px solid var(--line);color:var(--muted)}
-.tree .nm .s{display:block;font-size:11px;color:var(--muted);font-weight:400}
-.tree li.built button.f{padding:3px 4px}
-.tree li.viewing button.f{background:#f0f0f0}.tree li.viewing .nm{color:var(--link)}
-.tree li.justdone{outline:1px solid var(--link)}
 .main{min-width:0}
-#viewer .node{position:relative}
-.viewer-x{position:absolute;top:14px;right:16px;background:none;border:0;color:var(--muted);font-size:22px;line-height:1;padding:0 6px;font-weight:400;cursor:pointer}
-.viewer-x:hover{color:var(--ink)}
-.dl{width:100%}
-.answer{background:var(--card);border:1px solid var(--line);padding:20px;margin-bottom:18px}
-.answer h2{font-size:22px;font-weight:700;margin:0 0 4px}.answer .tag{color:var(--muted);font-size:13px;margin:0 0 12px}
 .node{background:var(--card);border:1px solid var(--line);padding:20px}
 .node .eyebrow{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:700}
 .node h3{font-size:19px;font-weight:700;margin:4px 0 2px}.node .h3sub{color:var(--muted);font-size:13px;margin:0 0 12px}
+/* sticky offer summary pinned to the top of the center column (hidden until research fills it) */
+.main #answer.summary{position:sticky;top:49px;z-index:30;background:var(--card);border:1px solid var(--line);padding:13px 18px;margin:0 0 14px}
+.main #answer.summary:empty{display:none}
+#answer.summary h2{font-size:17px;font-weight:700;margin:0 0 3px}
+#answer.summary .tag{color:var(--muted);font-size:12px;margin:0 0 7px}
+#answer.summary p{margin:4px 0;font-size:13.5px}
+/* "Your plan" tab strip — the plan outline + decision tree, merged into the center column */
+.planwrap{margin:2px 0 0}
+.plantabs{display:flex;gap:4px;overflow-x:auto;padding-top:2px;border-bottom:1px solid #888;scrollbar-width:thin}
+.ptab{flex:0 0 auto;display:inline-flex;align-items:center;gap:6px;background:#ececec;color:var(--ink);border:1px solid var(--line);border-bottom:0;border-radius:7px 7px 0 0;font:inherit;font-size:12.5px;font-weight:700;padding:7px 12px;cursor:pointer;white-space:nowrap;position:relative;top:1px}
+.ptab .pic{font-size:11px;display:inline-grid;place-items:center;width:15px;height:15px}
+.ptab.built .pic{color:var(--ok)}
+.ptab.current,.ptab.current .pic{color:var(--link)}
+.ptab.pending{opacity:.5;cursor:default}
+.ptab:not(.pending):not(.sel):hover{background:#f4f4f4}
+.ptab.sel{background:var(--card);border-color:#888;border-bottom:1px solid var(--card)}
+.ptab.justdone{box-shadow:0 0 0 2px var(--link) inset}
+.pbuild{background:var(--ink);color:#fff;border:1px solid var(--ink);font-weight:700}
 .draft{background:#fafafa;border:1px solid var(--line);padding:14px 16px;font-size:14px;margin-bottom:14px;cursor:text}
 .md h4,.md h5{font-weight:700;margin:12px 0 4px;line-height:1.3}.md h4{font-size:15px}.md h5{font-size:13.5px}.md>:first-child{margin-top:0}
 .md p{margin:0 0 8px}.md p:last-child{margin-bottom:0}.md ul{margin:6px 0 8px;padding-left:20px}.md li{margin:3px 0}
@@ -1268,11 +1270,6 @@ body.hasbar .vibestrip{display:none}   /* don't fight the fixed action bar mid-b
 .navrow .b-back{background:#fff;color:var(--ink);border:1px solid var(--line);flex:0 0 auto;min-width:96px}
 .ferr{color:var(--kill);font-weight:700;font-size:13px;margin-top:8px;min-height:0}
 #dtree{display:flex;flex-direction:column;gap:1px}
-.dnode{display:block;width:100%;text-align:left;background:none;border:0;font:inherit;color:var(--ink);font-size:12.5px;line-height:1.35;padding:5px 7px;cursor:pointer}
-.dnode:hover{background:#f4f4f4}.dnode.path{font-weight:700}
-.dnode.on{background:#f0f0f0;color:var(--link);font-weight:700}
-.dnode .ds{display:block;font-size:11px;color:var(--muted);font-weight:400;margin-top:1px}
-.dnode.on .ds{color:var(--link)}
 .compose{margin-top:14px;border:1px solid #888;padding:12px;background:#fff}
 .compose .pl{font-weight:700;margin:0 0 8px}
 .chips{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0 0}
@@ -1466,8 +1463,6 @@ body.hasbar .workspace{padding-bottom:74px}
 a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--link);outline-offset:2px}
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
 .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
-.tree button.f{width:100%;background:none;border:0;font:inherit;color:inherit;text-align:left;cursor:pointer;padding:0}
-.tree button.f:hover .nm{color:var(--link)}
 </style></head><body><div class=page>
 <div class=top><h1 class=logo><button type=button class=logobtn onclick=newPlan() aria-label="FILG, start a new idea"><svg class=logomark viewBox="0 0 32 32" aria-hidden=true><rect width=32 height=32 rx=8 fill=#FF6B4A></rect><path d="M16 4c-3.2 2.8-4.3 7.4-4.3 11.8v3.2h8.6v-3.2C20.3 11.4 19.2 6.8 16 4z" fill=#fff></path><circle cx=16 cy=12 r=2.1 fill=#2E7CF6></circle><path d="M11.7 15.5 8.6 20.5l3.1-1.3z" fill=#fff></path><path d="M20.3 15.5 23.4 20.5l-3.1-1.3z" fill=#fff></path><path d="M13.6 19.5h4.8L16 25.5z" fill=#FFC23F></path></svg>FI<span>LG</span></button></h1><div class=topright><div class=stackdial id=stackdial hidden><button type=button class=stackbtn id=stackbtn aria-haspopup=true aria-expanded=false aria-label="Choose your model crew" onclick=toggleStackPop()><span class=stacklbl id=stacklbl></span><span class=stack-cost id=stackcost aria-hidden=true></span><span class=stackcaret aria-hidden=true>&#9662;</span></button><div class=stackpop id=stackpop role=menu aria-label="Choose a model crew" hidden></div></div><button type=button class=meter id=meter hidden title="Token usage this session (resets when you reload)"></button><div class=authbar id=authbar></div></div></div>
 <div class=note-banner id=banner></div>
@@ -1510,12 +1505,6 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <button type=button class=drawer-rail onclick="document.body.classList.remove('drawer-collapsed')" aria-label="Open tools">&#9776; Tools</button>
 <aside class=side>
 <div class=drawerhead><b>Tools</b><button type=button class=drawerx onclick="document.body.classList.add('drawer-collapsed')" aria-label="Collapse tools">&#8249;</button></div>
-<div class=sec><h3>Your plan</h3><ul class=tree id=tree></ul>
-<button id=dl class=dl onclick=download() style="display:none;margin-top:12px">⬇ Download plan (PDF)</button>
-</div>
-<div class="sec collap" id=dtreesec style="display:none"><button type=button class=sechead aria-expanded=false onclick="toggleSec('dtreesec')"><h3>Decision tree</h3><span class=caret aria-hidden=true>▸</span></button>
-<div class=secbody><p class=bhelp>Each step is a node. Go <b>Back</b> to branch and try another direction; click any node to hop to it. The active branch is highlighted.</p>
-<div id=dtree></div></div></div>
 <div class="sec collap" id=chatsec style="display:none"><button type=button class=sechead aria-expanded=false onclick="toggleSec('chatsec')"><h3>Chat with your plan</h3><span class=caret aria-hidden=true>▸</span></button>
 <div class=secbody>
 <div class=chatlog id=chatlog></div>
@@ -1536,13 +1525,14 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <div class=secbody><div id=research></div></div></div>
 </aside>
 <main class=main>
+<div id=answer class=summary></div>
 <div class=runner id=runner aria-live=polite hidden>
 <div class=run-head><span class=run-dot aria-hidden=true></span><span class=run-title id=run-title>The machine, working</span><span class=run-spacer></span><button type=button class=run-min id=run-min onclick="document.getElementById('runner').classList.toggle('min')" aria-label="Collapse or expand the runner">&#9662;</button></div>
 <div class=run-log id=runner-log></div>
 </div>
-<div id=viewer style="display:none"></div>
 <div id=vet></div>
-<div id=answer></div>
+<div class=planwrap id=planwrap style="display:none"><div class=plantabs id=plantabs role=tablist aria-label="Your plan, part by part"></div></div>
+<div id=planview style="display:none"></div>
 <div id=node></div>
 <div id=boardround></div>
 <div class=err id=err2></div>
@@ -1608,7 +1598,7 @@ async function poll(){
   const r=await fetch('/api/plan/'+SID,{headers:authHeaders()});
   const s=await r.json();
   meterTick(s);     // set the session-meter baseline early (cost 0 mid-research) so the welcome run counts
-  renderTree(s);renderAddons(s);     // show the plan outline immediately, even while researching
+  renderPlanTabs(s);renderAddons(s);     // show the plan outline immediately, even while researching
   if(s.status==='researching'){
     if(!ACT_RESEARCH){Activity.resetLeaves();ACT_ID=Activity.open('Researching + grading your market');Activity.push(ACT_ID,'Spinning up your research');ACT_RESEARCH=true;ACT_PROG_N=0;}
     _drainProgress(s);                                           // real receipts + the leaf fan-out, streamed
@@ -1742,7 +1732,7 @@ function render(s){
     document.getElementById('node').innerHTML='<div class=node><h3>Hit a snag</h3><p class=lead>'+esc(s.error||'Something went wrong.')+'</p>'+fix+'<button type=button class=ghost onclick=newPlan()>Start over</button></div>';
     say('Something went wrong: '+(s.error||'')); return;
   }
-  renderResearch(s);renderVet(s);renderAnswer(s);renderTree(s);renderNode(s);renderActionBar(s);renderAddons(s);renderBoard(s);renderBoardRound(s);renderDecisionTree(s);renderChat(s);renderStack(s);syncSidebar(s);
+  renderResearch(s);renderVet(s);renderAnswer(s);renderNode(s);renderPlanTabs(s);renderAddons(s);renderBoard(s);renderBoardRound(s);renderChat(s);renderStack(s);syncSidebar(s);
   if(s.done&&SID&&location.pathname!=='/plan/'+SID)history.pushState({plan:SID},'','/plan/'+SID);   // finished plan gets a clean URL (revisit + bookmark)
   if(s.done)say('Your plan is complete, all '+s.total+' parts ready to download.');
   else if(s.vetting&&s.vetting.verdict)say('Research graded. Verdict: '+s.vetting.verdict+'. Ready to build part '+((s.step||0)+1)+'.');
@@ -1847,38 +1837,64 @@ function renderAnswer(s){
   const p=s.research&&s.research.prose; if(!p)return;
   document.getElementById('answer').innerHTML=`<h2>${esc(p.title)}</h2><p class=tag>Your offer, with the research graded, vendor spin labeled, not laundered.</p><p><b>What you'd sell:</b> ${esc(p.offer)}</p><p><b>How you'd sell it:</b> ${esc(p.gtm)}</p>`;
 }
-let BUILT={}, SECMETA={}, VIEWING=null;
-function renderTree(s){
-  BUILT={}; SECMETA={}; (s.files||[]).forEach(f=>BUILT[f.path]=f.content);
-  (s.sections||[]).forEach(sec=>SECMETA[sec.file]={title:sec.title,sub:sec.sub});
-  const step=s.step==null?-1:s.step;
-  let lastBuilt=-1; (s.sections||[]).forEach((sec,i)=>{if(BUILT[sec.file]!=null)lastBuilt=i;});
-  document.getElementById('tree').innerHTML=(s.sections||[]).map((sec,i)=>{
-    const nm=`<span class=nm>${esc(sec.title)}<span class=s>${esc(sec.sub||'')}</span></span>`;
-    if(BUILT[sec.file]!=null){
-      // most-recently-finished step pulses while building, signalling the next is ready
-      const cls='done built'+(VIEWING===sec.file?' viewing':'')+((!s.done&&i===lastBuilt)?' justdone':'');
-      return `<li class="${cls}" data-file="${esc(sec.file)}"><button type=button class=f aria-label="Open ${esc(sec.title)} in the main panel" onclick="viewSection('${esc(sec.file)}')"><span class=ic aria-hidden=true>✓</span>${nm}</button></li>`;
-    }
-    if(!s.done&&i===step){return `<li class=active><div class=f><span class=ic aria-hidden=true>✍︎</span>${nm}</div></li>`;}
-    return `<li class=pending><div class=f><span class=ic aria-hidden=true>○</span>${nm}</div></li>`;
+let BUILT={}, SECMETA={}, PLAN_TAB=-99;
+// "Your plan" + the decision tree, merged into a center-column tab strip. Each part of the plan is a
+// tab: a built part opens read-only with "jump back and build from here" (the old decision-tree
+// branch action); the part you're on shows the live draft + the bottom action bar; parts you haven't
+// reached are disabled. Switching tabs is client-only (no refetch) — server state snaps you back to
+// the part you're on.
+function renderPlanTabs(s){
+  const wrap=document.getElementById('planwrap'), strip=document.getElementById('plantabs');
+  if(!wrap||!strip)return;
+  const secs=s.sections||[];
+  if(!secs.length){wrap.style.display='none';return;}
+  wrap.style.display='';
+  BUILT={}; (s.files||[]).forEach(f=>BUILT[f.path]=f.content);
+  SECMETA={}; secs.forEach(sec=>SECMETA[sec.file]={title:sec.title,sub:sec.sub});
+  // active path through the decision tree: first node seen per step (walking active → root) gives the
+  // node to jump back to for each built part.
+  const t=s.tree||{}, byId={}; (t.nodes||[]).forEach(n=>byId[n.id]=n);
+  const stepNode={}; let cur=t.active;
+  while(cur!=null&&byId[cur]){const n=byId[cur]; if(stepNode[n.step]==null)stepNode[n.step]=n.id; cur=n.parent;}
+  const step=s.done?secs.length:(s.step==null?-1:s.step);
+  let lastBuilt=-1; secs.forEach((sec,i)=>{if(BUILT[sec.file]!=null)lastBuilt=i;});
+  strip.innerHTML=secs.map((sec,i)=>{
+    const built=BUILT[sec.file]!=null, isActive=(!s.done&&i===step);
+    const state=built?'built':(isActive?'current':'pending');
+    const ic=built?'✓':(isActive?'✍︎':'○');
+    const just=(!s.done&&built&&i===lastBuilt)?' justdone':'';   // most-recent finish pulses
+    const nodeId=stepNode[i]!=null?stepNode[i]:'';
+    const dis=(state==='pending')?' disabled':'';
+    return `<button type=button role=tab aria-selected=false class="ptab ${state}${just}" data-i="${i}" data-node="${nodeId}"${dis} onclick="selectPlanTab(${i})" title="${esc(sec.sub||'')}"><span class=pic aria-hidden=true>${ic}</span><span class=plab>${esc(sec.title)}</span></button>`;
   }).join('');
-  const dl=document.getElementById('dl');
-  if(dl){dl.style.display=s.done?'block':'none';
-    dl.innerHTML=pdfUnlocked()?'⬇ Download plan (PDF)':('🔓 Unlock plan PDF, '+pdfPriceStr());}
+  PLAN_TAB = s.done ? -1 : step;   // server state changed → snap to the part you're on (home when done)
+  applyPlanTab(s);
 }
-function viewSection(file){
-  VIEWING=file;
-  const v=document.getElementById('viewer'); if(!v)return;
-  const meta=SECMETA[file]||{}, content=BUILT[file]||'';
-  v.innerHTML=`<div class=node><button type=button class=viewer-x onclick=closeViewer() aria-label="Close">×</button>`+
-    `<span class=eyebrow>From your plan</span><h3>${esc(meta.title||'Section')}</h3><p class=h3sub>${esc(meta.sub||'')}</p>`+
-    `<div class="draft md">${mdToHtml(content)}</div></div>`;
-  v.style.display='block';
-  document.querySelectorAll('#tree li[data-file]').forEach(li=>li.classList.toggle('viewing',li.getAttribute('data-file')===file));
-  v.scrollIntoView({behavior:'smooth',block:'start'});
+function selectPlanTab(i){ PLAN_TAB=i; applyPlanTab(LAST_S||{}); }
+function applyPlanTab(s){
+  const node=document.getElementById('node'), view=document.getElementById('planview');
+  const secs=s.sections||[];
+  const step=s.done?-1:(s.step==null?-1:s.step);
+  document.querySelectorAll('#plantabs .ptab').forEach(b=>{const on=Number(b.dataset.i)===PLAN_TAB;b.classList.toggle('sel',on);b.setAttribute('aria-selected',String(on));});
+  const viewingEarlier = PLAN_TAB>=0 && PLAN_TAB!==step;   // looking at an already-built part, not the live one
+  if(viewingEarlier && view){
+    const sec=secs[PLAN_TAB]||{}, content=BUILT[sec.file]||'';
+    const tab=document.querySelector('#plantabs .ptab[data-i="'+PLAN_TAB+'"]');
+    const nodeId=tab?tab.dataset.node:'';
+    const build=(nodeId&&!s.done)?`<button type=button class=pbuild onclick="gotoNode('${nodeId}')">↩ Jump back and build from here</button>`:'';
+    const back=`<button type=button class=ghost onclick=backToCurrent()>${s.done?'Back to overview':"Back to the part you're on"} →</button>`;
+    view.innerHTML=`<div class=node><span class=eyebrow>From your plan</span><h3>${esc(sec.title||'Part')}</h3><p class=h3sub>${esc(sec.sub||'')}</p><div class="draft md">${mdToHtml(content)}</div><div class=planacts>${build}${back}</div></div>`;
+    view.style.display='block'; if(node)node.style.display='none';
+    const bar=document.getElementById('actionbar'); if(bar)bar.classList.remove('show'); document.body.classList.remove('hasbar');
+    view.scrollIntoView({behavior:'smooth',block:'nearest'});
+  } else {
+    if(view){view.style.display='none';view.innerHTML='';}
+    if(node)node.style.display='';
+    renderActionBar(s);   // back on the live part → restore the bottom action bar
+  }
 }
-function closeViewer(){VIEWING=null;const v=document.getElementById('viewer');if(v){v.style.display='none';v.innerHTML='';}document.querySelectorAll('#tree li.viewing').forEach(li=>li.classList.remove('viewing'));}
+function backToCurrent(){ const s=LAST_S||{}; PLAN_TAB=s.done?-1:(s.step==null?-1:s.step); applyPlanTab(s); }
+function closeViewer(){ const v=document.getElementById('planview'); if(v){v.style.display='none';v.innerHTML='';} PLAN_TAB=-99; }
 function renderNode(s){
   const n=document.getElementById('node');
   if(s.status==='researching')return;
@@ -2158,30 +2174,6 @@ async function gotoNode(id){
     REDRAFTS=0;   // navigated to another node — reset the rework counter
     render(s);
   }catch(e){document.getElementById('err2').textContent='Network error.';}
-}
-let DTREE_STEP=-99;
-function renderDecisionTree(s){
-  const sec=document.getElementById('dtreesec'),box=document.getElementById('dtree');
-  if(!sec||!box)return;
-  const t=s.tree;
-  if(!t||!t.show){sec.style.display='none';return;}
-  sec.style.display='';
-  const dstep=s.done?9999:(s.step==null?-1:s.step);   // auto-open the tree on each new step
-  if(dstep!==DTREE_STEP){DTREE_STEP=dstep;setOpen('dtreesec',true);}
-  const nodes=t.nodes||[],byId={},kids={};
-  nodes.forEach(n=>{byId[n.id]=n;kids[n.id]=[];});
-  nodes.forEach(n=>{if(n.parent!=null&&kids[n.parent])kids[n.parent].push(n.id);});
-  const path={}; let cur=t.active; while(cur!=null&&byId[cur]){path[cur]=1;cur=byId[cur].parent;}
-  const roots=nodes.filter(n=>n.parent==null).map(n=>n.id);
-  function row(id,depth){
-    const n=byId[id];
-    const cls='dnode'+(id===t.active?' on':'')+(path[id]?' path':'');
-    const tag=n.feedback?`<span class=ds>↳ ${esc(n.feedback.slice(0,46))}</span>`:'';
-    let h=`<button type=button class="${cls}" style="padding-left:${8+depth*14}px" onclick="gotoNode('${id}')" aria-current="${id===t.active?'true':'false'}">${esc(n.title||('Part '+(n.step+1)))}${tag}</button>`;
-    (kids[id]||[]).forEach(c=>{h+=row(c,depth+1);});
-    return h;
-  }
-  box.innerHTML=roots.map(r=>row(r,0)).join('');
 }
 function renderAddons(s){
   const box=document.getElementById('addons'); if(!box||box.dataset.done)return;
@@ -2663,7 +2655,7 @@ async function signinEmail(){
 async function signout(){await sb.auth.signOut();session=null;me=null;newPlan();renderAuth();}
 function show(id){['intake','workspace','profile'].forEach(x=>{const e=document.getElementById(x);if(e)e.style.display=(x===id?(x==='workspace'?'block':'block'):'none');});
   document.body.classList.toggle('ws',id==='workspace');}   // ws → left tools drawer + full-width main
-function newPlan(){SIDEBAR_PHASE=null;ACT_RESEARCH=false;ACT_PROG_N=0;ACT_ID=null;VET_OPEN=true;VET_STEPPED=false;DTREE_STEP=-99;Activity.stopAll();closeViewer();SID=null;
+function newPlan(){SIDEBAR_PHASE=null;ACT_RESEARCH=false;ACT_PROG_N=0;ACT_ID=null;VET_OPEN=true;VET_STEPPED=false;Activity.stopAll();closeViewer();SID=null;
   // render a FRESH intake — clear any in-flight button/idea/error left over from a prior build or sign-out
   const g=document.getElementById('go'); if(g){g.disabled=false;g.textContent='Build my plan →';}
   const idea=document.getElementById('idea'); if(idea)idea.value='';
@@ -2689,7 +2681,7 @@ function renderPlans(d){
 }
 async function resume(id){
   SID=id;if(location.pathname!=='/plan/'+id)history.pushState({plan:id},'','/plan/'+id);   // clean URL for any entry point
-  show('workspace');SESSION_BOARD=null;SIDEBAR_PHASE=null;VET_OPEN=true;VET_STEPPED=false;DTREE_STEP=-99;
+  show('workspace');SESSION_BOARD=null;SIDEBAR_PHASE=null;VET_OPEN=true;VET_STEPPED=false;
   const ab=document.getElementById('addons');if(ab)delete ab.dataset.done;
   closeDrawer();closeViewer();
   try{const r=await fetch('/api/plan/'+SID,{headers:authHeaders()});const s=await r.json();render(s);if(s.status==='researching')poll();}catch(e){document.getElementById('err2').textContent='Could not load that plan.';}
