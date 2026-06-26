@@ -1916,12 +1916,21 @@ body.hasbar .workspace{padding-bottom:74px}
 /* Sidebar sections are TABS: clicking one slides a full-height drawer out of the toolbar's right edge
    (anchored to the left of the main content, overlapping it), highlighting the active tab. */
 .sec.collap .sechead{cursor:pointer}
-/* the "The machine" spew tab: highlights (blue, pulsing) while the engine runs, green when done */
-#spewsec.running .sechead h3{color:var(--link);animation:spewpulse 1.1s ease-in-out infinite}
-#spewsec.running .sechead .ticon{filter:none;opacity:1}
+/* Tool-tab status in the index — pulse (blue) = something is running here; green highlight = a fresh
+   result waiting to be read; red highlight = it failed. The machine pulses while it runs but only ever
+   highlights on failure (red), never green. */
+#spewsec.running .sechead h3,
+body.ws .side .sec.collap.tabrun .sechead h3{color:var(--link);animation:spewpulse 1.1s ease-in-out infinite}
+#spewsec.running .sechead .ticon,
+body.ws .side .sec.collap.tabrun .sechead .ticon{filter:none;opacity:1}
 @keyframes spewpulse{0%,100%{opacity:1}50%{opacity:.5}}
-#spewsec.done .sechead h3{color:var(--ok)}#spewsec.done .sechead .ticon{filter:none;opacity:1}
-@media(prefers-reduced-motion:reduce){#spewsec.running .sechead h3{animation:none}}
+body.ws .side .sec.collap.tabnew .sechead{background:var(--ok-bg)}
+body.ws .side .sec.collap.tabnew .sechead h3{color:var(--ok)}
+body.ws .side .sec.collap.tabnew .sechead .ticon{filter:none;opacity:1}
+body.ws .side .sec.collap.tabfail .sechead{background:var(--kill-bg)}
+body.ws .side .sec.collap.tabfail .sechead h3{color:var(--kill)}
+body.ws .side .sec.collap.tabfail .sechead .ticon{filter:none;opacity:1}
+@media(prefers-reduced-motion:reduce){#spewsec.running .sechead h3,body.ws .side .sec.collap.tabrun .sechead h3{animation:none}}
 #spewsec .runner{border:0;background:none;margin:0}
 body.ws .side .sec.collap.tabactive .sechead h3{color:var(--link)}
 .secdrawer{position:fixed;left:300px;top:calc(var(--hdr) + var(--disc));bottom:0;width:min(660px,calc(100vw - 320px));background:var(--paper);border-right:1px solid #888;box-shadow:6px 0 24px rgba(0,0,0,.14);z-index:58;transform:translateX(-100%);transition:transform .2s;display:flex;flex-direction:column;visibility:hidden}
@@ -2448,12 +2457,13 @@ async function sendChat(){
   log.insertAdjacentHTML('beforeend',`<div class="cmsg user">${esc(msg)}</div><div class="cmsg bot md" id=chatthinking><span class=think>Thinking…</span></div>`);
   log.scrollTop=log.scrollHeight;
   const aid=Activity.start(["Reading your plan","Checking the graded evidence","Thinking it through"],1200,'You asked: '+(msg.length>40?msg.slice(0,40)+'\\u2026':msg));
+  tabNotify('chatsec','running');
   try{
     const [r]=await Promise.all([fetch('/api/plan/'+SID+'/chat',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({message:msg})}),new Promise(res=>setTimeout(res,850))]);
     const d=await r.json();const th=document.getElementById('chatthinking');
-    if(!r.ok){Activity.stop(aid);if(th){th.removeAttribute('id');th.innerHTML='<span class=think>'+esc(d.error||'Could not reach the advisor.')+'</span>';}}
-    else{Activity.done(aid,'Answered.');meterTick({id:SID,cost:d.cost,tokens:d.tokens});if(th){th.removeAttribute('id');th.innerHTML=mdToHtml(d.reply);}}
-  }catch(e){Activity.stop(aid);const th=document.getElementById('chatthinking');if(th)th.innerHTML='<span class=think>Network error.</span>';}
+    if(!r.ok){Activity.stop(aid);tabNotify('chatsec','fail');if(th){th.removeAttribute('id');th.innerHTML='<span class=think>'+esc(d.error||'Could not reach the advisor.')+'</span>';}}
+    else{Activity.done(aid,'Answered.');tabNotify('chatsec','done');meterTick({id:SID,cost:d.cost,tokens:d.tokens});if(th){th.removeAttribute('id');th.innerHTML=mdToHtml(d.reply);}}
+  }catch(e){Activity.stop(aid);tabNotify('chatsec','fail');const th=document.getElementById('chatthinking');if(th)th.innerHTML='<span class=think>Network error.</span>';}
   finally{CHAT_BUSY=false;btn.disabled=false;log.scrollTop=log.scrollHeight;}
 }
 // The standing adversary's card — a committed verdict + verbatim objection, surfaced as a headline.
@@ -2527,18 +2537,19 @@ async function runResearchQuery(mode){
   if(out)out.innerHTML='<div class=rqspew id=rqspew></div>';
   const spew=document.getElementById('rqspew');
   const raid=Activity.open((deep?'Researching: ':'Quick check: ')+(q.length>42?q.slice(0,42)+'\\u2026':q||'your question'));   // tight headline + machine-tab mirror
+  tabNotify('researchsec','running');
   let si=0; const pushLine=()=>{if(si<steps.length){if(spew){const d=document.createElement('div');d.className='rqline';d.textContent='\\u203a '+steps[si];spew.appendChild(d);spew.scrollTop=spew.scrollHeight;}Activity.push(raid,steps[si]);si++;}};
   pushLine(); const tmr=setInterval(pushLine,1100);
   try{
     const r=await _aiRun('/api/plan/'+SID+'/research/query',{question:q,mode:deep?'deep':'quick'});
     const d=await r.json(); clearInterval(tmr);
-    if(!r.ok){Activity.stop(raid);if(out)out.innerHTML='<div class=ferr>'+esc(d.error||'Could not run that.')+'</div>';RQ_BUSY=false;return;}
-    Activity.done(raid,'Answered from the graded research.');
+    if(!r.ok){Activity.stop(raid);tabNotify('researchsec','fail');if(out)out.innerHTML='<div class=ferr>'+esc(d.error||'Could not run that.')+'</div>';RQ_BUSY=false;return;}
+    Activity.done(raid,'Answered from the graded research.');tabNotify('researchsec','done');
     if(d.cost!=null)meterTick({id:SID,cost:d.cost,tokens:d.tokens});
     let html='<div class="rqans md">'+mdToHtml(d.answer||'')+'</div>';
     if(d.rows&&d.rows.length){html+='<div class=rqrows>'+d.rows.map(x=>`<div class=rqrow>${x.mark==='ok'?'\\u2705':'\\u26a0\\ufe0f'} ${esc(x.text)} <span class=rqsrc>${esc(host(x.url))}</span></div>`).join('')+'</div>';}
     if(out)out.innerHTML=html;
-  }catch(e){clearInterval(tmr);Activity.stop(raid);if(out)out.innerHTML='<div class=ferr>Network error.</div>';}
+  }catch(e){clearInterval(tmr);Activity.stop(raid);tabNotify('researchsec','fail');if(out)out.innerHTML='<div class=ferr>Network error.</div>';}
   RQ_BUSY=false;
 }
 let SUM_OPEN=true;
@@ -3052,19 +3063,20 @@ function runForge(){
   // animate the tree greening up while the request is in flight (snaps to done on response)
   let i=0; _forgeStep(FORGE_STEPS[0].k,'running');
   const faid=Activity.open('Forging a director');   // mirror into the machine tab
+  tabNotify('boardsec','running');
   FORGE_STEPS.forEach(st=>Activity.push(faid,st.l));
   if(FORGE_TIMER)clearInterval(FORGE_TIMER);
   FORGE_TIMER=setInterval(()=>{ if(i<FORGE_STEPS.length){_forgeStep(FORGE_STEPS[i].k,'done');i++; if(i<FORGE_STEPS.length)_forgeStep(FORGE_STEPS[i].k,'running');} },1400);
   _aiRun('/api/plan/'+SID+'/director/forge',{description:FORGE_DESC}).then(async r=>{
     const d=await r.json(); clearInterval(FORGE_TIMER); FORGE_TIMER=null; FORGE_BUSY=false;
-    if(!r.ok){ Activity.stop(faid); FORGE_STEPS.forEach(st=>_forgeStep(st.k,'')); showForgeError(d.error||'Could not forge a director.'); return; }
-    Activity.done(faid,'Director forged.');
+    if(!r.ok){ Activity.stop(faid); tabNotify('boardsec','fail'); FORGE_STEPS.forEach(st=>_forgeStep(st.k,'')); showForgeError(d.error||'Could not forge a director.'); return; }
+    Activity.done(faid,'Director forged.');tabNotify('boardsec','done');
     if(d.cost!=null)meterTick({id:SID,cost:d.cost,tokens:d.tokens});
     FORGE_DRAFT=d.persona||null;
     const trace={}; ((FORGE_DRAFT&&FORGE_DRAFT.trace)||[]).forEach(t=>{trace[t.step]=t.note;});
     FORGE_STEPS.forEach(st=>_forgeStep(st.k,'done',trace[st.k]||''));
     showForgeResult();
-  }).catch(()=>{ if(FORGE_TIMER)clearInterval(FORGE_TIMER); FORGE_TIMER=null; FORGE_BUSY=false; Activity.stop(faid); showForgeError('Network error.'); });
+  }).catch(()=>{ if(FORGE_TIMER)clearInterval(FORGE_TIMER); FORGE_TIMER=null; FORGE_BUSY=false; Activity.stop(faid); tabNotify('boardsec','fail'); showForgeError('Network error.'); });
 }
 function showForgeResult(){
   const p=FORGE_DRAFT, out=document.getElementById('forgeout'); if(!out)return;
@@ -3123,6 +3135,7 @@ async function runConvene(){
   CONVENE_BUSY=true;
   const steps=["Briefing your board on the plan","Each director weighs in","The skeptic pushes back","Synthesizing their verdict"];
   const aid=Activity.open('Convening your board');   // mirror the run into the machine tab (terminal history)
+  tabNotify('boardsec','running');
   panel.innerHTML='<div class=rqspew id=convspew></div>';
   const spew=document.getElementById('convspew'); let si=0;
   const push=()=>{if(si<steps.length){if(spew){const d=document.createElement('div');d.className='rqline';d.textContent='\\u203a '+steps[si];spew.appendChild(d);spew.scrollTop=spew.scrollHeight;}Activity.push(aid,steps[si]);si++;}};
@@ -3132,8 +3145,8 @@ async function runConvene(){
     const r=await _aiRun('/api/plan/'+SID+'/board',body);
     const d=await r.json(); clearInterval(tmr);
     if(ds){ds.classList.remove('running');ds.classList.add('done');}
-    if(!r.ok){Activity.stop(aid);panel.innerHTML='<div class=ferr>'+esc(d.error||'Could not convene the board.')+'</div>';CONVENE_BUSY=false;return;}
-    Activity.done(aid,'Your board weighed in.');
+    if(!r.ok){Activity.stop(aid);tabNotify('boardsec','fail');panel.innerHTML='<div class=ferr>'+esc(d.error||'Could not convene the board.')+'</div>';CONVENE_BUSY=false;return;}
+    Activity.done(aid,'Your board weighed in.');tabNotify('boardsec','done');
     if(d.cost!=null)meterTick({id:SID,cost:d.cost,tokens:d.tokens});
     const split=(d.conflicts&&d.conflicts.toLowerCase()!=='none')?`<span class=split>Where they split: ${esc(d.conflicts)}</span>`:'';
     const balloons=(d.directors||[]).map((x,i)=>`<div class=balloon id=cbal_${i}><button type=button class=bh onclick="document.getElementById('cbal_${i}').classList.toggle('open')">\\uD83D\\uDCAC ${esc(x.first||x.name)}<span class=caret>\\u25b8</span></button><div class="bb md">${mdToHtml(x.take)}</div></div>`).join('');
@@ -3146,7 +3159,7 @@ async function runConvene(){
     if(ds)ds.classList.remove('open');                                  // collapse the convene input, the result is up top
     panel.innerHTML='';                                                 // clear the spew (it lives in the machine tab now)
     const sb=document.getElementById('sd-body')||document.querySelector('#boardsec'); if(sb)sb.scrollTop=0;
-  }catch(e){clearInterval(tmr);Activity.stop(aid);if(ds)ds.classList.remove('running');panel.innerHTML='<div class=ferr>Network error.</div>';}
+  }catch(e){clearInterval(tmr);Activity.stop(aid);tabNotify('boardsec','fail');if(ds)ds.classList.remove('running');panel.innerHTML='<div class=ferr>Network error.</div>';}
   CONVENE_BUSY=false;
 }
 let DRAWER={mode:null,key:null}, DRAWER_TRIGGER=null;
@@ -3216,10 +3229,21 @@ function _returnPopped(){
   POPPED=null;
 }
 function _setTabActive(id){document.querySelectorAll('.side .sec.collap').forEach(s=>s.classList.toggle('tabactive',s.id===id));}
+// Tool-tab status notifier: 'running' pulses the tab; 'done'/'fail' apply a green/red highlight that
+// persists until they open it (no highlight if they're already viewing that tab). 'clear' resets it.
+function tabNotify(secId,state){
+  const sec=document.getElementById(secId); if(!sec)return;
+  sec.classList.remove('tabrun','tabnew','tabfail');
+  if(state==='running'){sec.classList.add('tabrun');return;}
+  if(state==='clear')return;
+  if(POPPED&&POPPED.id===secId)return;              // already open → nothing new to flag
+  sec.classList.add(state==='fail'?'tabfail':'tabnew');
+}
 function tabOpen(id){
   if(POPPED&&POPPED.id===id){closeSecDrawer();return;}   // clicking the active tab closes it
   if(POPPED)_returnPopped();
   const sec=document.getElementById(id); if(!sec)return;
+  sec.classList.remove('tabnew','tabfail');   // opening it clears the new/failed highlight (keep any running pulse)
   const body=sec.querySelector('.secbody'); if(!body)return;
   const h3=sec.querySelector('h3');
   const ph=document.createComment('tab:'+id); body.parentNode.insertBefore(ph,body); POPPED={id,ph};
@@ -3327,7 +3351,7 @@ const Activity={
   _el(){return document.getElementById('runner');},
   _log(){return document.getElementById('runner-log');},
   _sec(){return document.getElementById('spewsec');},   // the runner now lives in the "The machine" tab
-  _show(){const a=this._el();if(a){a.classList.add('show');a.classList.remove('min');} const sec=this._sec(); if(sec)sec.style.display='';},
+  _show(){const a=this._el();if(a){a.classList.add('show');a.classList.remove('min');} const sec=this._sec(); if(sec){sec.style.display='';sec.classList.remove('tabfail');}},   // a fresh run clears the prior red
   _trim(){ const log=this._log(); if(!log)return; const done=log.querySelectorAll('.atask.done');
     for(let i=0;i<done.length-7;i++)done[i].parentNode.removeChild(done[i]); },   // keep ~7 history cards
   _mkTask(label){
@@ -3372,6 +3396,7 @@ const Activity={
     if(t.line)t.line.classList.replace('active','done');
     if(msg)this._line(t.body,msg,true);
     if(t.wrap){ t.wrap.classList.add('done'); t.wrap.classList.add('collapsed'); }  // collapse into history, keep it
+    if(immediate)tabNotify('spewsec','fail');   // an op errored → the machine flags red (its only highlight)
     delete this.tracks[id]; this.n=Math.max(0,this.n-1); this._live=Math.max(0,this._live-1);
     this._trim(); this._busy(); this._persist();   // save the terminal history so it survives a refresh
   },
