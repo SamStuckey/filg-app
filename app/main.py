@@ -1400,8 +1400,19 @@ body.ws .page{max-width:none}
 body.ws .top{position:sticky;top:0;z-index:65;background:var(--paper);border-bottom:1px solid #888;margin:-16px -16px 0;padding:0 18px;height:var(--hdr);margin-bottom:0}
 body.ws .workspace{display:block;margin-left:300px;transition:margin-left .2s}
 body.ws .main{padding-top:14px}   /* line the center column's first card up with the left drawer's */
-body.ws .side{position:fixed;left:0;top:var(--hdr);bottom:0;width:300px;overflow-y:auto;background:var(--paper);border-right:1px solid #888;z-index:60;padding:14px 12px;transition:transform .2s}
-body.ws .side .sec{background:#fff}
+body.ws .side{position:fixed;left:0;top:var(--hdr);bottom:0;width:300px;background:var(--paper);border-right:1px solid var(--line);z-index:60;padding:8px;transition:transform .2s;display:flex;flex-direction:column}
+body.ws .side-scroll{flex:1;overflow-y:auto;margin:0 -2px;padding:2px}
+/* modern minimal sidebar: flat icon+label rows, hover tint, soft active highlight (no boxes) */
+body.ws .side .sec.collap{background:none;border:0;padding:0;margin:0 0 1px}
+body.ws .side .sec.collap .sechead{display:flex;align-items:center;gap:10px;width:100%;background:none;border:0;padding:9px 10px;margin:0;cursor:pointer;text-align:left;font:inherit;border-radius:8px;color:var(--ink);transition:background .12s}
+body.ws .side .sec.collap .sechead:hover{background:rgba(0,0,0,.05)}
+body.ws .side .sec.collap .sechead h3{margin:0;flex:1;font-size:13.5px;font-weight:600;text-transform:none;letter-spacing:0;color:inherit}
+.sec.collap .sechead .ticon{flex:none;width:18px;text-align:center;font-size:14px;line-height:1;filter:grayscale(1);opacity:.6}
+body.ws .side .sec.collap.tabactive{background:none;border:0}
+body.ws .side .sec.collap.tabactive .sechead{background:#eef3ff;color:var(--link)}
+body.ws .side .sec.collap.tabactive .sechead h3{color:var(--link);font-weight:700}
+body.ws .side .sec.collap.tabactive .sechead .ticon{filter:none;opacity:1}
+.dlbar{flex:none;margin:0 -8px;padding:8px;border-top:1px solid var(--line);background:var(--paper)}
 body.ws .drawerhead{display:flex;align-items:center;justify-content:space-between;margin:0 0 4px;padding-bottom:3px}
 body.ws .drawerhead b{font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);opacity:.7}
 .dlbar{margin:0 0 8px}
@@ -1757,12 +1768,11 @@ body.hasbar .workspace{padding-bottom:74px}
 /* Sidebar sections are TABS: clicking one slides a full-height drawer out of the toolbar's right edge
    (anchored to the left of the main content, overlapping it), highlighting the active tab. */
 .sec.collap .sechead{cursor:pointer}
-body.ws .side .sec.collap.tabactive{background:#eef3ff;border-color:var(--link)}
 /* the "The machine" spew tab: highlights (blue, pulsing) while the engine runs, green when done */
-#spewsec.running{border-color:var(--link)}#spewsec.running .sechead h3,#spewsec.running .caret{color:var(--link)}
-#spewsec.running .sechead h3{animation:spewpulse 1.1s ease-in-out infinite}
+#spewsec.running .sechead h3{color:var(--link);animation:spewpulse 1.1s ease-in-out infinite}
+#spewsec.running .sechead .ticon{filter:none;opacity:1}
 @keyframes spewpulse{0%,100%{opacity:1}50%{opacity:.5}}
-#spewsec.done{border-color:var(--ok)}#spewsec.done .sechead h3,#spewsec.done .caret{color:var(--ok)}
+#spewsec.done .sechead h3{color:var(--ok)}#spewsec.done .sechead .ticon{filter:none;opacity:1}
 @media(prefers-reduced-motion:reduce){#spewsec.running .sechead h3{animation:none}}
 #spewsec .runner{border:0;background:none;margin:0}#spewsec .run-head{background:none;padding:0 0 6px}
 body.ws .side .sec.collap.tabactive .sechead h3{color:var(--link)}
@@ -1770,6 +1780,12 @@ body.ws .side .sec.collap.tabactive .sechead h3{color:var(--link)}
 .secdrawer.open{transform:translateX(0);visibility:visible}
 body.drawer-collapsed .secdrawer{left:0}
 @media(max-width:820px){.secdrawer{left:0}}
+/* phones: the toolbar and the tab-content drawer each take ~90% of the screen */
+@media(max-width:640px){
+  body.ws .side{width:90vw;max-width:340px}
+  .secdrawer{left:0;width:90vw;max-width:420px}
+  body.ws .top .topright{gap:8px}
+}
 .sd-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 14px;border-bottom:1px solid #888;background:var(--paper)}
 .sd-head span{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
 .sd-x{background:none;border:0;font-size:20px;color:var(--muted);cursor:pointer;line-height:1;padding:0 4px}
@@ -1916,7 +1932,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <button type=button class=drawer-rail onclick="document.body.classList.remove('drawer-collapsed')" aria-label="Open tools">&#9776; Tools</button>
 <aside class=side>
 <div class=drawerhead><b>Tools</b><button type=button class=drawerx onclick="document.body.classList.add('drawer-collapsed')" aria-label="Collapse tools">&#8249;</button></div>
-<div class=dlbar id=dlbar style="display:none"><button type=button class=dl-all onclick=openExportModal() title="Take your data with you, free, at any point">⬇ Take your data</button></div>
+<div class=side-scroll>
 <div class="sec collap" id=spewsec style="display:none"><button type=button class=sechead aria-expanded=false onclick="toggleSec('spewsec')"><h3>The machine</h3><span class=caret aria-hidden=true>▸</span></button>
 <div class=secbody>
 <div class=runner id=runner aria-live=polite>
@@ -1964,6 +1980,8 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <div class="dsec open" id=ds-graded><button type=button class=dsec-h onclick="this.parentNode.classList.toggle('open')"><span>The graded research</span><span class=dsec-caret aria-hidden=true>▸</span></button>
 <div class=dsec-b><div id=research></div></div></div>
 </div></div>
+</div>
+<div class=dlbar id=dlbar style="display:none"><button type=button class=dl-all onclick=openExportModal() title="Take your data with you, free, at any point">⬇ Take your data</button></div>
 </aside>
 <main class=main>
 <div id=answer class=summary></div>
@@ -2266,7 +2284,8 @@ function renderResearch(s){
     // single-source vs corroborated — structural, no extra research (tech mode)
     const tri=(x.mark==='ok')?(x.corroborated?` · ${x.sources||2} sources`:' · single source'):'';
     const gate=(x.tier||jl||tri)?`<br><span class="gate techonly">⚙ gate: ${esc((x.tier||'').toLowerCase())}${jl?' · '+esc(jl):''}${esc(tri)}</span>`:'';
-    return `<li>${x.mark==='ok'?'✅':'⚠️'} ${esc(x.text)} <span class="badge ${x.mark==='ok'?'b-ok':'b-warn'}">${x.mark==='ok'?'cited':'vendor'}</span><br><span class=note>${esc(host(x.url))}, ${esc(x.note)}${esc(stale)}${by}</span>${gate}</li>`;
+    const src=x.url?`<a href="${esc(x.url)}" target=_blank rel=noopener>${esc(host(x.url))}</a>, `:'';
+    return `<li>${x.mark==='ok'?'✅':'⚠️'} ${esc(x.text)} <span class="badge ${x.mark==='ok'?'b-ok':'b-warn'}">${x.mark==='ok'?'cited':'vendor'}</span><br><span class=note>${src}${esc(x.note)}${esc(stale)}${by}</span>${gate}</li>`;
   }).join('')+'</ul>'):'';
   el.innerHTML=lanesHtml+rowsHtml;
 }
@@ -2959,6 +2978,7 @@ function tabOpen(id){
   const sb=document.getElementById('sd-body'); sb.innerHTML=''; sb.appendChild(body);
   const dr=document.getElementById('secdrawer'); dr.classList.add('open'); dr.setAttribute('aria-hidden','false');
   document.body.classList.add('sd-open'); _setTabActive(id);
+  if(window.innerWidth<=1024)document.body.classList.add('drawer-collapsed');   // small screens: the toolbar slides back, the tab content replaces it
 }
 function closeSecDrawer(){
   const dr=document.getElementById('secdrawer'); if(!dr||!dr.classList.contains('open'))return;
@@ -2966,12 +2986,17 @@ function closeSecDrawer(){
   dr.classList.remove('open'); dr.setAttribute('aria-hidden','true');
   document.body.classList.remove('sd-open'); _setTabActive(null);
 }
-function setupTabs(){   // turn every collapsible sidebar section into a drawer tab (no inline dropdown/caret)
+const TAB_ICONS={spewsec:'\\u2699\\ufe0f',straightsec:'\\uD83D\\uDCCB',takeawaysec:'\\uD83D\\uDDE3\\ufe0f',dtreesec:'\\uD83C\\uDF3F',chatsec:'\\uD83D\\uDCAC',boardsec:'\\uD83D\\uDC65',researchsec:'\\uD83D\\uDD0D'};
+function setupTabs(){   // turn every collapsible sidebar section into a modern nav tab (icon + label, no caret)
   document.querySelectorAll('.side .sec.collap').forEach(sec=>{
     if(!sec.id)return;
     const head=sec.querySelector('.sechead'); if(head)head.onclick=function(){tabOpen(sec.id);};
     const caret=sec.querySelector('.sechead .caret'); if(caret)caret.remove();   // no drop-down arrows
     const pop=sec.querySelector('.sec-pop'); if(pop)pop.remove();
+    if(head&&!head.querySelector('.ticon')&&TAB_ICONS[sec.id]){
+      const ic=document.createElement('span'); ic.className='ticon'; ic.setAttribute('aria-hidden','true'); ic.textContent=TAB_ICONS[sec.id];
+      head.insertBefore(ic,head.firstChild);
+    }
   });
 }
 let GREETED_SID=null;
@@ -3242,9 +3267,9 @@ function mdToHtml(md){
   let h=esc(md==null?'':md);
   h=h.replace(/`([^`]+)`/g,'<code>$1</code>');
   h=h.replace(/\\*\\*([^*]+)\\*\\*/g,'<strong>$1</strong>');
-  h=h.replace(/\\[([^\\]]+)\\]\\((https?:[^)\\s]+)\\)/g,'<a href="$2" target=_blank rel=noopener>$1</a>');
-  h=h.replace(/\\[(https?:[^\\]\\s]+)\\]/g,'<a href="$1" target=_blank rel=noopener>$1</a>');  // [bare url] → link
-  h=h.replace(/(^|[\\s(])(https?:\\/\\/[^\\s<)]+)/g,'$1<a href="$2" target=_blank rel=noopener>$2</a>');  // raw url → link
+  h=h.replace(/\\[([^\\]]+)\\]\\((https?:[^)\\s]+)\\)/g,'<a href="$2" target=_blank rel=noopener>$1</a>');   // [text](url) → embedded
+  h=h.replace(/\\[(https?:[^\\]\\s]+)\\]/g,function(_,u){return '<a href="'+u+'" target=_blank rel=noopener>'+host(u)+'</a>';});  // [bare url] → linked hostname, not the raw URL
+  h=h.replace(/(^|[\\s(])(https?:\\/\\/[^\\s<)]+)/g,function(_,pre,u){return pre+'<a href="'+u+'" target=_blank rel=noopener>'+host(u)+'</a>';});  // raw url → linked hostname
   const lines=h.split('\\n'); const out=[]; let inList=false; let i=0;
   const cells=function(r){return r.replace(/^\\s*\\|/,'').replace(/\\|\\s*$/,'').split('|').map(function(c){return c.trim();});};
   const isRow=function(s){return /^\\s*\\|.*\\|\\s*$/.test(s);};
