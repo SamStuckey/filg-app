@@ -1173,6 +1173,17 @@ button:hover{background:#e8e8e8}button:disabled{opacity:.5;cursor:default}
 .intake h2{font-size:22px;font-weight:700;letter-spacing:-.01em;margin:0 0 6px}.intake .go{font-size:15px;padding:9px 18px}
 .brandfoot{margin:34px auto 0;padding-top:14px;border-top:1px solid var(--line);max-width:420px;font-size:13px;color:var(--muted);line-height:1.35}
 .brandfoot cite{font-style:normal;font-size:12px}
+/* landing CTA row: the real button + the bail-out button */
+.golane{display:flex;gap:10px;flex-wrap:wrap;align-items:stretch;justify-content:center;margin-top:2px}
+.bail{background:#fff;color:var(--muted);border:1px dashed var(--line);font-size:13px;font-weight:400;padding:9px 14px}
+.bail:hover{background:#f7f7f7;color:var(--ink)}
+/* unbound scrolling vibe footer — ugly on purpose, craigslist forever */
+.vibestrip{position:fixed;bottom:0;left:0;right:0;z-index:40;overflow:hidden;white-space:nowrap;background:transparent;border-top:1px solid var(--line);padding:3px 0;pointer-events:none}
+.vibetrack{display:inline-block;white-space:nowrap;will-change:transform;animation:vibescroll 60s linear infinite}
+.vibe{font-size:11px;color:var(--muted);opacity:.6;padding:0 2.5em}
+@keyframes vibescroll{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+@media(prefers-reduced-motion:reduce){.vibetrack{animation:none}}
+body.hasbar .vibestrip{display:none}   /* don't fight the fixed action bar mid-build */
 .err{color:var(--kill);margin-top:10px;font-weight:700}
 .authbar{display:flex;align-items:center;gap:12px;font-size:13px}
 .authbar .who{color:var(--muted)}.authbar b{color:var(--ink)}
@@ -1469,7 +1480,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <div id=authgate></div>
 <label for=email class=sr-only>Your email</label>
 <input id=email type=email placeholder="you@email.com">
-<button id=go class=go onclick=start()>Build my plan →</button>
+<div class=golane><button id=go class=go onclick=start()>Build my plan →</button><button type=button class=bail onclick=goofOff()>nah I'm gonna go fuck around some more</button></div>
 <div class=err id=err></div>
 <div id=joke></div>
 <p class=brandfoot>“Fuck it. Let’s go.” <cite>— You, 30 seconds ago</cite></p>
@@ -1553,6 +1564,16 @@ async function loadKey(){            // refresh whether this user has a saved ke
 function requireKey(){               // gate any API-calling button: no key → open the key modal
   if(CFG.byokEnabled&&!HAS_KEY){keyModal();return false;}
   return true;
+}
+// The bail-out button: send the procrastinator to a random snarky Google search.
+const GOOFS=["videos of cats","ways to waste time on the internet","how to sell pogs",
+  "competitive frisbee clips","is a hotdog a sandwich","are birds real",
+  "how many golf balls fit in a school bus","capybara compilation","how do magnets work",
+  "longest yawn world record","cat playing piano","how to do a kickflip",
+  "best paper airplane design","why do cats knock things off tables","goat screaming like a human"];
+function goofOff(){
+  const q=GOOFS[Math.floor(Math.random()*GOOFS.length)];
+  location.href='https://www.google.com/search?q='+encodeURIComponent(q);
 }
 async function start(){
   const idea=document.getElementById('idea').value.trim(), email=document.getElementById('email').value.trim();
@@ -2731,4 +2752,5 @@ document.addEventListener('keydown',function(e){
 });
 initAuth();
 </script>
+<div class=vibestrip aria-hidden=true><div class=vibetrack><span class=vibe>This app's UI was vibe coded af and I don't care that it looks bad, I've left it ugly on purpose because I believe in my soul that craigslist was the height of web design. Now quit whining and go build your business*</span><span class=vibe>This app's UI was vibe coded af and I don't care that it looks bad, I've left it ugly on purpose because I believe in my soul that craigslist was the height of web design. Now quit whining and go build your business*</span></div></div>
 </div></body></html>"""
