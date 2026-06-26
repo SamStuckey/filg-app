@@ -1351,8 +1351,12 @@ body.hasbar .workspace{padding-bottom:74px}
 .bchip{font-size:12px;font-weight:700;padding:5px 10px;border:1px solid var(--line);background:#fff;cursor:pointer;color:var(--ink)}
 .bchip.on{background:#f0f0f0;border-color:#444;color:var(--link)}
 .convene{width:100%}
-.boardpick{margin:0 0 12px}.boardpick .lab{font-size:13px;color:var(--muted);font-weight:700;margin-bottom:6px;text-align:left}
-.boardpick .opts{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-start}
+.boardpick{margin:0 0 12px}.boardpick .lab{font-size:13px;color:var(--muted);font-weight:700;text-align:left}
+.boardpick .bp-head{display:flex;align-items:center;gap:8px;width:100%;background:none;border:0;padding:0;cursor:pointer;font:inherit}
+.bp-caret{margin-left:auto;color:var(--muted);font-size:11px;transition:transform .15s}
+.boardpick.open .bp-caret{transform:rotate(90deg)}
+.boardpick .opts{display:none;flex-wrap:wrap;gap:6px;justify-content:flex-start;margin-top:8px}
+.boardpick.open .opts{display:flex}
 .bround{background:var(--card);border:1px solid var(--line);padding:18px 20px;margin-bottom:18px}
 .bround h4{font-size:15px;font-weight:700;margin:0 0 12px}
 .balloons{display:flex;flex-direction:column;gap:8px}
@@ -1490,7 +1494,6 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <div class=note-banner id=banner></div>
 <div class=intake id=intake>
 <h2>You've got a business in you. Let's find it. 🚀</h2>
-<p class=sub>Drop in your idea. You'll get the offer + the research graded, then we build the whole plan together, your call at every step.</p>
 <label for=idea class=sr-only>Your business idea</label>
 <textarea id=idea placeholder="e.g. I know automation and feel like I could help scale small dental businesses… OR I like doggies, the color purple, and live in a bunker with my 12 brothers, either way, let's find the business."></textarea>
 <div class=boardpick id=boardpick></div>
@@ -2244,16 +2247,22 @@ function renderVet(s){
 // Board selection state (keys); seeded from the default board, editable in intake + sidebar.
 let BOARD=(CFG.defaultBoard||[]).slice();
 function personaName(key){const p=(CFG.archetypes||[]).find(a=>a.key===key);return p?(p.first||p.name):key;}
+let BOARDPICK_OPEN=false;   // optional, so collapsed by default
+function toggleBoardPick(){BOARDPICK_OPEN=!BOARDPICK_OPEN;const el=document.getElementById('boardpick');if(!el)return;
+  el.classList.toggle('open',BOARDPICK_OPEN);const h=el.querySelector('.bp-head');if(h)h.setAttribute('aria-expanded',String(BOARDPICK_OPEN));}
 function renderBoardPick(){
   const el=document.getElementById('boardpick'); if(!el)return;
   const ax=CFG.archetypes||[]; if(!ax.length){el.innerHTML='';return;}
-  el.innerHTML=`<div class=lab id=boardpicklab>Pick your Board of Directors, they'll vet every step (optional):</div>`+
+  el.classList.toggle('open',BOARDPICK_OPEN);
+  const n=BOARD.length;
+  el.innerHTML=`<button type=button class=bp-head aria-expanded="${BOARDPICK_OPEN}" onclick=toggleBoardPick()><span class=lab id=boardpicklab>Pick your Board of Directors<span id=bp-n>${n?` (${n} picked)`:''}</span>, they'll vet every step (optional)</span><span class=bp-caret aria-hidden=true>\\u25b8</span></button>`+
     `<div class=opts role=group aria-labelledby=boardpicklab>`+ax.map(a=>`<button type=button class="bchip${BOARD.includes(a.key)?' on':''}" aria-pressed=${BOARD.includes(a.key)} onclick="toggleBoard('${a.key}',this)" title="${esc(a.first?a.first+', ':'')}${esc(a.blurb)}">${esc(a.name)}</button>`).join('')+`</div>`;
 }
 function toggleBoard(key,btn){
   const i=BOARD.indexOf(key), on=i<0;
   if(i>=0){BOARD.splice(i,1);}else{BOARD.push(key);}
   if(btn){btn.classList.toggle('on',on);btn.setAttribute('aria-pressed',String(on));}
+  const c=document.getElementById('bp-n'); if(c)c.textContent=BOARD.length?` (${BOARD.length} picked)`:'';   // live count in the collapsed header
 }
 function renderBoard(s){
   const sec=document.getElementById('boardsec'); if(!sec)return;
