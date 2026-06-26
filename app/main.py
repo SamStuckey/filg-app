@@ -1022,6 +1022,36 @@ async def api_director_save(sid: str, request: Request):
     return _plan_state(store.plan_get(sid))
 
 
+@app.post("/api/plan/{sid}/research/query")
+async def api_research_query(sid: str, request: Request):
+    """Query the graded research. mode='quick' reads what's already there (and may say it's not sure);
+    mode='deep' spawns a fresh, bounded research pass on the question. Owner only, on their bound key."""
+    s = store.plan_get(sid)
+    if not s or not _owns(request, s):
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    if (wall := _key_wall(s)):
+        return wall
+    body = await request.json()
+    q = (body.get("question") or "").strip()
+    if len(q) < 3:
+        return JSONResponse({"error": "Ask a question about your research."}, status_code=400)
+    if len(q) > 1000:
+        return JSONResponse({"error": "Keep it under 1000 characters."}, status_code=400)
+    mode = "deep" if body.get("mode") == "deep" else "quick"
+    try:
+        with _run_slot(s.get("user"), s.get("stack")):
+            res, cost = advisor.research_answer(s, q, mode=mode, mock=MOCK)
+            toks = pipeline.LEDGER.tokens()
+    except BusyError as be:
+        return _busy_response(be)
+    except Exception as e:  # noqa: BLE001
+        traceback.print_exc()
+        return JSONResponse({"error": str(e)}, status_code=500)
+    _meter(s.get("user"), cost)
+    nc, nt = _fold_usage(sid, s, cost, toks)
+    return {**res, "cost": nc, "tokens": nt}
+
+
 @app.post("/api/plan/{sid}/chat")
 async def api_plan_chat(sid: str, request: Request):
     """Chat with your plan — a standing advisor grounded in the plan, graded research, decisions, and
@@ -1255,7 +1285,7 @@ button:hover{background:#e8e8e8}button:disabled{opacity:.5;cursor:default}
 .vibestrip{position:fixed;bottom:0;left:0;right:0;z-index:40;overflow:hidden;white-space:nowrap;background:transparent;border-top:1px solid var(--line);padding:3px 0;pointer-events:none}
 .vibetrack{display:inline-block;white-space:nowrap;will-change:transform;animation:vibescroll 900s linear infinite}
 .vibe{font-size:11px;color:var(--muted);opacity:.6;padding:0 2.5em}
-@keyframes vibescroll{from{transform:translateX(100vw)}to{transform:translateX(-100%)}}
+@keyframes vibescroll{from{transform:translateX(0)}to{transform:translateX(-50%)}}
 @media(prefers-reduced-motion:reduce){.vibetrack{animation:none}}
 body.hasbar .vibestrip{display:none}   /* don't fight the fixed action bar mid-build */
 .err{color:var(--kill);margin-top:10px;font-weight:700}
@@ -1439,6 +1469,16 @@ body.hasbar .workspace{padding-bottom:74px}
 .fc-voice{font-size:13.5px;line-height:1.5}
 .fc-doms{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
 .fdom{font-size:11px;font-weight:700;color:var(--muted);border:1px solid var(--line);padding:2px 7px;border-radius:10px}
+/* Query your research */
+#rqsec textarea{width:100%;border:1px solid var(--line);background:#fff;font:inherit;font-size:13px;padding:7px 9px;resize:vertical}
+.rqacts{display:flex;gap:6px;margin-top:6px}
+.rqacts button{flex:1;font-size:12.5px;padding:8px 6px}
+.rq-go{background:var(--ink);color:#fff;border:1px solid var(--ink);font-weight:700}
+.rqout{margin-top:10px}.rqout:empty{display:none}
+.rqans{font-size:13.5px;line-height:1.5}
+.rqrows{margin-top:8px;display:flex;flex-direction:column;gap:5px}
+.rqrow{font-size:12px;color:var(--ink);line-height:1.35}
+.rqsrc{color:var(--muted);font-size:11px}
 .boardpick{margin:0 0 12px}.boardpick .lab{font-size:13px;color:var(--muted);font-weight:700;text-align:left}
 .boardpick .bp-head{display:flex;align-items:center;gap:8px;width:100%;background:none;border:0;padding:0;cursor:pointer;font:inherit}
 .bp-caret{margin-left:auto;color:var(--muted);font-size:11px;transition:transform .15s}
@@ -1657,6 +1697,14 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <div class=disc>AI composite directors, not real people, not professional advice.</div></div></div>
 <div class="sec collap open" id=researchsec><button type=button class=sechead aria-expanded=true onclick="toggleSec('researchsec')"><h3>Research, graded</h3><span class=caret aria-hidden=true>▸</span></button>
 <div class=secbody><div id=research></div></div></div>
+<div class="sec collap" id=rqsec style="display:none"><button type=button class=sechead aria-expanded=false onclick="toggleSec('rqsec')"><h3>Query your research</h3><span class=caret aria-hidden=true>▸</span></button>
+<div class=secbody>
+<p class=bhelp>Ask a question against your graded research. <b>Quick check</b> reads what's already there (and will say when it's not sure); <b>Go deeper</b> spawns fresh research.</p>
+<label for=rqinput class=sr-only>Your research question</label>
+<textarea id=rqinput rows=2 placeholder="e.g. how price-sensitive is this buyer, really?"></textarea>
+<div class=rqacts><button type=button class=ghost onclick="runResearchQuery('quick')">Quick check</button><button type=button class=rq-go onclick="runResearchQuery('deep')">\\uD83D\\uDD0E Go deeper</button></div>
+<div class=rqout id=rqout></div>
+<div class=disc>Quick reads only your gathered research; Go deeper pulls + grades new sources.</div></div></div>
 </aside>
 <main class=main>
 <div class=runner id=runner aria-live=polite hidden>
@@ -1944,6 +1992,7 @@ function renderBoardRound(s){
 function renderResearch(s){
   const R=s.research||{};
   const rows=R.rows||[], owned=R.owned_lanes||[];
+  const rq=document.getElementById('rqsec'); if(rq)rq.style.display=(rows.length||owned.length)?'':'none';   // query-your-research available once research exists
   const el=document.getElementById('research');
   if(!rows.length&&!owned.length){el.innerHTML='<p style="color:var(--muted);font-size:13px;margin:0">Grading sources…</p>';return;}
   const ownerOf={}; owned.forEach(o=>{ownerOf[o.lane]=o;});
@@ -1964,6 +2013,31 @@ function renderResearch(s){
     return `<li>${x.mark==='ok'?'✅':'⚠️'} ${esc(x.text)} <span class="badge ${x.mark==='ok'?'b-ok':'b-warn'}">${x.mark==='ok'?'cited':'vendor'}</span><br><span class=note>${esc(host(x.url))}, ${esc(x.note)}${esc(stale)}${by}</span>${gate}</li>`;
   }).join('')+'</ul>'):'';
   el.innerHTML=lanesHtml+rowsHtml;
+}
+// Query your research: 'quick' reads the gathered research (ok to be unsure); 'deep' spawns fresh research.
+let RQ_BUSY=false;
+async function runResearchQuery(mode){
+  if(!requireKey())return;
+  if(RQ_BUSY)return;
+  const q=((document.getElementById('rqinput')||{}).value||'').trim();
+  if(q.length<3){toast('Ask a question about your research.','err');const t=document.getElementById('rqinput');if(t)t.focus();return;}
+  RQ_BUSY=true;
+  const out=document.getElementById('rqout');
+  const deep=mode==='deep';
+  const steps=deep?["Planning fresh research","Pulling + grading new sources","Answering from what cleared"]:["Reading your graded research","Checking what it actually says"];
+  const aid=Activity.start(steps,1300,deep?'Going deeper on your research':'Quick research check');
+  if(out)out.innerHTML='<p class=lead>'+(deep?'Spinning up fresh research…':'Checking your research…')+'</p>';
+  try{
+    const r=await _aiRun('/api/plan/'+SID+'/research/query',{question:q,mode:deep?'deep':'quick'});
+    const d=await r.json();
+    if(!r.ok){Activity.stop(aid);if(out)out.innerHTML='<div class=ferr>'+esc(d.error||'Could not run that.')+'</div>';RQ_BUSY=false;return;}
+    if(d.cost!=null)meterTick({id:SID,cost:d.cost,tokens:d.tokens});
+    Activity.done(aid,deep?'Deeper research done.':'Checked.');
+    let html='<div class="rqans md">'+mdToHtml(d.answer||'')+'</div>';
+    if(d.rows&&d.rows.length){html+='<div class=rqrows>'+d.rows.map(x=>`<div class=rqrow>${x.mark==='ok'?'\\u2705':'\\u26a0\\ufe0f'} ${esc(x.text)} <span class=rqsrc>${esc(host(x.url))}</span></div>`).join('')+'</div>';}
+    if(out)out.innerHTML=html;
+  }catch(e){Activity.stop(aid);if(out)out.innerHTML='<div class=ferr>Network error.</div>';}
+  RQ_BUSY=false;
 }
 let SUM_OPEN=true;
 function toggleSummary(){SUM_OPEN=!SUM_OPEN;const a=document.getElementById('answer');if(!a)return;
@@ -3017,5 +3091,5 @@ document.addEventListener('keydown',function(e){
 initAuth();
 addSecPops();   // inject the "open in a window" button onto each collapsible sidebar section
 </script>
-<div class=vibestrip aria-hidden=true><div class=vibetrack><span class=vibe>This UI was vibe coded AF and I know it's butt-ugly but I will never update it, because I believe in my soul that Craigslist was the height of web design and since we started complicating it things have gotten steadily worse in the world and I can't prove that there's a correlation but also you can't prove there's not and anyways it's an app meant for automating planning and building your business so it would kinda be a bad look if I hadn't automated the building of it to some extent and honestly the algorithm stuff was hard and UI is easy so it just made sense to leave it, anyway I'm not a designer I want to get paid to drink coffee and push buttons with my dog curled up between my legs and then a little pillow on top of him to hold my laptop. Really I think if we could all just agree to collectively move on from design and style and good taste in general the world might be a better place, you know? It's just like we've so completely commoditised every aspect of self worth and beauty and it all kind of starts with the concept of aesthetic beauty, like the way one thing looks can really be better than another way, when really it's all just light, and even that's a pretty big maybe considering the light is just signals in our little meat brains that we can't definitively prove exist, and the fact that we even have the ability to conceive of the absurdity of that thought makes any sort of external aesthetic consideration seem silly. I mean everything is silly in the grand scheme of things, and what does it even mean to be silly? There I go placing 'aesthetic' value on the concept of value itself, like I know wtf I'm talking about (I don't). And as long as I'm yapping about aesthetics and absurdity... who the hell was in the room when they came up with 'professionalism'? Like really, of all the personalities in the universe we went with the most boring possible one, based on the human equivalent of a cardboard charcuterie sampler. Like is it really that weird that I wanted to name my app 'Fuck it, let's go'? We all say fuck. You say fuck. You are saying it in your head right now, who cares? Why do we all have to pretend we don't say fuck on LinkedIn? That's weird. I mean if you actually do NOT say fuck then that makes you weird. Not qualitatively bad, but empirically weird in the sense of deviation from the norm. And we all just agreed at some point to pretend to be people who don't say "fuck" for most of our waking social lives.. that seems nuts. I want to say fuck on LinkedIn. Do you want to say fuck on LinkedIn? I'll bet you do. If you are the type of person still reading this you absolutely want to say swears on LinkedIn, and that make you my kind of person. I support you. I believe in you. I.. love you? I love the idea of you. I'm glad you're here, honestly. You are the person this was built for. Go build a business, seriously people do it every day. They have been doing it for millennia. Your ancestors survived war and famine and saber tooth tigers and shit (don't come after me science nerd, I don't care if they co existed, I don't know, and I'm not gonna look it up.) They did all that and all got laid at least once over and over just to make you here now and that means you have it in your genes, in your BONES. Success is in you, you are the proof. You can start a fucking business. Go do it. Say fuck on LinkedIn. Make a million bucks. Buy a tuxedo and rip the sleeves off and keep it on for a month, don't even take it off to shower. Why would you? You are a winner. You are success incarnate. You do what you want. You are gonna make it. You are gonna prove your first crush that shot you down wrong. You are gonna make your dad proud. You are gonna be the best thing that ever happened to your friends and family and everyone that ever believed in you. I believe in you! You've got tenacity, if nothing else. Why are you still reading this anyway? THAT is weird. But like good weird. But there I go qualifying things as good and bad again. Go make some money. FUCK!</span></div></div>
+<div class=vibestrip aria-hidden=true><div class=vibetrack><span class=vibe>This UI was vibe coded AF and I know it's butt-ugly but I will never update it, because I believe in my soul that Craigslist was the height of web design and since we started complicating it things have gotten steadily worse in the world and I can't prove that there's a correlation but also you can't prove there's not and anyways it's an app meant for automating planning and building your business so it would kinda be a bad look if I hadn't automated the building of it to some extent and honestly the algorithm stuff was hard and UI is easy so it just made sense to leave it, anyway I'm not a designer I want to get paid to drink coffee and push buttons with my dog curled up between my legs and then a little pillow on top of him to hold my laptop. Really I think if we could all just agree to collectively move on from design and style and good taste in general the world might be a better place, you know? It's just like we've so completely commoditised every aspect of self worth and beauty and it all kind of starts with the concept of aesthetic beauty, like the way one thing looks can really be better than another way, when really it's all just light, and even that's a pretty big maybe considering the light is just signals in our little meat brains that we can't definitively prove exist, and the fact that we even have the ability to conceive of the absurdity of that thought makes any sort of external aesthetic consideration seem silly. I mean everything is silly in the grand scheme of things, and what does it even mean to be silly? There I go placing 'aesthetic' value on the concept of value itself, like I know wtf I'm talking about (I don't). And as long as I'm yapping about aesthetics and absurdity... who the hell was in the room when they came up with 'professionalism'? Like really, of all the personalities in the universe we went with the most boring possible one, based on the human equivalent of a cardboard charcuterie sampler. Like is it really that weird that I wanted to name my app 'Fuck it, let's go'? We all say fuck. You say fuck. You are saying it in your head right now, who cares? Why do we all have to pretend we don't say fuck on LinkedIn? That's weird. I mean if you actually do NOT say fuck then that makes you weird. Not qualitatively bad, but empirically weird in the sense of deviation from the norm. And we all just agreed at some point to pretend to be people who don't say "fuck" for most of our waking social lives.. that seems nuts. I want to say fuck on LinkedIn. Do you want to say fuck on LinkedIn? I'll bet you do. If you are the type of person still reading this you absolutely want to say swears on LinkedIn, and that make you my kind of person. I support you. I believe in you. I.. love you? I love the idea of you. I'm glad you're here, honestly. You are the person this was built for. Go build a business, seriously people do it every day. They have been doing it for millennia. Your ancestors survived war and famine and saber tooth tigers and shit (don't come after me science nerd, I don't care if they co existed, I don't know, and I'm not gonna look it up.) They did all that and all got laid at least once over and over just to make you here now and that means you have it in your genes, in your BONES. Success is in you, you are the proof. You can start a fucking business. Go do it. Say fuck on LinkedIn. Make a million bucks. Buy a tuxedo and rip the sleeves off and keep it on for a month, don't even take it off to shower. Why would you? You are a winner. You are success incarnate. You do what you want. You are gonna make it. You are gonna prove your first crush that shot you down wrong. You are gonna make your dad proud. You are gonna be the best thing that ever happened to your friends and family and everyone that ever believed in you. I believe in you! You've got tenacity, if nothing else. Why are you still reading this anyway? THAT is weird. But like good weird. But there I go qualifying things as good and bad again. Go make some money. FUCK!</span><span class=vibe>This UI was vibe coded AF and I know it's butt-ugly but I will never update it, because I believe in my soul that Craigslist was the height of web design and since we started complicating it things have gotten steadily worse in the world and I can't prove that there's a correlation but also you can't prove there's not and anyways it's an app meant for automating planning and building your business so it would kinda be a bad look if I hadn't automated the building of it to some extent and honestly the algorithm stuff was hard and UI is easy so it just made sense to leave it, anyway I'm not a designer I want to get paid to drink coffee and push buttons with my dog curled up between my legs and then a little pillow on top of him to hold my laptop. Really I think if we could all just agree to collectively move on from design and style and good taste in general the world might be a better place, you know? It's just like we've so completely commoditised every aspect of self worth and beauty and it all kind of starts with the concept of aesthetic beauty, like the way one thing looks can really be better than another way, when really it's all just light, and even that's a pretty big maybe considering the light is just signals in our little meat brains that we can't definitively prove exist, and the fact that we even have the ability to conceive of the absurdity of that thought makes any sort of external aesthetic consideration seem silly. I mean everything is silly in the grand scheme of things, and what does it even mean to be silly? There I go placing 'aesthetic' value on the concept of value itself, like I know wtf I'm talking about (I don't). And as long as I'm yapping about aesthetics and absurdity... who the hell was in the room when they came up with 'professionalism'? Like really, of all the personalities in the universe we went with the most boring possible one, based on the human equivalent of a cardboard charcuterie sampler. Like is it really that weird that I wanted to name my app 'Fuck it, let's go'? We all say fuck. You say fuck. You are saying it in your head right now, who cares? Why do we all have to pretend we don't say fuck on LinkedIn? That's weird. I mean if you actually do NOT say fuck then that makes you weird. Not qualitatively bad, but empirically weird in the sense of deviation from the norm. And we all just agreed at some point to pretend to be people who don't say "fuck" for most of our waking social lives.. that seems nuts. I want to say fuck on LinkedIn. Do you want to say fuck on LinkedIn? I'll bet you do. If you are the type of person still reading this you absolutely want to say swears on LinkedIn, and that make you my kind of person. I support you. I believe in you. I.. love you? I love the idea of you. I'm glad you're here, honestly. You are the person this was built for. Go build a business, seriously people do it every day. They have been doing it for millennia. Your ancestors survived war and famine and saber tooth tigers and shit (don't come after me science nerd, I don't care if they co existed, I don't know, and I'm not gonna look it up.) They did all that and all got laid at least once over and over just to make you here now and that means you have it in your genes, in your BONES. Success is in you, you are the proof. You can start a fucking business. Go do it. Say fuck on LinkedIn. Make a million bucks. Buy a tuxedo and rip the sleeves off and keep it on for a month, don't even take it off to shower. Why would you? You are a winner. You are success incarnate. You do what you want. You are gonna make it. You are gonna prove your first crush that shot you down wrong. You are gonna make your dad proud. You are gonna be the best thing that ever happened to your friends and family and everyone that ever believed in you. I believe in you! You've got tenacity, if nothing else. Why are you still reading this anyway? THAT is weird. But like good weird. But there I go qualifying things as good and bad again. Go make some money. FUCK!</span></div></div>
 </div></body></html>"""

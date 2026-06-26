@@ -89,6 +89,51 @@ def chat_reply(session: dict, message: str, history: list | None = None,
     return reply.strip(), round(LEDGER.cost_slice(start), 4)
 
 
+def research_answer(session: dict, question: str, mode: str = "quick", mock: bool = False,
+                    on_progress=None) -> tuple[dict, float]:
+    """Query the RESEARCH (not the whole plan). Two modes:
+      - quick: answer strictly from the research already gathered; it's allowed to say "the research
+        doesn't cover this" rather than guess.
+      - deep: spawn a fresh, bounded research pass ON the question (gate-graded), then answer from it.
+    Returns ({mode, answer, rows?}, cost)."""
+    q = (question or "").strip()
+    if mode == "deep":
+        if mock:
+            rows = [{"mark": "ok", "text": f"Fresh finding relevant to: {q[:60]}",
+                     "url": "https://example.com", "note": "mock deeper research"}]
+            return {"mode": "deep", "answer": f"Deeper research on “{q[:80]}”: here's what fresh, graded "
+                    f"sources say… (mock).", "rows": rows}, 0.0
+        import teardown  # noqa: PLC0415 — heavy engine import, real mode only
+        from pipeline import LEDGER, call, SONNET
+        start = len(LEDGER.rows)
+        rows, _stats, _lanes = teardown.build_evidence(q, headlines=3, on_progress=on_progress)
+        block = "\n".join(
+            f"- {r['text']} [{r.get('url', '')}] ({'cited' if r['mark'] == 'ok' else 'vendor/unverified'})"
+            for r in rows) or "(the fresh pass turned up nothing usable)"
+        ans = call("research_deep", SONNET, max_tokens=550, system=skills.VOICE, prompt=(
+            "Answer the operator's question using ONLY this freshly gathered, gate-graded research. Lead "
+            "with the answer, cite the cited sources, and flag plainly where you're leaning on a "
+            "vendor/unverified claim. If it still doesn't answer the question, say so.\n\n"
+            f"QUESTION:\n{q}\n\nFRESH GRADED RESEARCH:\n{block}"))
+        return {"mode": "deep", "answer": ans.strip(), "rows": rows}, round(LEDGER.cost_slice(start), 4)
+
+    # quick — ground strictly in what's already been gathered
+    if mock:
+        return {"mode": "quick", "answer": f"Quick check against your research for “{q[:80]}”: here's "
+                "what the gathered sources actually support, and I'll say so if they don't cover it. "
+                "(mock)"}, 0.0
+    from pipeline import LEDGER, call, SONNET
+    start = len(LEDGER.rows)
+    cited, flagged = _research_blocks(session)
+    ans = call("research_quick", SONNET, max_tokens=450, system=skills.VOICE, prompt=(
+        "Answer the operator's question using ONLY the research already gathered for their plan below. "
+        "Do NOT use outside knowledge or guess. If the research does not cover it, say clearly that the "
+        "current research doesn't answer this and that they can 'go deeper' to research it fresh. Cite "
+        "the cited claims you used; note when you're leaning on a flagged (vendor/unverified) one.\n\n"
+        f"QUESTION:\n{q}\n\nCITED RESEARCH:\n{cited}\n\nFLAGGED (vendor/unverified):\n{flagged}"))
+    return {"mode": "quick", "answer": ans.strip()}, round(LEDGER.cost_slice(start), 4)
+
+
 if __name__ == "__main__":  # self-test (mock, no API)
     sess = {"idea": "guitar coaching", "shaped": {"thesis": "guitar coaching for adults",
             "founder_edge": "10 years teaching"}, "files": {"1-the-setup.md": "# Setup\nFor adults."},
