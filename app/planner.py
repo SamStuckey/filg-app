@@ -448,6 +448,32 @@ def rebranch(idea: str, research_data: dict, node: dict, feedback: str,
     return sib, round(c + cc, 4)
 
 
+_MOCK_NUDGES = ["go bolder", "narrower niche", "cheaper entry", "more specific", "add an upsell"]
+
+
+def nudges(idea: str, section_key: str, draft: str, mock: bool = False) -> tuple[list[str], float]:
+    """A handful of SHORT (2-4 word) quick-edit chips a founder might click to revise THIS section of
+    THIS business — specific to where the plan stands, not generic. One cheap Haiku call. Returns
+    (chips, cost)."""
+    if mock:
+        return list(_MOCK_NUDGES), 0.0
+    section = next((s for s in SECTIONS if s["key"] == section_key), None)
+    if not section or not (draft or "").strip():
+        return list(_MOCK_NUDGES), 0.0
+    from pipeline import LEDGER, call, extract_json, HAIKU
+    start = len(LEDGER.rows)
+    out = call("nudges", HAIKU, max_tokens=140, system=skills.VOICE, cache=True, prompt=(
+        "Suggest 5 SHORT feedback nudges (2-4 words each, lowercase, no punctuation) that this founder "
+        "might click to revise this part of their plan. Make them SPECIFIC to this business and this "
+        "section — the kind of concrete redirection that fits where the plan actually stands, not "
+        "generic advice. Output strictly JSON: {\"chips\": [\"...\", \"...\", \"...\", \"...\", \"...\"]}\n\n"
+        f"BUSINESS:\n{idea}\n\nSECTION: {section['title']} ({section['sub']})\n\nCURRENT DRAFT:\n{draft[:900]}"))
+    data = extract_json(out)
+    chips = data.get("chips") if isinstance(data, dict) else (data if isinstance(data, list) else None)
+    chips = [str(c).strip() for c in (chips or []) if str(c).strip()][:6]
+    return (chips or list(_MOCK_NUDGES)), round(LEDGER.cost_slice(start), 4)
+
+
 def first_proposal(idea: str, research_data: dict, founder: str | None = None,
                    mock: bool = False) -> tuple[dict, float]:
     """Draft section 0's proposal right after research completes."""

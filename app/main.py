@@ -335,6 +335,31 @@ async def api_coupon(request: Request):
     return {"unlocked": True}
 
 
+@app.get("/api/plan/{sid}/nudges")
+async def api_plan_nudges(sid: str, request: Request):
+    """Per-step quick-edit chips for the feedback modal — short, business + current-section specific.
+    One cheap call on the owner's key; the frontend caches them per node."""
+    s = store.plan_get(sid)
+    if not s or not _owns(request, s):
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    p = s.get("proposal") or {}
+    draft, section = p.get("draft") or "", p.get("section")
+    if not draft or not section:
+        return {"chips": []}
+    idea = planner._working_idea(s)
+    try:
+        with _run_slot(s.get("user"), s.get("stack")):
+            chips, cost = planner.nudges(idea, section, draft, mock=MOCK)
+            toks = pipeline.LEDGER.tokens()
+    except BusyError as be:
+        return _busy_response(be)
+    except Exception as e:  # noqa: BLE001
+        traceback.print_exc()
+        return {"chips": []}   # nudges are a nicety — never block the modal on them
+    nc, nt = _fold_usage(sid, s, cost, toks)
+    return {"chips": chips, "cost": nc, "tokens": nt}
+
+
 def _validate_key(provider_name: str, api_key: str) -> tuple[bool, str]:
     """One cheap call confirms a BYOK key works before we store it. Skipped in mock mode (no spend)."""
     if provider_name not in keys.PROVIDERS:
@@ -1520,6 +1545,7 @@ async function start(){
     if(d.gibberish){showJoke(d);go.disabled=false;go.textContent='Build my plan →';return;}  // nonsense → roast, no run
     if(!r.ok){err.textContent=d.error||'Something went wrong.';if(d.needKey)err.innerHTML+=' <a href=# onclick="keyModal();return false">Add your key →</a>';go.disabled=false;go.textContent='Build my plan →';return;}
     SID=d.id;meterBaseline(d.id);   // baseline at 0 so this run's tokens fully count as research streams in
+    history.replaceState({plan:SID},'','/plan/'+SID);   // put the plan in the URL NOW so a mid-build refresh restores it
     show('workspace');   // reveal the workspace + apply the ws layout (left tools drawer, full-width main)
     poll();
   }catch(e){err.textContent='Network error.';go.disabled=false;go.textContent='Build my plan →';}
