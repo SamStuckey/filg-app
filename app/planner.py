@@ -284,6 +284,53 @@ def _change_note(idea: str, feedback: str | None, section: dict, mock: bool = Fa
     return note.strip(), round(LEDGER.cost_slice(start), 4)
 
 
+_MOCK_QA = {"notes": ["Read all seven sections as one plan — same buyer, offer, and price throughout.",
+                      "Tightened a few wordy lines so each part stays skimmable.",
+                      "Confirmed every cited link is a real source, no placeholders."],
+            "fixed": []}
+
+
+def qa_plan(idea: str, files: dict, mock: bool = False) -> tuple[dict, dict, float]:
+    """Final QA pass over the WHOLE assembled plan, run once right before it's marked complete. The
+    facts/numbers were graded earlier and are assumed settled — this never touches a statistic. It
+    checks the PLAN reads as ONE coherent piece: consistent buyer/offer/price/channel across sections,
+    no contradictions, tight on-voice prose, no broken/placeholder links. Returns (files, report, cost)
+    where report = {notes:[...], fixed:[file,...]}. Only sections the editor actually rewrote (keyed by
+    exact file path) are applied; everything else is left byte-for-byte unchanged."""
+    if not files:
+        return files, {"notes": [], "fixed": []}, 0.0
+    if mock:
+        return dict(files), {"notes": list(_MOCK_QA["notes"]), "fixed": []}, 0.0
+    from pipeline import LEDGER, call, extract_json, SONNET  # heavy; real mode only
+    start = len(LEDGER.rows)
+    paths = list(files.keys())
+    out = call("plan_qa", SONNET, max_tokens=1800, system=skills.VOICE, prompt=(
+        "You are the final editor of a finished business plan, doing ONE last QA pass before it ships. "
+        "The FACTS and numbers are already graded and settled — do NOT add, remove, or change any "
+        "statistic, and never invent one. Your job is to make the whole thing read as ONE coherent "
+        "plan:\n"
+        "- Fix contradictions across sections — the same buyer, offer, price, and channel everywhere.\n"
+        "- Cut wordiness and repetition; every line earns its place.\n"
+        "- Keep the voice plain and human (no AI tells).\n"
+        "- Fix any broken or placeholder link; leave real cited links exactly as written.\n"
+        "Only rewrite a section if it genuinely needs it. Output STRICTLY this JSON, no preamble:\n"
+        '{"notes": ["short bullet on what you checked or fixed", ...], '
+        '"fixes": {"<exact file path>": "<full corrected markdown for that one section>"}}\n'
+        "Leave \"fixes\" empty for any section you did not change; file-path keys must match exactly.\n\n"
+        f"IDEA:\n{idea}\n\nVALID FILE PATHS (use these exact strings as fixes keys):\n{paths}\n\n"
+        f"THE PLAN:\n{bundle_markdown(idea, files)}"))
+    data = extract_json(out)
+    data = data if isinstance(data, dict) else {}
+    notes = [str(n).strip() for n in (data.get("notes") or []) if str(n).strip()][:6]
+    fixes = data.get("fixes") if isinstance(data.get("fixes"), dict) else {}
+    revised, fixed = dict(files), []
+    for path, body in (fixes or {}).items():
+        if path in revised and isinstance(body, str) and len(body.strip()) > 40:
+            revised[path] = body.strip()
+            fixed.append(path)
+    return revised, {"notes": notes, "fixed": fixed}, round(LEDGER.cost_slice(start), 4)
+
+
 def _plan_so_far(files: dict) -> str | None:
     """The sections already written (in order), as context so the NEXT section connects to and builds on
     them instead of reading as an unrelated blob. Returns None for the first section."""
@@ -383,8 +430,9 @@ def advance(session: dict, choice: str, note: str | None, mock: bool = False,
         upd = {"files": files, "step": step + 1, "history": history, "cost": round(cost + c, 4),
                "proposal": {"section": nxt["key"], "title": nxt["title"], "draft": draft}}
     else:
+        files, qa, qc = qa_plan(idea, files, mock=mock)   # final QA pass before the plan is complete
         upd = {"files": files, "step": N, "history": history, "status": "done",
-               "proposal": None, "cost": round(cost, 4)}
+               "proposal": None, "qa": qa, "cost": round(cost + qc, 4)}
     if directors:
         upd["board"] = reviews
     return upd
@@ -443,8 +491,10 @@ def forward(idea: str, research_data: dict, node: dict, feedback: str | None,
                  "draft": draft, "files": files, "history": history, "board": reviews, "feedback": fb,
                  "change": change}
     else:
+        files, qa, qc = qa_plan(idea, files, mock=mock)   # final QA pass before the plan is complete
+        cost += qc
         child = {"step": N, "section": None, "title": "Plan complete", "sub": "", "draft": None,
-                 "files": files, "history": history, "board": reviews, "feedback": fb}
+                 "files": files, "history": history, "board": reviews, "feedback": fb, "qa": qa}
     return child, round(cost, 4)
 
 

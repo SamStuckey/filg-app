@@ -3,7 +3,7 @@
 Stripe billing — a single paid action.
 
 The monetization model is now flat: the app is free to use on your own API key, and the ONE purchase
-is a one-time **$13** unlock for the polished investor-grade PDF. There is no subscription, no tiers,
+is a one-time **$7** unlock for the polished investor-grade PDF. There is no subscription, no tiers,
 no comp allowlist.
 
 stdlib-only: Checkout Sessions are created via Stripe's REST API over `urllib`, and webhook
@@ -14,7 +14,7 @@ runs (the PDF is treated as unlocked in dev). Purchase state lives in the shared
 Env:
   STRIPE_SECRET_KEY      sk_live_… / sk_test_…
   STRIPE_WEBHOOK_SECRET  whsec_… (signing secret for the webhook endpoint)
-  FILG_PDF_PRICE_CENTS   override the $13 PDF price (default 1300)
+  FILG_PDF_PRICE_CENTS   override the $7 PDF price (default 700)
   FILG_PUBLIC_URL        public base url for checkout success/cancel redirects
 """
 
@@ -35,9 +35,9 @@ SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY", "")
 WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
 PUBLIC_URL = os.environ.get("FILG_PUBLIC_URL", "http://localhost:8000").rstrip("/")
 
-# The one paid action: a one-time $13 for the polished investor-grade PDF. Built inline (Stripe
+# The one paid action: a one-time $7 for the polished investor-grade PDF. Built inline (Stripe
 # `price_data`) so no dashboard Price needs to exist — only the secret key. Override via env.
-PDF_PRICE_CENTS = int(os.environ.get("FILG_PDF_PRICE_CENTS", "1300"))
+PDF_PRICE_CENTS = int(os.environ.get("FILG_PDF_PRICE_CENTS", "700"))
 PDF_BILLING_ENABLED = bool(SECRET_KEY)
 
 _API = "https://api.stripe.com/v1"
@@ -63,14 +63,15 @@ def _post(path: str, data: dict) -> dict:
 
 
 def create_pdf_checkout_url(email: str, *, user_id: str | None = None,
-                            plan_id: str | None = None) -> str:
-    """Create a ONE-TIME ($13) Checkout Session for the polished PDF unlock and return its hosted URL.
-    Inline `price_data` so no pre-made Stripe Price is needed. On success Stripe sends a
-    `checkout.session.completed` event with `mode=payment` → handle_event records the purchase."""
+                            plan_id: str | None = None, plan_key: str | None = None) -> str:
+    """Create a ONE-TIME ($7) Checkout Session for the polished PDF unlock and return its hosted URL.
+    `plan_key` ("{sid}:{leaf-node-id}") scopes the unlock to ONE finished branch — a new branch is a
+    new key and pays again. Inline `price_data` so no pre-made Stripe Price is needed. On success
+    Stripe sends a `checkout.session.completed` event with `mode=payment` → handle_event records it."""
     if not PDF_BILLING_ENABLED:
         raise StripeError("billing not configured")
     ret = f"/plan/{plan_id}" if plan_id else "/"
-    session = _post("/checkout/sessions", {
+    fields = {
         "mode": "payment",
         "line_items[0][price_data][currency]": "usd",
         "line_items[0][price_data][unit_amount]": PDF_PRICE_CENTS,
@@ -82,13 +83,17 @@ def create_pdf_checkout_url(email: str, *, user_id: str | None = None,
         "allow_promotion_codes": "true",
         "success_url": f"{PUBLIC_URL}{ret}?pdf=1",
         "cancel_url": f"{PUBLIC_URL}{ret}?pdf_canceled=1",
-    })
+    }
+    if plan_key:
+        fields["metadata[plan_key]"] = plan_key   # webhook scopes the unlock to this exact branch
+    session = _post("/checkout/sessions", fields)
     return session["url"]
 
 
-def has_purchased(email: str) -> bool:
-    """True iff this email has bought the one-time PDF unlock (normalized for alias dedup)."""
-    return store.has_purchased(auth.normalize_email(email))
+def has_purchased(email: str, plan_key: str | None = None) -> bool:
+    """True iff this email may download the PDF for `plan_key` (normalized for alias dedup). An
+    account-wide grant (coupon/comp/legacy) unlocks every branch regardless of plan_key."""
+    return store.has_purchased(auth.normalize_email(email), plan_key)
 
 
 def verify_webhook(payload: bytes, sig_header: str, tolerance: int = 300) -> dict | None:
@@ -126,7 +131,9 @@ def handle_event(event: dict) -> None:
              or (obj.get("customer_details") or {}).get("email") or "").strip().lower()
     if not email:
         return
+    plan_key = (obj.get("metadata") or {}).get("plan_key") or None   # per-branch scope
     store.record_purchase(auth.normalize_email(email),
+                          plan_key=plan_key,
                           stripe_session=obj.get("id"),
                           amount_cents=obj.get("amount_total"))
 
@@ -143,7 +150,7 @@ if __name__ == "__main__":  # self-test (no network): webhook verification + eve
         sig = hmac.new(WEBHOOK_SECRET.encode(), ts.encode() + b"." + raw, hashlib.sha256).hexdigest()
         return raw, f"t={ts},v1={sig}"
 
-    # one-time $13 PDF unlock (mode=payment) → recorded as a purchase
+    # one-time $7 PDF unlock (mode=payment) → recorded as a purchase
     pdf_ev = {"type": "checkout.session.completed",
               "data": {"object": {"mode": "payment", "id": "cs_77", "amount_total": 1300,
                                   "metadata": {"kind": "pdf"},
@@ -154,4 +161,4 @@ if __name__ == "__main__":  # self-test (no network): webhook verification + eve
     assert verify_webhook(raw, "garbage") is None
     handle_event(verify_webhook(raw, header))
     assert has_purchased("pdf@gmail.com") is True          # normalized alias unlocks
-    print("billing.py self-test OK — $13 PDF unlock, no subscription")
+    print("billing.py self-test OK — $7 PDF unlock, no subscription")

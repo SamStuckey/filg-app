@@ -60,13 +60,26 @@ from . import auth, billing, keys, planner, store  # noqa: E402 — persistence,
 MOCK = os.environ.get("FILG_MOCK") == "1"
 
 
-def _has_pdf_access(email: str, verified: bool = False) -> bool:
-    """True iff this user may generate/download the polished PDF: they bought the one-time $13 unlock,
-    OR billing isn't configured (dev/local → open). The monetization model is now a single paid action:
-    the app is free to use on your own key; the polished PDF is the one purchase. No tiers, no sub."""
+def _has_pdf_access(email: str, plan_key: str | None = None, verified: bool = False) -> bool:
+    """True iff this user may generate/download the polished PDF for `plan_key`: they bought the
+    one-time $7 unlock for THIS finished branch (or hold an account-wide comp/coupon grant), OR
+    billing isn't configured (dev/local → open). The $7 is per finished branch — go back in the
+    decision tree and build a new branch and the new plan is paid again, on its own data."""
     if not billing.PDF_BILLING_ENABLED:
         return True
-    return billing.has_purchased(email)
+    return billing.has_purchased(email, plan_key)
+
+
+def _plan_key(s: dict) -> str | None:
+    """The per-branch unlock key for a plan: "{sid}:{active-leaf-node-id}". A new branch built from an
+    earlier decision-tree node finishes on a NEW leaf id → a new key → its own $7 unlock. Legacy
+    (pre-tree) plans collapse to "{sid}:flat"."""
+    sid = s.get("id")
+    if not sid:
+        return None
+    tree = s.get("tree") if isinstance(s.get("tree"), dict) else None
+    leaf = (tree or {}).get("active")
+    return f"{sid}:{leaf or 'flat'}"
 
 
 def _is_byok(user: str) -> bool:
@@ -296,7 +309,7 @@ async def api_me(request: Request):
 
 @app.post("/api/plan/{sid}/buy-pdf")
 async def api_buy_pdf(sid: str, request: Request):
-    """Start the one-time $13 Checkout that unlocks the polished investor-grade PDF (the single paid
+    """Start the one-time $7 Checkout that unlocks the polished investor-grade PDF (the single paid
     action). Requires a signed-in owner of a finished plan. Raw export stays free."""
     authed = auth.user_from_request(request)
     if not authed or not authed["email"]:
@@ -306,11 +319,12 @@ async def api_buy_pdf(sid: str, request: Request):
     s = store.plan_get(sid)
     if not s or not _owns(request, s):
         return JSONResponse({"error": "unknown session"}, status_code=404)
-    if _has_pdf_access(authed["email"]):
+    if _has_pdf_access(authed["email"], _plan_key(s)):
         return JSONResponse({"error": "You've already unlocked the polished PDF.", "unlocked": True},
                             status_code=409)
     try:
-        url = billing.create_pdf_checkout_url(authed["email"], user_id=authed["id"], plan_id=sid)
+        url = billing.create_pdf_checkout_url(authed["email"], user_id=authed["id"], plan_id=sid,
+                                              plan_key=_plan_key(s))
     except billing.StripeError as e:
         return JSONResponse({"error": str(e)}, status_code=502)
     return {"url": url}
@@ -428,6 +442,22 @@ async def api_key_remove(request: Request):
     return {"ok": True}
 
 
+@app.delete("/api/account")
+async def api_delete_account(request: Request):
+    """Permanently delete the signed-in user's account: all their projects, PDF purchases/unlocks, and
+    their stored BYOK key. Irreversible. (Supabase identity itself is managed by Supabase; this clears
+    everything FILG holds for them.)"""
+    authed = auth.user_from_request(request)
+    if not authed or not authed["email"]:
+        return JSONResponse({"error": "Sign in first."}, status_code=401)
+    store.delete_account(authed["email"], auth.normalize_email(authed["email"]))
+    try:
+        keys.delete_key(authed["email"])
+    except Exception:  # noqa: BLE001 — key store is best-effort; account data is already gone
+        pass
+    return {"ok": True}
+
+
 @app.post("/api/stripe/webhook")
 async def api_stripe_webhook(request: Request):
     """Stripe → us: flip subscription state. Verifies the signature before trusting the body."""
@@ -447,6 +477,51 @@ async def healthz():
 
 CTA = ('<div class="cta"><a class="btn btn-primary" href="https://filg.ai/#start">'
        'Run your own idea →</a></div>')
+
+# Plain, Craigslist-style shell for the app's shared/served pages (/p plan share, /r teardown share).
+# The old teardown.page_shell uses the teal Fraunces brand + a "Get these weekly" lead-magnet link; the
+# app is now stripped plain, so the share pages match it (no decorative brand, no weekly link).
+_SHARE_CSS = (
+    ":root{--ink:#222;--muted:#666;--line:#ccc;--link:#1a0dab;--ok:#067d2f;--ok-bg:#eef6ef;"
+    "--warn:#a85b00;--warn-bg:#f7f1e8}"
+    "*{box-sizing:border-box}body{margin:0;background:#fff;color:var(--ink);"
+    "font:15px/1.55 Arial,Helvetica,sans-serif}"
+    ".wrap{max-width:760px;margin:0 auto;padding:0 18px}"
+    "a{color:var(--link)}"
+    "nav{display:flex;justify-content:space-between;align-items:center;padding:14px 0;"
+    "border-bottom:1px solid var(--line)}"
+    ".logo{font-weight:700;font-size:16px;text-decoration:none;color:var(--ink)}"
+    "article{padding:24px 0}h1{font-size:24px;margin:0 0 6px}h2{font-size:18px;margin:24px 0 8px}"
+    ".eyebrow{display:inline-block;font-size:11px;font-weight:700;text-transform:uppercase;"
+    "letter-spacing:.05em;color:var(--muted);margin-bottom:12px}"
+    ".tag{color:var(--muted);font-size:14px;margin:0 0 18px}"
+    ".ev{list-style:none;padding:0;margin:12px 0 0}"
+    ".ev li{padding:10px 0;border-top:1px solid var(--line);display:flex;gap:10px;font-size:14px}"
+    ".ev li:first-child{border-top:0}.ev .ok{color:var(--ok)}.ev .warn{color:var(--warn)}"
+    ".ev .note{color:var(--muted);font-size:13px}"
+    ".badge{display:inline-block;font-size:11px;font-weight:700;padding:1px 6px;border-radius:4px;margin-left:2px}"
+    ".badge.ok{background:var(--ok-bg);color:var(--ok)}.badge.warn{background:var(--warn-bg);color:var(--warn)}"
+    ".recpt{margin-top:18px;padding:12px 14px;background:var(--ok-bg);border-radius:6px;font-size:14px}"
+    ".cta{margin:24px 0}.btn{display:inline-block;font-weight:700;text-decoration:underline;color:var(--link)}"
+    "footer{padding:24px 0;color:var(--muted);font-size:13px;border-top:1px solid var(--line)}")
+
+
+def share_shell(title: str, desc: str, body: str) -> str:
+    """A plain HTML page for the app's shared views — matches the stripped-down app: no brand chrome,
+    no lead-magnet link."""
+    import html as _html
+    t, d = _html.escape(title), _html.escape((desc or "")[:180])
+    return (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
+            f'<meta name="viewport" content="width=device-width,initial-scale=1">'
+            f'<title>{t}, FILG</title><meta name="description" content="{d}">'
+            f'<meta property="og:title" content="{t}"><meta property="og:description" content="{d}">'
+            f'<meta property="og:type" content="article">'
+            f'<style>{_SHARE_CSS}</style></head><body><div class="wrap">'
+            f'<nav><a class="logo" href="/">fuck it, let\'s go</a></nav>'
+            f'{body}'
+            f"<footer>Built with FILG. Every number above is graded by a source-credibility gate. "
+            f'<a href="/">filg.ai</a></footer>'
+            f'</div></body></html>')
 
 
 def _receipt(stats: dict) -> str:
@@ -477,7 +552,7 @@ def render_result_page(job: dict) -> str:
                    f'<p><strong>The offer:</strong> {html.escape(p["offer"])}</p>'
                    f'<p><strong>How you\'d sell it:</strong> {html.escape(p["gtm"])}</p>'
                    f'{ev}{_receipt(stats)}{CTA}</article>')
-    return teardown.page_shell(title, desc, article)
+    return share_shell(title, desc, article)
 
 
 @app.get("/r/{job_id}", response_class=HTMLResponse)
@@ -503,7 +578,7 @@ async def share_plan(sid: str):
     title = ((s.get("shaped") or {}).get("thesis") or s["idea"] or "Shared business plan")[:120]
     article = (f'<article><span class="eyebrow">Shared business plan · built with FILG</span>'
                f'{inner}{CTA}</article>')
-    return teardown.page_shell("Shared plan — FILG", title, article)
+    return share_shell("Shared plan — FILG", title, article)
 
 
 # ── Interactive plan builder (idea → decision tree → downloadable file tree) ──
@@ -544,11 +619,16 @@ def _plan_state(s: dict) -> dict:
                      for x in planner.SECTIONS],
         "step": s.get("step", 0), "total": planner.N, "proposal": s.get("proposal"),
         "done": s["status"] == "done", "shared": bool(s.get("shared")),
+        "qa": s.get("qa"),   # final QA-pass report {notes, fixed} on the finished plan
+
         "tree": _tree_view(s["tree"]) if s.get("tree") else None,
         "chat": s.get("chat") or [], "chatStarters": advisor.STARTERS,
         "progress": s.get("progress") or [],
         "cost": s.get("cost") or 0, "tokens": s.get("tokens") or 0,   # live session usage meter
         "stack": s.get("stack") or provider.DEFAULT_STACK,            # chosen model stack
+        # Per-branch PDF unlock for THIS active branch (the $7 is per finished branch). Drives the
+        # Download vs Unlock button; a new branch built from an earlier node comes back locked.
+        "pdfUnlocked": _has_pdf_access((s.get("user") or "").strip(), _plan_key(s), verified=True),
     }
 
 
@@ -578,6 +658,7 @@ def _mirror(tree: dict) -> dict:
     return {"step": a["step"], "files": a["files"], "history": a["history"], "board": a["board"],
             "proposal": (None if done else {"section": a["section"], "title": a["title"],
                                             "draft": a["draft"], "change": a.get("change")}),
+            "qa": a.get("qa") if done else None,   # the final QA-pass report, surfaced on the finished branch
             "status": "done" if done else "building"}
 
 
@@ -1323,7 +1404,7 @@ def _slug(text: str) -> str:
 async def api_plan_pdf(sid: str, request: Request):
     """The core artifact: a styled, branded PDF of the finished plan. Synthesizes an exec summary,
     lays out the active branch's sections, and appends the graded-research evidence exhibit. This is
-    the ONE paid action: a one-time $13 unlocks it; raw `.zip`/`.md` export stays free. The synthesis
+    the ONE paid action: a one-time $7 unlocks it; raw `.zip`/`.md` export stays free. The synthesis
     runs on the OWNER'S bound key (user-key-only — `_run_slot` binds their provider), same as every
     other engine call. Builds from `s["files"]` = the final decision set."""
     s = store.plan_get(sid)
@@ -1332,9 +1413,9 @@ async def api_plan_pdf(sid: str, request: Request):
     if s["status"] != "done":
         return JSONResponse({"error": "plan isn't finished yet"}, status_code=400)
     authed = auth.user_from_request(request)
-    if not _has_pdf_access((authed or {}).get("email", ""), verified=authed is not None):
+    if not _has_pdf_access((authed or {}).get("email", ""), _plan_key(s), verified=authed is not None):
         return JSONResponse(
-            {"error": "Unlock the polished, investor-grade PDF for a one-time $13. Your raw export is free.",
+            {"error": "Unlock the polished, investor-grade PDF for a one-time $7. Your raw export is free.",
              "needPurchase": True, "price": billing.PDF_PRICE_CENTS}, status_code=402)
     try:
         with _run_slot(s.get("user"), s.get("stack")):
@@ -1389,7 +1470,15 @@ PAGE = """<!doctype html><html lang=en><head><meta charset=utf-8>
 <link rel="icon" href='data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"%3E%3Crect width="32" height="32" rx="8" fill="%23FF6B4A"/%3E%3Cpath d="M16 4c-3.2 2.8-4.3 7.4-4.3 11.8v3.2h8.6v-3.2C20.3 11.4 19.2 6.8 16 4z" fill="%23fff"/%3E%3Ccircle cx="16" cy="12" r="2.1" fill="%232E7CF6"/%3E%3Cpath d="M11.7 15.5 8.6 20.5l3.1-1.3z" fill="%23fff"/%3E%3Cpath d="M20.3 15.5 23.4 20.5l-3.1-1.3z" fill="%23fff"/%3E%3Cpath d="M13.6 19.5h4.8L16 25.5z" fill="%23FFC23F"/%3E%3C/svg%3E'>
 __FILG_HEAD__
 <style>
-:root{--bg:#fff;--ink:#222;--muted:#666;--line:#ccc;--card:#fff;--paper:#f1f1f1;--hdr:52px;--link:#1a0dab;--ok:#067d2f;--ok-bg:#eef6ef;--warn:#a85b00;--warn-bg:#f7f1e8;--kill:#b3261e;--kill-bg:#f7ecec;--coral:#1a0dab;--coral-d:#b3261e;--sky:#1a0dab;--sun:#a85b00}
+:root{--bg:#fff;--ink:#222;--muted:#666;--line:#ccc;--card:#fff;--paper:#f1f1f1;--hdr:52px;--disc:18px;--link:#1a0dab;--ok:#067d2f;--ok-bg:#eef6ef;--warn:#a85b00;--warn-bg:#f7f1e8;--kill:#b3261e;--kill-bg:#f7ecec;--coral:#1a0dab;--coral-d:#b3261e;--sky:#1a0dab;--sun:#a85b00}
+/* ever-present disclaimer bar — yellow, ~1/3 the header height, pinned at the very top of every page;
+   click opens the full disclaimer modal. Collapses to "Disclaimer!" on phones. */
+#disclaimer{position:sticky;top:0;z-index:70;height:var(--disc);display:flex;align-items:center;justify-content:center;gap:8px;background:#ffe14d;color:#4a3b00;border-bottom:1px solid #d9bb00;font-size:11.5px;font-weight:600;line-height:1;padding:0 12px;cursor:pointer;text-align:center}
+#disclaimer:hover{background:#ffd91f}
+#disclaimer .disc-full{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#disclaimer .disc-short{display:none}
+@media(max-width:640px){#disclaimer .disc-full{display:none}#disclaimer .disc-short{display:inline}}
+.disclinks{margin:8px 0 0;padding-left:18px}.disclinks li{margin:4px 0}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 Arial,Helvetica,sans-serif}
 a{color:var(--link)}
 .page{max-width:980px;margin:0 auto;padding:16px 16px 64px}
@@ -1397,10 +1486,10 @@ a{color:var(--link)}
 .drawerhead{display:none}.drawer-rail{display:none}
 body.ws .page{max-width:none}
 /* header spans edge-to-edge (FILG top-left), the tools drawer sits BELOW it */
-body.ws .top{position:sticky;top:0;z-index:65;background:var(--paper);border-bottom:1px solid #888;margin:-16px -16px 0;padding:0 18px;height:var(--hdr);margin-bottom:0}
+body.ws .top{position:sticky;top:var(--disc);z-index:65;background:var(--paper);border-bottom:1px solid #888;margin:-16px -16px 0;padding:0 18px;height:var(--hdr);margin-bottom:0}
 body.ws .workspace{display:block;margin-left:300px;transition:margin-left .2s}
 body.ws .main{padding-top:14px}   /* line the center column's first card up with the left drawer's */
-body.ws .side{position:fixed;left:0;top:var(--hdr);bottom:0;width:300px;background:var(--paper);border-right:1px solid var(--line);z-index:60;padding:8px;transition:transform .2s;display:flex;flex-direction:column}
+body.ws .side{position:fixed;left:0;top:calc(var(--hdr) + var(--disc));bottom:0;width:300px;background:var(--paper);border-right:1px solid var(--line);z-index:60;padding:8px;transition:transform .2s;display:flex;flex-direction:column}
 body.ws .side-scroll{flex:1;overflow-y:auto;margin:0 -2px;padding:2px}
 /* modern minimal sidebar: flat icon+label rows, hover tint, soft active highlight (no boxes) */
 body.ws .side .sec.collap{background:none;border:0;padding:0;margin:0 0 1px}
@@ -1427,7 +1516,8 @@ body.ws.drawer-collapsed .side{transform:translateX(-100%)}
 body.ws.drawer-collapsed .workspace{margin-left:0}
 body.ws.drawer-collapsed .drawer-rail{display:flex;align-items:center;gap:7px;position:fixed;left:0;top:50%;transform:translateY(-50%);z-index:61;background:#444;color:#fff;border:0;border-radius:0 8px 8px 0;padding:11px 9px;cursor:pointer;font-size:12px;font-weight:700;writing-mode:vertical-rl;letter-spacing:.05em}
 @media(max-width:820px){body.ws .workspace{margin-left:0}body.ws .side{box-shadow:2px 0 18px rgba(0,0,0,.25)}}
-.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;position:relative}
+.top{display:flex;justify-content:flex-end;align-items:center;gap:10px;margin-bottom:10px;position:relative}
+.top>h1.logo{margin-right:auto}   /* logo left, everything else (stack crew, account, menu) clusters right */
 .topright{display:flex;align-items:center;gap:12px}
 .topham{display:none;background:none;border:0;font-size:21px;color:var(--ink);cursor:pointer;padding:0 4px;line-height:1}
 /* progressive header: when it's tight, hide the token meter first … */
@@ -1505,7 +1595,9 @@ body.hasbar .vibestrip{display:none}   /* don't fight the fixed action bar mid-b
 .err{color:var(--kill);margin-top:10px;font-weight:700}
 .authbar{display:flex;align-items:center;gap:12px;font-size:13px}
 .authbar .who{color:var(--muted)}.authbar b{color:var(--ink)}
-.authbar .link{background:none;border:0;color:var(--link);padding:0;font-weight:700;font-size:13px;text-decoration:underline;cursor:pointer}
+/* header menu links match the sidebar tool links: ink gray, no underline, soft hover tint (not raw blue) */
+.authbar .link{background:none;border:0;color:var(--ink);padding:5px 8px;font-weight:600;font-size:13px;text-decoration:none;cursor:pointer;border-radius:6px;transition:background .12s}
+.authbar .link:hover{background:rgba(0,0,0,.06);text-decoration:none}
 .authbar .up{background:#f4f4f4;color:var(--ink);border:1px solid #888;padding:4px 10px;font-size:12px}
 .note-banner{background:#f4f4f4;border:1px solid var(--line);padding:10px 14px;font-size:13px;margin-bottom:14px;display:none}
 .jokecard{margin:14px 0 0;text-align:left;background:#fff;border:1px solid var(--line);padding:14px 16px}
@@ -1544,7 +1636,7 @@ body.hasbar .vibestrip{display:none}   /* don't fight the fixed action bar mid-b
 .node .eyebrow{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:700}
 .node h3{font-size:19px;font-weight:700;margin:4px 0 2px}.node .h3sub{color:var(--muted);font-size:13px;margin:0 0 12px}
 /* sticky offer summary pinned to the top of the center column (hidden until research fills it) */
-.main #answer.summary{position:sticky;top:var(--hdr);z-index:30;background:var(--card);border:1px solid var(--line);padding:13px 18px;margin:0 0 14px}
+.main #answer.summary{position:static;background:var(--card);border:1px solid var(--line);padding:13px 18px;margin:0 0 14px}
 .main #answer.summary:empty{display:none}
 #answer.summary h2{font-size:17px;font-weight:700;margin:0}
 #answer.summary .tag{color:var(--muted);font-size:12px;margin:7px 0 0}
@@ -1602,6 +1694,10 @@ body.hasbar .vibestrip{display:none}   /* don't fight the fixed action bar mid-b
 .compose .row{display:flex;gap:8px;margin-top:10px}.compose .row button{flex:none}.compose .ghost{background:#fff;color:var(--muted);border:1px solid var(--line)}
 .done{background:var(--ok-bg);border:1px solid var(--line);padding:14px 16px;font-size:15px}
 .planacts{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}.planacts .ghost{background:#fff;color:var(--ink);border:1px solid var(--line)}
+.qabox{margin:12px 0;border:1px solid var(--line);background:var(--ok-bg);border-radius:8px;padding:10px 12px;font-size:13px}
+.qabox summary{cursor:pointer;font-weight:700;color:var(--ok)}
+.qabox ul{margin:8px 0 0;padding-left:18px}.qabox li{margin:2px 0}
+.qabox .qafixed{margin-top:6px;color:var(--muted);font-style:italic}
 .couponrow{display:flex;gap:8px;margin-top:10px;max-width:340px}
 .couponrow input{flex:1;padding:8px 11px;border:1px solid var(--line);border-radius:8px;font:inherit;background:#fff}
 .couponrow .ghost{background:#fff;color:var(--ink);border:1px solid var(--line);white-space:nowrap}
@@ -1786,7 +1882,7 @@ body.hasbar .workspace{padding-bottom:74px}
 @media(prefers-reduced-motion:reduce){#spewsec.running .sechead h3{animation:none}}
 #spewsec .runner{border:0;background:none;margin:0}#spewsec .run-head{background:none;padding:0 0 6px}
 body.ws .side .sec.collap.tabactive .sechead h3{color:var(--link)}
-.secdrawer{position:fixed;left:300px;top:var(--hdr);bottom:0;width:min(440px,calc(100vw - 320px));background:var(--paper);border-right:1px solid #888;box-shadow:6px 0 24px rgba(0,0,0,.14);z-index:58;transform:translateX(-100%);transition:transform .2s;display:flex;flex-direction:column;visibility:hidden}
+.secdrawer{position:fixed;left:300px;top:calc(var(--hdr) + var(--disc));bottom:0;width:min(660px,calc(100vw - 320px));background:var(--paper);border-right:1px solid #888;box-shadow:6px 0 24px rgba(0,0,0,.14);z-index:58;transform:translateX(-100%);transition:transform .2s;display:flex;flex-direction:column;visibility:hidden}
 .secdrawer.open{transform:translateX(0);visibility:visible}
 body.drawer-collapsed .secdrawer{left:0}
 @media(max-width:820px){.secdrawer{left:0}}
@@ -1800,6 +1896,17 @@ body.drawer-collapsed .secdrawer{left:0}
 /* collapse tab stuck to the middle of the open drawer's outer edge — mirrors the "Tools" reopen rail */
 .sd-rail{position:absolute;right:-19px;top:50%;transform:translateY(-50%);z-index:59;width:20px;height:54px;display:flex;align-items:center;justify-content:center;background:#444;color:#fff;border:0;border-radius:0 8px 8px 0;cursor:pointer;font-size:18px;line-height:1;padding:0}
 .sd-rail:hover{background:#222}
+/* small screens only: a collapse tab on the toolbar's outer edge (mirror of the drawer's sd-rail) so
+   the sidebar itself can be dismissed to reveal the main content, + a backdrop that collapses both. */
+.side-rail{display:none}
+.mback{display:none}
+@media(max-width:640px){
+  body.ws .side-rail{display:flex;position:absolute;right:-19px;top:50%;transform:translateY(-50%);z-index:61;
+    width:20px;height:54px;align-items:center;justify-content:center;background:#444;color:#fff;border:0;
+    border-radius:0 8px 8px 0;cursor:pointer;font-size:18px;line-height:1;padding:0}
+  body.ws .side-rail:hover{background:#222}
+  body.ws:not(.drawer-collapsed) .mback{display:block;position:fixed;inset:calc(var(--hdr) + var(--disc)) 0 0 0;z-index:55;background:rgba(0,0,0,.2)}
+}
 .sd-head span{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
 .sd-x{background:none;border:0;font-size:20px;color:var(--muted);cursor:pointer;line-height:1;padding:0 4px}
 .sd-x:hover{color:var(--ink)}
@@ -1890,18 +1997,40 @@ body.sd-open .secdrawer-back{display:block}
 .authgate .or{color:var(--muted);font-size:13px;margin:4px 0 0}
 .keysteps{margin:0 0 12px;padding-left:20px;color:var(--muted);font-size:13px;line-height:1.7}
 .keysteps a{color:var(--link);font-weight:700}
-.plans{max-width:760px;margin:8px auto}.plans h2{font-size:22px;font-weight:700;margin:8px 0 4px}
+/* Profile page — projects, API config, contact, account. */
+.profilewrap{max-width:760px;margin:8px auto;padding:0 2px}
+.prof-top{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:8px 0 4px}
+.prof-top h2{font-size:22px;font-weight:700;margin:0}
+.psec{margin:18px 0;padding-top:14px;border-top:1px solid var(--line)}
+.psec:first-of-type{border-top:0;padding-top:0}
+.psec h3{font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin:0 0 10px}
+.psec-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px}
+.psec-head h3{margin:0}
+.prow{display:flex;gap:10px;flex-wrap:wrap}
+.pnote{font-size:13.5px;color:var(--ink);margin:0 0 10px}
+.pcontact{font-size:14px;color:var(--ink);margin:0}
+.danger{background:#fff;color:var(--kill);border:1px solid var(--kill)}
+.danger:hover{background:var(--kill-bg)}
+.empty{color:var(--muted);font-size:14px}
+/* a project card: idea + meta on the left, status pill + actions on the right; stacks on small screens */
 .pcard{display:flex;justify-content:space-between;align-items:center;gap:12px;background:var(--card);border:1px solid var(--line);padding:14px 16px;margin-bottom:12px}
-.pcard .idea{font-weight:700;font-size:15px}.pcard .meta{color:var(--muted);font-size:12px;margin-top:2px}
-.pcard .act{display:flex;align-items:center;gap:8px;flex:none}.pcard .act button{font-size:13px;padding:8px 12px}
+.pcard-main{min-width:0;flex:1}
+.pcard .idea{font-weight:700;font-size:15px;overflow-wrap:anywhere}.pcard .meta{color:var(--muted);font-size:12px;margin-top:2px}
+.pcard .act{display:flex;align-items:center;gap:8px;flex:none;flex-wrap:wrap;justify-content:flex-end}.pcard .act button{font-size:13px;padding:8px 12px}
 .pill{font-size:11px;font-weight:700;padding:1px 8px;border:1px solid var(--warn);color:var(--warn)}.pill.done{border-color:var(--ok);color:var(--ok)}
+@media(max-width:640px){
+  .pcard{flex-direction:column;align-items:stretch;gap:10px}
+  .pcard .act{justify-content:flex-start}
+  .pcard .act button{flex:1;min-width:88px}
+}
 .empty{color:var(--muted);text-align:center;margin:30px 0}
 @media(max-width:820px){.workspace{grid-template-columns:1fr}}
 a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--link);outline-offset:2px}
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
 .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
-</style></head><body><div class=page>
-<div class=top><h1 class=logo><button type=button class=logobtn onclick=newPlan() aria-label="FILG, start a new idea"><svg class=logomark viewBox="0 0 32 32" aria-hidden=true><rect width=32 height=32 rx=8 fill=#FF6B4A></rect><path d="M16 4c-3.2 2.8-4.3 7.4-4.3 11.8v3.2h8.6v-3.2C20.3 11.4 19.2 6.8 16 4z" fill=#fff></path><circle cx=16 cy=12 r=2.1 fill=#2E7CF6></circle><path d="M11.7 15.5 8.6 20.5l3.1-1.3z" fill=#fff></path><path d="M20.3 15.5 23.4 20.5l-3.1-1.3z" fill=#fff></path><path d="M13.6 19.5h4.8L16 25.5z" fill=#FFC23F></path></svg>FI<span>LG</span><span class=logotip aria-hidden=true>“Fuck it. Let’s go.” — You, 30 seconds ago</span></button></h1><div class=topright><div class=stackdial id=stackdial hidden><button type=button class=stackbtn id=stackbtn aria-haspopup=true aria-expanded=false aria-label="Choose your model crew" onclick=toggleStackPop()><span class=stacklbl id=stacklbl></span><span class=stack-cost id=stackcost aria-hidden=true></span><span class=stackcaret aria-hidden=true>&#9662;</span></button><div class=stackpop id=stackpop role=menu aria-label="Choose a model crew" hidden></div></div><button type=button class=meter id=meter hidden title="Token usage this session (resets when you reload)"></button><div class=authbar id=authbar></div></div><button type=button class=topham id=topham onclick=toggleTopMenu() aria-label="Menu" aria-expanded=false>&#9776;</button></div>
+</style></head><body><div id=disclaimer role=button tabindex=0 onclick=openDisclaimer() onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openDisclaimer();}" title="Read the full disclaimer"><span class=disc-full>This is just for fun. Do your research, talk to your lawyer, family, or God before investing any real time or money into a new business. AI is great at being confidently wrong!</span><span class=disc-short>Disclaimer!</span></div>
+<div class=page>
+<div class=top><h1 class=logo><button type=button class=logobtn onclick=newPlan() aria-label="FILG, start a new idea"><svg class=logomark viewBox="0 0 32 32" aria-hidden=true><rect width=32 height=32 rx=8 fill=#FF6B4A></rect><path d="M16 4c-3.2 2.8-4.3 7.4-4.3 11.8v3.2h8.6v-3.2C20.3 11.4 19.2 6.8 16 4z" fill=#fff></path><circle cx=16 cy=12 r=2.1 fill=#2E7CF6></circle><path d="M11.7 15.5 8.6 20.5l3.1-1.3z" fill=#fff></path><path d="M20.3 15.5 23.4 20.5l-3.1-1.3z" fill=#fff></path><path d="M13.6 19.5h4.8L16 25.5z" fill=#FFC23F></path></svg>FI<span>LG</span><span class=logotip aria-hidden=true>“Fuck it. Let’s go.” — You, 30 seconds ago</span></button></h1><div class=stackdial id=stackdial hidden><button type=button class=stackbtn id=stackbtn aria-haspopup=true aria-expanded=false aria-label="Choose your model crew" onclick=toggleStackPop()><span class=stacklbl id=stacklbl></span><span class=stack-cost id=stackcost aria-hidden=true></span><span class=stackcaret aria-hidden=true>&#9662;</span></button><div class=stackpop id=stackpop role=menu aria-label="Choose a model crew" hidden></div></div><div class=topright><button type=button class=meter id=meter hidden title="Token usage this session (resets when you reload)"></button><div class=authbar id=authbar></div></div><button type=button class=topham id=topham onclick=toggleTopMenu() aria-label="Menu" aria-expanded=false>&#9776;</button></div>
 <div class=note-banner id=banner></div>
 <div class=intake id=intake>
 <h2>You've got a business in you. Let's find it. 🚀</h2>
@@ -1996,7 +2125,9 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 </div></div>
 </div>
 <div class=dlbar id=dlbar style="display:none"><button type=button class=dl-all onclick=openExportModal() title="Take your data with you, free, at any point">⬇ Take your data</button></div>
+<button type=button class=side-rail onclick=collapseAll() aria-label="Collapse tools" title="Collapse">&#8249;</button>
 </aside>
+<div class=mback id=mback onclick=collapseAll()></div>
 <main class=main>
 <div id=answer class=summary></div>
 <div class=planwrap id=planwrap style="display:none"><div class=plantabs id=plantabs role=tablist aria-label="Your plan, part by part"></div></div>
@@ -2184,6 +2315,19 @@ function paintMeter(){
   el.innerHTML=`<span class=m-dot></span><b>${fmtTokens(tok)}</b> tokens · <b>$${cost.toFixed(d)}</b>${est}`;
 }
 let LAST_S=null;
+let PENDING_PDF=false;   // set on return from Stripe (?pdf=1): auto-download once the plan loads + unlocks
+// Back from Stripe checkout: poll for the per-branch unlock to land (the webhook is async), re-render
+// so the button flips Unlock→Download, then auto-grab the PDF. Stays on the finished plan throughout.
+async function autoGrabPdf(){
+  for(let i=0;i<6;i++){
+    if(pdfUnlocked()){download();return;}
+    await loadMe();
+    try{const r=await fetch('/api/plan/'+SID,{headers:authHeaders()});if(r.ok)render(await r.json());}catch(e){}
+    if(pdfUnlocked()){download();return;}
+    await new Promise(res=>setTimeout(res,1300));
+  }
+  if(pdfUnlocked())download(); else toast('Payment received — tap "Download polished PDF".','ok');
+}
 function render(s){
   LAST_S=s;       // stash for the feedback modal (suggested questions, current step)
   meterTick(s);   // tick the session usage meter off this plan's cumulative cost/tokens
@@ -2199,6 +2343,7 @@ function render(s){
   }
   renderResearch(s);renderAnswer(s);renderVet(s);renderNode(s);renderPlanTabs(s);renderAddons(s);renderBoard(s);renderBoardRound(s);renderDecisionTree(s);renderChat(s);renderStack(s);syncSidebar(s);maybeGreetStraightRead(s);
   if(s.done&&SID&&location.pathname!=='/plan/'+SID)history.pushState({plan:SID},'','/plan/'+SID);   // finished plan gets a clean URL (revisit + bookmark)
+  if(s.done&&PENDING_PDF){PENDING_PDF=false;autoGrabPdf();}   // returned from Stripe → grab the PDF now
   if(s.done)say('Your plan is complete, all '+s.total+' parts ready to download.');
   else if(s.vetting&&s.vetting.verdict)say('Research graded. Verdict: '+s.vetting.verdict+'. Ready to build part '+((s.step||0)+1)+'.');
 }
@@ -2389,7 +2534,10 @@ function applyPlanTab(s){
     const sec=secs[PLAN_TAB]||{}, content=BUILT[sec.file]||'';
     const tab=document.querySelector('#plantabs .ptab[data-i="'+PLAN_TAB+'"]');
     const nodeId=tab?tab.dataset.node:'';
-    const build=(nodeId&&!s.done)?`<button type=button class=pbuild onclick="gotoNode('${nodeId}')">↩ Jump back and build from here</button>`:'';
+    // Build-from-here works AFTER completion too: jump to an earlier node and roll a NEW branch from
+    // clean context at that point (its own files/research only). The new branch is its own finished plan
+    // → its own $7 PDF unlock, priced on the new data alone.
+    const build=nodeId?`<button type=button class=pbuild onclick="gotoNode('${nodeId}')">↩ Jump back and build from here</button>`:'';
     const back=`<button type=button class=ghost onclick=backToCurrent()>${s.done?'Back to overview':"Back to the part you're on"} →</button>`;
     view.innerHTML=`<div class=node><span class=eyebrow>From your plan</span><h3>${esc(sec.title||'Part')}</h3><p class=h3sub>${esc(sec.sub||'')}</p><div class="draft md">${mdToHtml(content)}</div><div class=planacts>${build}${back}</div></div>`;
     view.style.display='block'; if(node)node.style.display='none';
@@ -2407,6 +2555,7 @@ function renderNode(s){
   if(s.status==='researching')return;
   if(s.done){const cpn=pdfUnlocked()?'':'<div class=couponrow><input id=coupon placeholder="Coupon code" autocomplete=off spellcheck=false><button type=button class=ghost onclick=redeemCoupon()>Apply</button></div>';
     n.innerHTML='<div class=node><div class=done>🎉 <b>Your plan is ready</b>, all '+s.total+' parts. This is your plan\\'s home: grab the <b>polished PDF</b> (or the free raw files), <b>chat with your plan</b> in the sidebar to pressure-test it, or share it.</div>'+
+    qaHtml(s.qa)+
     '<div class=planacts>'+pdfBtn()+'<button type=button class=ghost onclick=downloadZip()>⬇ Raw files (.zip), free</button><button type=button class=ghost onclick="sharePlan(SID)">🔗 Share</button></div>'+cpn+'</div>';return;}
   const p=s.proposal; if(!p){n.innerHTML='';return;}
   const sec=(s.sections||[]).find(x=>x.title===p.title)||{};
@@ -3000,6 +3149,9 @@ function closeSecDrawer(){
   dr.classList.remove('open'); dr.setAttribute('aria-hidden','true');
   document.body.classList.remove('sd-open'); _setTabActive(null);
 }
+// Small screens: collapse BOTH the tab drawer and the toolbar (sidebar slides off, the "Tools" rail
+// reopens it). Wired to the sidebar's collapse rail and the backdrop (tap outside to dismiss).
+function collapseAll(){closeSecDrawer();document.body.classList.add('drawer-collapsed');}
 const TAB_ICONS={spewsec:'\\u2699\\ufe0f',straightsec:'\\uD83D\\uDCCB',takeawaysec:'\\uD83D\\uDDE3\\ufe0f',dtreesec:'\\uD83C\\uDF3F',chatsec:'\\uD83D\\uDCAC',boardsec:'\\uD83D\\uDC65',researchsec:'\\uD83D\\uDD0D'};
 function setupTabs(){   // turn every collapsible sidebar section into a modern nav tab (icon + label, no caret)
   document.querySelectorAll('.side .sec.collap').forEach(sec=>{
@@ -3184,12 +3336,22 @@ const Activity={
 };
 const RESEARCH_STEPS=["Focusing your idea into one sharp thesis","Spinning up research across the web","Pulling sources on the market and competition","Grading every source for credibility","Flagging vendor-marketing spin","Re-sourcing the headline stats to primary sources","Scoring demand, market, and willingness to pay","Drafting your first offer"];
 const PDF_STEPS=["Applying your board's input","Pulling your graded evidence","Building the decision matrix","Laying out a modern, on-brand design","Typesetting your PDF"];
-// ── The one paid action: polished PDF = one-time $13; raw export stays free ──
-function pdfUnlocked(){ return !CFG.pdfBilling || !!(me&&me.pdf_unlocked); }
-function pdfPriceStr(){ const c=(me&&me.pdf_price)||CFG.pdfPrice||1300; return '$'+Math.round(c/100); }
+// ── The one paid action: polished PDF = one-time $7; raw export stays free ──
+// The $7 unlock is per finished branch: prefer the active plan's own flag (LAST_S.pdfUnlocked); fall
+// back to an account-wide grant (me.pdf_unlocked = coupon/comp/legacy) or billing-off dev.
+function pdfUnlocked(){ return !CFG.pdfBilling || !!(LAST_S&&LAST_S.pdfUnlocked) || !!(me&&me.pdf_unlocked); }
+function pdfPriceStr(){ const c=(me&&me.pdf_price)||CFG.pdfPrice||700; return '$'+Math.round(c/100); }
 function pdfBtn(){ return pdfUnlocked()
   ? '<button type=button onclick=download()>⬇ Download polished PDF</button>'
   : '<button type=button onclick=buyPdf()>🔓 Unlock polished PDF, '+pdfPriceStr()+'</button>'; }
+// The final QA pass report — surfaced on the finished plan so the editing step is visible (the
+// agentic-showcase point: show the machine checking its own work before it ships).
+function qaHtml(qa){
+  if(!qa||!(qa.notes&&qa.notes.length))return '';
+  const notes=qa.notes.map(function(x){return '<li>'+esc(x)+'</li>'}).join('');
+  const fixed=(qa.fixed&&qa.fixed.length)?'<div class=qafixed>Revised '+qa.fixed.length+' section'+(qa.fixed.length>1?'s':'')+' for consistency.</div>':'';
+  return '<details class=qabox open><summary>✅ Final QA pass — checked before completing</summary><ul>'+notes+'</ul>'+fixed+'</details>';
+}
 async function buyPdf(){
   if(CFG.authEnabled&&!session){toast('Sign in to unlock your PDF.');signinEmail();return;}
   if(!CFG.pdfBilling){toast('Billing isn\\'t set up yet.','err');return;}
@@ -3216,7 +3378,7 @@ async function redeemCoupon(){
   }catch(e){toast('Network error.','err');}
 }
 async function download(){
-  if(!pdfUnlocked()){buyPdf();return;}     // locked → route to the $13 unlock, not a key prompt
+  if(!pdfUnlocked()){buyPdf();return;}     // locked → route to the $7 unlock, not a key prompt
   const aid=Activity.start(PDF_STEPS,1600,'Building your styled PDF');
   const minShow=new Promise(res=>setTimeout(res,2600));   // let the sequence breathe (covers fast mock runs)
   try{
@@ -3315,10 +3477,7 @@ function renderAuth(){
   const bar=document.getElementById('authbar');
   if(sb&&session){
     bar.style.display='';
-    bar.innerHTML=`<button class=link onclick=showPlans()>My plans</button>`+
-      (CFG.byokEnabled?`<button class=link onclick=keyModal()>🔑 Your key</button>`:'')+
-      `<span class=who>${esc(session.user.email)}</span>`+
-      `<button class=link onclick=signout()>Sign out</button>`;   // no subscription; the $13 PDF unlock lives on the finished plan
+    bar.innerHTML=`<button class=link onclick=openProfile()>Profile</button>`;   // one entry → the profile page (projects, key, contact, delete)
   }else if(sb){bar.style.display='';bar.innerHTML=`<button class=link onclick=authModal()>Log in / Sign up</button>`;}
   else{bar.style.display='none';}
   gateIntake();
@@ -3395,12 +3554,12 @@ async function saveKey(){
     const r=await fetch('/api/key',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({provider:KEY_PROV,key})});  // chosen provider (server falls back to prefix detection)
     const d=await r.json();
     if(!r.ok){er.textContent=d.error||'Could not save the key.';btn.disabled=false;btn.textContent='Save & validate';return;}
-    HAS_KEY=true;_closeModal();toast('Key saved \\u2014 build as many plans as you want. \\u2713');
+    HAS_KEY=true;toast('Key saved \\u2014 build as many plans as you want. \\u2713');_afterKeyChange();
   }catch(e){er.textContent='Network error.';btn.disabled=false;btn.textContent='Save & validate';}
 }
 async function removeKey(){
   try{const r=await fetch('/api/key/remove',{method:'POST',headers:authHeaders()});
-    if(r.ok){HAS_KEY=false;toast('Key removed.');_closeModal();}else toast('Could not remove the key.','err');
+    if(r.ok){HAS_KEY=false;toast('Key removed.');_afterKeyChange();}else toast('Could not remove the key.','err');
   }catch(e){toast('Network error.','err');}
 }
 function saveIdea(){try{const v=document.getElementById('idea').value;if(v)localStorage.setItem('filg_idea',v);}catch(e){}}
@@ -3433,21 +3592,54 @@ function newPlan(){SIDEBAR_PHASE=null;ACT_RESEARCH=false;ACT_PROG_N=0;ACT_ID=nul
   const joke=document.getElementById('joke'); if(joke)joke.innerHTML='';
   try{localStorage.removeItem('filg_idea');}catch(e){}
   if(location.pathname!=='/')history.pushState({},'','/');show('intake');renderBoardPick();gateIntake();}
-async function showPlans(){
-  let d; try{const r=await fetch('/api/plans',{headers:authHeaders()});if(!r.ok){toast('Sign in to see your plans.','err');return;}d=await r.json();}catch(e){toast('Network error.','err');return;}
-  show('profile');renderPlans(d);
+// One profile page: projects, API config, contact, delete account. Replaces the old My-plans /
+// Your-key / email / Sign-out header menu (a dropdown-in-a-dropdown on mobile).
+async function openProfile(){
+  if(CFG.authEnabled&&!session){authModal();return;}
+  let pd={plans:[],total:7,email:(session&&session.user&&session.user.email)||''};
+  try{const r=await fetch('/api/plans',{headers:authHeaders()});if(r.ok)pd=await r.json();}catch(e){}
+  let key=null;
+  if(CFG.byokEnabled){try{const r=await fetch('/api/key',{headers:authHeaders()});if(r.ok)key=(await r.json()).key;}catch(e){}}
+  show('profile');renderProfile(pd,key);
 }
-function renderPlans(d){
-  const rows=d.plans.length?d.plans.map(p=>{
-    const meta=p.done?`Finished · ${d.total} parts`:(p.status==='researching'?'Researching…':`In progress · part ${(p.step||0)+1} of ${d.total}`);
-    const acts=`<button onclick="resume('${p.id}')">${p.done?'Open / iterate':'Resume'}</button>`+
-      (p.done?`<button class=gbtn onclick="resumeDownload('${p.id}')">Download</button>`:'')+
-      `<button class=gbtn onclick="sharePlan('${p.id}')">${p.shared?'🔗 Shared':'Share'}</button>`+
-      `<button class=gbtn onclick="deletePlan('${p.id}')" aria-label="Delete plan">Delete</button>`;
-    return `<div class=pcard><div><div class=idea>${esc((p.idea||'Untitled').slice(0,90))}</div><div class=meta>${meta} · ${esc(new Date(p.created_at).toLocaleDateString())}</div></div><div class=act><span class="pill ${p.done?'done':''}">${p.done?'done':'WIP'}</span>${acts}</div></div>`;
-  }).join(''):`<p class=empty>No plans yet, build your first one.</p>`;
-  document.getElementById('profile').innerHTML=`<div class=plans><h2>Your plans</h2><p class=sub>${esc(d.email)}</p>`+
-    `<div style="margin:10px 0 16px"><button onclick=newPlan()>+ New plan</button></div>`+rows+`</div>`;
+function showPlans(){openProfile();}   // back-compat: share/delete refreshers route to the profile
+function planCardHtml(p,total){
+  const meta=p.done?`Finished · ${total} parts`:(p.status==='researching'?'Researching…':`In progress · part ${(p.step||0)+1} of ${total}`);
+  const acts=`<button onclick="resume('${p.id}')">${p.done?'Open / iterate':'Resume'}</button>`+
+    (p.done?`<button class=gbtn onclick="resumeDownload('${p.id}')">Download</button>`:'')+
+    `<button class=gbtn onclick="sharePlan('${p.id}')">${p.shared?'🔗 Shared':'Share'}</button>`+
+    `<button class=gbtn onclick="deletePlan('${p.id}')" aria-label="Delete plan">Delete</button>`;
+  return `<div class=pcard><div class=pcard-main><div class=idea>${esc((p.idea||'Untitled').slice(0,90))}</div><div class=meta>${meta} · ${esc(new Date(p.created_at).toLocaleDateString())}</div></div><div class=act><span class="pill ${p.done?'done':''}">${p.done?'done':'WIP'}</span>${acts}</div></div>`;
+}
+function renderProfile(pd,key){
+  const total=pd.total||7;
+  const rows=pd.plans.length?pd.plans.map(p=>planCardHtml(p,total)).join(''):`<p class=empty>No projects yet, build your first one.</p>`;
+  const keySec=!CFG.byokEnabled?'':`<section class=psec><h3>API config</h3>`+
+    (key?`<p class=pnote>Running on your own <b>${esc(key.provider)}</b> key (\\u2022\\u2022\\u2022\\u2022${esc(key.last4)}). Plans use your key, not ours.</p><div class=prow><button class=gbtn onclick=keyForm()>Replace key</button><button class=gbtn onclick=removeKey()>Remove key</button></div>`
+        :`<p class=pnote>No key yet. Add your own OpenRouter or Anthropic key to build plans and use every tool.</p><div class=prow><button onclick=keyForm()>Add a key</button></div>`)+
+    `</section>`;
+  document.getElementById('profile').innerHTML=
+    `<div class=profilewrap>`+
+    `<div class=prof-top><h2>Profile</h2><button class=link onclick=newPlan()>\\u2190 Back</button></div>`+
+    `<section class=psec><div class=psec-head><h3>Projects</h3><button onclick=newPlan()>+ New plan</button></div>${rows}</section>`+
+    keySec+
+    `<section class=psec><h3>Contact</h3><p class=pcontact>${esc(pd.email||'')}</p></section>`+
+    `<section class=psec><h3>Account</h3><div class=prow><button class=gbtn onclick=signout()>Sign out</button><button class=danger onclick=deleteAccount()>Delete account</button></div></section>`+
+    `</div>`;
+}
+function _afterKeyChange(){   // key add/replace/remove → close the modal and refresh the profile if open
+  const pf=document.getElementById('profile'), onProfile=pf&&pf.style.display!=='none';
+  _closeModal(); if(onProfile)openProfile();
+}
+async function deleteAccount(){
+  if(!await uiConfirm('Delete your account?','This permanently deletes your account, all your projects, your saved key, and your purchase history. This cannot be undone.','Delete everything'))return;
+  try{
+    const r=await fetch('/api/account',{method:'DELETE',headers:authHeaders()});
+    if(!r.ok){toast('Could not delete your account.','err');return;}
+    toast('Your account and all its data were deleted.');
+    if(sb)await sb.auth.signOut();
+    session=null;me=null;HAS_KEY=false;renderAuth();newPlan();
+  }catch(e){toast('Network error.','err');}
 }
 async function resume(id){
   SID=id;if(location.pathname!=='/plan/'+id)history.pushState({plan:id},'','/plan/'+id);   // clean URL for any entry point
@@ -3476,10 +3668,29 @@ async function sharePlan(id){
   }catch(e){toast('Network error.','err');}
 }
 function banner(msg){const b=document.getElementById('banner');b.textContent=msg;b.style.display='block';}
+function openDisclaimer(){
+  document.getElementById('modal-title').textContent='Just so we\\u2019re clear';
+  document.getElementById('modal-body').innerHTML=
+    `<p>This is just for fun. Do your research, and talk to your lawyer, your family, or your God before you put any real time or money into a new business.</p>`+
+    `<p><b>AI is great at being confidently wrong.</b> It will hand you a polished, sure-sounding plan whether or not the idea holds up. Treat everything here as a starting point to pressure-test, not as advice.</p>`+
+    `<p>People have talked themselves into real trouble taking a chatbot too seriously. A few reads on that:</p>`+
+    `<ul class=disclinks>`+
+    `<li><a href="https://www.google.com/search?q=%22AI+psychosis%22+chatbot+case+studies" target=_blank rel=noopener>Reported cases of \\u201cAI psychosis\\u201d</a></li>`+
+    `<li><a href="https://www.google.com/search?q=chatbot+reinforcing+delusions+mental+health" target=_blank rel=noopener>How chatbots can reinforce delusions</a></li>`+
+    `</ul>`;
+  document.getElementById('modal-actions').innerHTML=`<button type=button onclick="_closeModal()">Got it</button>`;
+  _openModal('#modal-actions button');
+}
 async function initAuth(){
   const q=new URLSearchParams(location.search);
-  if(q.get('pdf'))banner('🎉 Polished PDF unlocked. Download it from your finished plan.');
-  if(q.get('pdf_canceled'))banner('Checkout canceled, no charge. Your raw export is still free.');
+  if(q.get('pdf')){
+    PENDING_PDF=true;   // back from Stripe → stay on the plan, auto-download once the unlock lands
+    banner('🎉 Payment received. Taking you back to your plan and starting your download…');
+    // Drop the ?pdf flag but KEEP the /plan/{id} path so we stay on (and reload to) the finished plan.
+    try{history.replaceState(history.state,'',location.pathname);}catch(e){}
+  }
+  if(q.get('pdf_canceled')){banner('Checkout canceled, no charge. Your raw export is still free.');
+    try{history.replaceState(history.state,'',location.pathname);}catch(e){}}
   restoreIdea();renderBoardPick();renderStack();paintMeter();   // show the crew picker + meter from first paint
   if(!CFG.authEnabled||!window.supabase){renderAuth();routeFromPath();return;}
   sb=window.supabase.createClient(CFG.supabaseUrl,CFG.supabaseAnon);

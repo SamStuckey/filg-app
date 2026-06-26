@@ -23,6 +23,7 @@ import io
 import re
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlparse
 
 from fpdf import FPDF
 
@@ -153,8 +154,36 @@ def _fonts(pdf: FPDF) -> None:
     pdf.add_font("Fraunces", "", str(_FONTS / "Fraunces-Display.ttf"))
 
 
+def _host(u: str) -> str:
+    try:
+        return urlparse(u).netloc.replace("www.", "") or u
+    except Exception:  # noqa: BLE001
+        return u
+
+
+def _linkify(md: str) -> str:
+    """Turn bare / bracketed URLs into real markdown links so they render CLICKABLE in the PDF (fpdf2's
+    write_html makes `<a href>` a live link). The synth skill writes `[phrase](url)` links, but the
+    model still sometimes leaves a bare `https://…` or a bracketed `[https://…]` — those printed as
+    literal text before. Existing `[text](url)` links are left untouched (their url sits after `](`)."""
+    # [https://x.com] (bracketed bare URL, no link text) → [x.com](https://x.com)
+    md = re.sub(r"\[\s*(https?://[^\]\s]+?)\s*\](?!\()",
+                lambda m: f"[{_host(m.group(1))}]({m.group(1)})", md)
+
+    def _wrap(m):   # a raw bare URL → [host](url), preserving any trailing sentence punctuation
+        u, tail = m.group(0), ""
+        while u and u[-1] in ".,;:!?)":
+            tail, u = u[-1] + tail, u[:-1]
+        return f"[{_host(u)}]({u}){tail}"
+
+    # bare URL NOT already inside a markdown link (the lookbehind skips a url right after `](` or in quotes)
+    md = re.sub(r"(?<![\(\]\"'=>])\bhttps?://[^\s)\]<>\"']+", _wrap, md)
+    return md
+
+
 def _md_to_html(md: str) -> str:
     import markdown  # already a dependency
+    md = _linkify(md or "")
     # Demote body headings to bold run-in lines: keeps them visually distinct but stops fpdf2's
     # write_html from auto-registering every body sub-heading as a table-of-contents/outline entry.
     md = re.sub(r"(?m)^#{1,6}\s+(.*)$", r"**\1**", md or "")

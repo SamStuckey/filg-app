@@ -97,6 +97,35 @@ def test_branching_next_back_goto(client):
     assert s["tree"]["active"] == other and s["step"] == 1
 
 
+def test_qa_pass_and_pdf_unlock_on_finish(client):
+    # Driving a plan all the way to done runs the final QA pass (surfaced as s["qa"]) and the finished
+    # branch reports its per-branch PDF unlock state (pdfUnlocked → True here since billing is off).
+    sid = client.post("/api/plan/start",
+                      json={"idea": GRAB_BAG, "email": "finish@x.com"}).json()["id"]
+    s = wait_status(client, sid)
+    total = s["total"]
+    for _ in range(total + 2):                      # roll forward until the plan completes
+        if s.get("done"):
+            break
+        s = client.post(f"/api/plan/{sid}/next", json={"feedback": ""}).json()
+    assert s["done"] and len(s["files"]) == total
+    assert s["qa"] and s["qa"]["notes"]             # the final QA pass ran and is surfaced
+    assert s["pdfUnlocked"] is True                 # billing off in tests → PDF is open
+
+
+def test_per_branch_pdf_purchase_scoping():
+    # The $7 unlock is per finished branch: paying for one plan_key doesn't unlock another (a new
+    # branch built from an earlier node), but an account-wide grant unlocks every branch.
+    from app import store
+    store.init()
+    assert store.has_purchased("brancher@x.com", "sidX:leaf1") is False
+    store.record_purchase("brancher@x.com", plan_key="sidX:leaf1", amount_cents=700)
+    assert store.has_purchased("brancher@x.com", "sidX:leaf1") is True
+    assert store.has_purchased("brancher@x.com", "sidX:leaf2") is False   # a new branch pays again
+    store.record_purchase("wide@x.com")                                   # account-wide grant
+    assert store.has_purchased("wide@x.com", "anything:goes") is True
+
+
 def test_export_txt_available_with_data_unfinished(client):
     # The free get-your-data-out: one plain-text dump of everything so far, available the moment
     # there's data (no 'done' gate, no paywall).

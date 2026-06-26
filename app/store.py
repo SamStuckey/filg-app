@@ -63,6 +63,19 @@ def init() -> None:
                     "  stripe_session TEXT,"
                     "  amount_cents INTEGER,"
                     "  created_at TEXT NOT NULL)")
+                # Per-branch PDF unlocks. The $7 buys the polished PDF of ONE finished plan branch,
+                # keyed on (email, plan_key) where plan_key = "{sid}:{leaf-node-id}". Go back in the
+                # decision tree and build a NEW branch → a new leaf id → a new plan_key → pay again,
+                # for the new plan only. Account-wide grants (coupons, legacy buyers) live in
+                # pdf_purchases and unlock every branch; this table is the per-branch Stripe purchases.
+                con.execute(
+                    "CREATE TABLE IF NOT EXISTS pdf_unlocks ("
+                    "  email TEXT NOT NULL,"
+                    "  plan_key TEXT NOT NULL,"
+                    "  stripe_session TEXT,"
+                    "  amount_cents INTEGER,"
+                    "  created_at TEXT NOT NULL,"
+                    "  PRIMARY KEY (email, plan_key))")
                 # Coupon codes that unlock the PDF for free (bypass Stripe). `used` is a private counter
                 # (admin-only, never surfaced in the UX); a code is spent once used >= max_uses.
                 con.execute(
@@ -98,6 +111,7 @@ def init() -> None:
                     "  tree TEXT,"                  # JSON {nodes:{id:node}, active} — branching decision tree
                     "  chat TEXT,"                  # JSON [{role, content}] — "chat with your plan" thread
                     "  progress TEXT,"              # JSON [str] — live research-spew lines (the receipts)
+                    "  qa TEXT,"                    # JSON {notes:[...], fixed:[file]} — final QA pass report
                     "  shared INTEGER NOT NULL DEFAULT 0,"  # 1 → readable at the public /p/{id} share link
                     "  cost REAL NOT NULL DEFAULT 0,"
                     "  tokens INTEGER NOT NULL DEFAULT 0,"  # cumulative input+output tokens (usage meter)
@@ -108,7 +122,7 @@ def init() -> None:
                 # NOT EXISTS) — add any missing ones, ignore if already present.
                 have = {r["name"] for r in con.execute("PRAGMA table_info(plan_sessions)")}
                 for col in ("shaped", "vetting", "directors", "board", "tree", "chat", "progress",
-                            "custom_directors"):
+                            "custom_directors", "qa"):
                     if col not in have:
                         con.execute(f"ALTER TABLE plan_sessions ADD COLUMN {col} TEXT")
                 if "shared" not in have:
@@ -168,41 +182,60 @@ def get(job_id: str) -> dict | None:
     return job
 
 
-# ── One-time PDF purchases ($13 polished export unlock — the single paid action) ──
-def record_purchase(email: str, *, stripe_session: str | None = None,
+# ── PDF purchases ($7 polished export unlock — the single paid action, per finished branch) ──
+def record_purchase(email: str, *, plan_key: str | None = None, stripe_session: str | None = None,
                     amount_cents: int | None = None) -> None:
-    """Mark this (normalized) email as having bought the $13 polished-PDF unlock. Idempotent —
-    re-delivering the same Stripe event just refreshes the row, never double-charges."""
+    """Record a $7 polished-PDF unlock. With a `plan_key` ("{sid}:{leaf-node-id}") it unlocks ONE
+    finished branch (the per-branch Stripe purchase); without one it's an account-wide grant (coupons,
+    comps) that unlocks every branch. Idempotent — re-delivering the same event refreshes the row."""
     if not email:
         return
+    email = email.strip().lower()
     init()
     con = _connect()
     try:
         with con:
-            con.execute(
-                "INSERT INTO pdf_purchases (email, stripe_session, amount_cents, created_at) "
-                "VALUES (?,?,?,?) ON CONFLICT(email) DO UPDATE SET "
-                "  stripe_session=COALESCE(excluded.stripe_session, stripe_session),"
-                "  amount_cents=COALESCE(excluded.amount_cents, amount_cents),"
-                "  created_at=excluded.created_at",
-                (email.strip().lower(), stripe_session, amount_cents,
-                 datetime.now(timezone.utc).isoformat()))
+            if plan_key:
+                con.execute(
+                    "INSERT INTO pdf_unlocks (email, plan_key, stripe_session, amount_cents, created_at) "
+                    "VALUES (?,?,?,?,?) ON CONFLICT(email, plan_key) DO UPDATE SET "
+                    "  stripe_session=COALESCE(excluded.stripe_session, stripe_session),"
+                    "  amount_cents=COALESCE(excluded.amount_cents, amount_cents),"
+                    "  created_at=excluded.created_at",
+                    (email, plan_key, stripe_session, amount_cents,
+                     datetime.now(timezone.utc).isoformat()))
+            else:
+                con.execute(
+                    "INSERT INTO pdf_purchases (email, stripe_session, amount_cents, created_at) "
+                    "VALUES (?,?,?,?) ON CONFLICT(email) DO UPDATE SET "
+                    "  stripe_session=COALESCE(excluded.stripe_session, stripe_session),"
+                    "  amount_cents=COALESCE(excluded.amount_cents, amount_cents),"
+                    "  created_at=excluded.created_at",
+                    (email, stripe_session, amount_cents,
+                     datetime.now(timezone.utc).isoformat()))
     finally:
         con.close()
 
 
-def has_purchased(email: str) -> bool:
-    """True iff this (already-normalized) email has bought the one-time PDF unlock."""
+def has_purchased(email: str, plan_key: str | None = None) -> bool:
+    """True iff this (already-normalized) email may download the PDF. An account-wide grant
+    (pdf_purchases — coupons, comps, legacy pre-per-branch buyers) unlocks every branch. Otherwise a
+    `plan_key` must have its own per-branch unlock row (pdf_unlocks)."""
     if not email:
         return False
+    email = email.strip().lower()
     init()
     con = _connect()
     try:
-        row = con.execute("SELECT 1 FROM pdf_purchases WHERE email=?",
-                          (email.strip().lower(),)).fetchone()
+        if con.execute("SELECT 1 FROM pdf_purchases WHERE email=?", (email,)).fetchone():
+            return True   # account-wide grant unlocks all branches
+        if plan_key and con.execute(
+                "SELECT 1 FROM pdf_unlocks WHERE email=? AND plan_key=?",
+                (email, plan_key)).fetchone():
+            return True
     finally:
         con.close()
-    return row is not None
+    return False
 
 
 # ── Coupons (free PDF unlock — bypass Stripe) ────────────────────────────────
@@ -258,7 +291,7 @@ def coupon_status(code: str) -> dict | None:
 # ── Plan-builder sessions ────────────────────────────────────────────────────
 _PLAN_JSON = ("research", "files", "proposal", "history",  # columns stored as JSON
               "shaped", "vetting", "directors", "board", "tree", "chat", "progress",
-              "custom_directors")
+              "custom_directors", "qa")
 
 
 def plan_create(session_id: str, user: str, idea: str, directors: list | None = None) -> None:
@@ -348,6 +381,28 @@ def plan_delete(session_id: str) -> None:
         con.close()
 
 
+def delete_account(email: str, normalized: str | None = None) -> None:
+    """Permanently delete a user's data: every plan session they own, their PDF purchases, and their
+    per-branch unlocks. (BYOK keys live in app/keys.py — the caller removes those.) Purchases dedupe on
+    the normalized email, so pass it too to catch alias rows."""
+    if not email:
+        return
+    raw = email.strip().lower()
+    emails = {raw}
+    if normalized:
+        emails.add(normalized.strip().lower())
+    init()
+    con = _connect()
+    try:
+        with con:
+            con.execute("DELETE FROM plan_sessions WHERE lower(user)=?", (raw,))
+            for e in emails:
+                con.execute("DELETE FROM pdf_purchases WHERE email=?", (e,))
+                con.execute("DELETE FROM pdf_unlocks WHERE email=?", (e,))
+    finally:
+        con.close()
+
+
 if __name__ == "__main__":  # quick self-test (no API)
     import tempfile
     DB = tempfile.mktemp(suffix=".db")
@@ -359,12 +414,16 @@ if __name__ == "__main__":  # quick self-test (no API)
     fail("abc123", "boom")
     assert get("abc123")["status"] == "error"
     assert get("nope") is None
-    # one-time PDF purchases (the $13 unlock — the single paid action)
-    assert has_purchased("buyer@x.com") is False
-    record_purchase("buyer@x.com", stripe_session="cs_1", amount_cents=1300)
-    assert has_purchased("buyer@x.com") is True
-    record_purchase("buyer@x.com", stripe_session="cs_1")   # idempotent re-delivery
-    assert has_purchased("buyer@x.com") is True
+    # PDF purchases (the $7 unlock — now per finished branch)
+    assert has_purchased("buyer@x.com", "pl1:leafA") is False
+    record_purchase("buyer@x.com", plan_key="pl1:leafA", stripe_session="cs_1", amount_cents=700)
+    assert has_purchased("buyer@x.com", "pl1:leafA") is True
+    assert has_purchased("buyer@x.com", "pl1:leafB") is False   # a NEW branch isn't unlocked
+    record_purchase("buyer@x.com", plan_key="pl1:leafA")        # idempotent re-delivery
+    assert has_purchased("buyer@x.com", "pl1:leafA") is True
+    # an account-wide grant (coupon/comp/legacy) unlocks every branch
+    record_purchase("comp@x.com")
+    assert has_purchased("comp@x.com", "any:key") is True and has_purchased("comp@x.com") is True
     # plan sessions
     plan_create("pl1", "u@x.com", "an idea about guitar coaching", directors=["closer", "cfo"])
     assert plan_get("pl1")["status"] == "researching"
