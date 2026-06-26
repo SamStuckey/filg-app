@@ -1306,9 +1306,7 @@ body.hasbar .vibestrip{display:none}   /* don't fight the fixed action bar mid-b
 .sec.collap .sechead{display:flex;align-items:center;gap:8px;width:100%;background:none;border:0;padding:0;margin:0;cursor:pointer;text-align:left;font:inherit}
 .sec.collap .sechead h3{margin:0;flex:1}
 .sec.collap .sechead .caret{color:var(--muted);font-size:12px}
-.sec.collap.open .sechead .caret{}
-.sec.collap .secbody{display:none;margin-top:10px}
-.sec.collap.open .secbody{display:block}
+.sec.collap .secbody{display:none}   /* sections are tabs now — content shows only in the slide-out drawer */
 .chatlog{display:flex;flex-direction:column;gap:8px;max-height:42vh;overflow-y:auto;margin-bottom:10px}
 .chatlog:empty{display:none;margin:0}
 .cmsg{font-size:13px;line-height:1.45;padding:8px 11px;border:1px solid var(--line);max-width:92%}
@@ -1527,13 +1525,24 @@ body.hasbar .workspace{padding-bottom:74px}
 .modal h3{font-size:18px;font-weight:700;margin:0 0 8px}
 .modal #modal-body{font-size:14px;color:var(--muted);margin-bottom:16px}.modal #modal-body p{margin:0}
 .modal-actions{display:flex;justify-content:flex-end;gap:10px}
-/* medium-large modal for popped-out sidebar sections */
-.modal.big{width:min(760px,94vw)}
-.modal.big #modal-body{font-size:14px;color:var(--ink);max-height:68vh;overflow:auto}
-/* the "open in a window" button on every collapsible sidebar section, next to the caret */
 .sec.collap{position:relative}
-.sec-pop{position:absolute;top:11px;right:30px;background:none;border:0;color:var(--muted);font-size:14px;line-height:1;cursor:pointer;padding:2px 4px}
-.sec-pop:hover{color:var(--ink)}
+/* Sidebar sections are TABS: clicking one slides a full-height drawer out of the toolbar's right edge
+   (anchored to the left of the main content, overlapping it), highlighting the active tab. */
+.sec.collap .sechead{cursor:pointer}
+body.ws .side .sec.collap.tabactive{background:#eef3ff;border-color:var(--link)}
+body.ws .side .sec.collap.tabactive .sechead h3{color:var(--link)}
+.secdrawer{position:fixed;left:300px;top:var(--hdr);bottom:0;width:min(440px,calc(100vw - 320px));background:var(--paper);border-right:1px solid #888;box-shadow:6px 0 24px rgba(0,0,0,.14);z-index:58;transform:translateX(-100%);transition:transform .2s;display:flex;flex-direction:column;visibility:hidden}
+.secdrawer.open{transform:translateX(0);visibility:visible}
+body.drawer-collapsed .secdrawer{left:0}
+@media(max-width:820px){.secdrawer{left:0}}
+.sd-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 14px;border-bottom:1px solid #888;background:var(--paper)}
+.sd-head span{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+.sd-x{background:none;border:0;font-size:20px;color:var(--muted);cursor:pointer;line-height:1;padding:0 4px}
+.sd-x:hover{color:var(--ink)}
+.sd-body{padding:14px;overflow:auto;flex:1}
+.sd-body .sec{background:none;border:0;padding:0}
+.secdrawer-back{position:fixed;inset:0;z-index:57;background:transparent;display:none}
+body.sd-open .secdrawer-back{display:block}
 /* the straight read, now rendered inside its sidebar section (no inner card chrome) */
 .vet.sr{border:0;background:none;padding:0}
 .vet.sr .vetbody{display:block;margin-top:0}
@@ -1658,6 +1667,10 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <div class=modal-back id=modalback onclick="_closeModal()"></div>
 <div class=modal id=modal role=dialog aria-modal=true aria-labelledby=modal-title aria-hidden=true>
 <h3 id=modal-title></h3><div id=modal-body></div><div class=modal-actions id=modal-actions></div></div>
+<div class=secdrawer-back id=secdrawerback onclick=closeSecDrawer()></div>
+<div class=secdrawer id=secdrawer role=dialog aria-modal=false aria-hidden=true>
+<div class=sd-head><span id=sd-title></span><button type=button class=sd-x onclick=closeSecDrawer() aria-label="Close panel">&times;</button></div>
+<div class=sd-body id=sd-body></div></div>
 <div class=cmtpop id=cmtpop role=dialog aria-label="Add a comment on this part" aria-hidden=true>
 <div class=cmtpq id=cmtquote></div>
 <label for=cmtnote class=sr-only>Your comment on the highlighted text</label>
@@ -2591,53 +2604,56 @@ function _openModal(focusSel){
 function _closeModal(val){
   const m=document.getElementById('modal');
   if(!m.classList.contains('open'))return;
-  _returnPopped();   // a popped-out sidebar section goes back to the drawer
   m.classList.remove('open');m.setAttribute('aria-hidden','true');
   document.getElementById('modalback').classList.remove('show');
   if(MODAL_TRIGGER&&MODAL_TRIGGER.focus){MODAL_TRIGGER.focus();MODAL_TRIGGER=null;}
   const r=MODAL_RESOLVE;MODAL_RESOLVE=null;if(r)r(val);
 }
-// ── Pop a sidebar section's content into a medium-large modal (work inline in the drawer OR in a
-// window). We MOVE the live .secbody node (not a clone) so handlers + ids stay intact, then move it
-// back on close. Opening the modal collapses the inline section.
+// ── Sidebar tools are TABS. Clicking a tab slides a full-height drawer out of the toolbar's right edge
+// (anchored to the left of the main content, overlapping it) with that section's content; the tab
+// highlights. Clicking it again — or to the right of the drawer — closes it. We MOVE the live .secbody
+// node (not a clone) so handlers + ids stay intact, then move it back on close.
 let POPPED=null;
 function _returnPopped(){
   if(!POPPED)return;
-  const body=document.querySelector('#modal-body > .secbody');
-  if(body&&POPPED.ph&&POPPED.ph.parentNode){POPPED.ph.parentNode.insertBefore(body,POPPED.ph);}
+  const body=document.querySelector('#sd-body > .secbody');
+  if(body&&POPPED.ph&&POPPED.ph.parentNode)POPPED.ph.parentNode.insertBefore(body,POPPED.ph);
   if(POPPED.ph&&POPPED.ph.parentNode)POPPED.ph.parentNode.removeChild(POPPED.ph);
-  document.getElementById('modal').classList.remove('big');
   POPPED=null;
 }
-function popSection(id){
+function _setTabActive(id){document.querySelectorAll('.side .sec.collap').forEach(s=>s.classList.toggle('tabactive',s.id===id));}
+function tabOpen(id){
+  if(POPPED&&POPPED.id===id){closeSecDrawer();return;}   // clicking the active tab closes it
+  if(POPPED)_returnPopped();
   const sec=document.getElementById(id); if(!sec)return;
   const body=sec.querySelector('.secbody'); if(!body)return;
-  if(POPPED)_returnPopped();
-  setOpen(id,false);   // collapse the inline section — the content now lives in the modal
   const h3=sec.querySelector('h3');
-  const ph=document.createComment('pop:'+id); body.parentNode.insertBefore(ph,body); POPPED={id,ph};
-  document.getElementById('modal-title').textContent=h3?h3.textContent:'';
-  const mb=document.getElementById('modal-body'); mb.innerHTML=''; mb.appendChild(body);
-  document.getElementById('modal-actions').innerHTML=`<button type=button class=mfb-go onclick=_closeModal()>Done</button>`;
-  document.getElementById('modal').classList.add('big');
-  _openModal();
+  const ph=document.createComment('tab:'+id); body.parentNode.insertBefore(ph,body); POPPED={id,ph};
+  document.getElementById('sd-title').textContent=h3?h3.textContent:'';
+  const sb=document.getElementById('sd-body'); sb.innerHTML=''; sb.appendChild(body);
+  const dr=document.getElementById('secdrawer'); dr.classList.add('open'); dr.setAttribute('aria-hidden','false');
+  document.body.classList.add('sd-open'); _setTabActive(id);
 }
-function addSecPops(){   // inject the "open in a window" button onto every collapsible sidebar section
+function closeSecDrawer(){
+  const dr=document.getElementById('secdrawer'); if(!dr||!dr.classList.contains('open'))return;
+  _returnPopped();
+  dr.classList.remove('open'); dr.setAttribute('aria-hidden','true');
+  document.body.classList.remove('sd-open'); _setTabActive(null);
+}
+function setupTabs(){   // turn every collapsible sidebar section into a drawer tab (no inline dropdown/caret)
   document.querySelectorAll('.side .sec.collap').forEach(sec=>{
-    if(!sec.id||sec.querySelector('.sec-pop'))return;
-    const b=document.createElement('button');
-    b.type='button'; b.className='sec-pop'; b.title='Open in a window'; b.setAttribute('aria-label','Open in a window');
-    b.innerHTML='\\u29C9';
-    b.addEventListener('click',function(e){e.stopPropagation();popSection(sec.id);});
-    sec.appendChild(b);
+    if(!sec.id)return;
+    const head=sec.querySelector('.sechead'); if(head)head.onclick=function(){tabOpen(sec.id);};
+    const caret=sec.querySelector('.sechead .caret'); if(caret)caret.remove();   // no drop-down arrows
+    const pop=sec.querySelector('.sec-pop'); if(pop)pop.remove();
   });
 }
 let GREETED_SID=null;
-function maybeGreetStraightRead(s){   // first build view → greet with the straight read in a modal
+function maybeGreetStraightRead(s){   // first build view → greet with the straight read in the drawer
   if(!s||s.done||s.status!=='building'||(s.step||0)!==0)return;
   if(!(s.vetting||s.shaped)||GREETED_SID===s.id)return;
   GREETED_SID=s.id;
-  setTimeout(()=>{const sec=document.getElementById('straightsec');if(sec&&sec.style.display!=='none')popSection('straightsec');},450);
+  setTimeout(()=>{const sec=document.getElementById('straightsec');if(sec&&sec.style.display!=='none')tabOpen('straightsec');},450);
 }
 function uiConfirm(title,msg,okLabel){
   return new Promise(res=>{MODAL_RESOLVE=res;
@@ -3079,8 +3095,8 @@ document.addEventListener('click',function(e){   // click outside the crew picke
 document.addEventListener('keydown',function(e){
   const drawer=document.getElementById('drawer'), modal=document.getElementById('modal');
   const dOpen=drawer&&drawer.classList.contains('open'), mOpen=modal&&modal.classList.contains('open');
-  if(e.key==='Escape'){const sp=document.getElementById('stackpop');
-    if(sp&&!sp.hidden){closeStackPop();}else if(mOpen)_closeModal();else if(dOpen)closeDrawer();}
+  if(e.key==='Escape'){const sp=document.getElementById('stackpop'), sdOpen=document.body.classList.contains('sd-open');
+    if(sp&&!sp.hidden){closeStackPop();}else if(mOpen)_closeModal();else if(sdOpen)closeSecDrawer();else if(dOpen)closeDrawer();}
   if((e.metaKey||e.ctrlKey)&&e.key==='Enter'&&e.target&&e.target.id==='drawerq')submitDrawer();
   if(mOpen&&e.key==='Enter'&&e.target&&e.target.id==='modalinput'){e.preventDefault();_submitPrompt();}
   const ov=mOpen?modal:(dOpen?drawer:null);   // trap focus inside whichever overlay is open
@@ -3093,7 +3109,7 @@ document.addEventListener('keydown',function(e){
   }
 });
 initAuth();
-addSecPops();   // inject the "open in a window" button onto each collapsible sidebar section
+setupTabs();   // sidebar sections become tabs that slide out the tools drawer
 </script>
 <div class=vibestrip aria-hidden=true><div class=vibetrack><span class=vibe>This UI was vibe coded AF and I know it's butt-ugly but I will never update it, because I believe in my soul that Craigslist was the height of web design and since we started complicating it things have gotten steadily worse in the world and I can't prove that there's a correlation but also you can't prove there's not and anyways it's an app meant for automating planning and building your business so it would kinda be a bad look if I hadn't automated the building of it to some extent and honestly the algorithm stuff was hard and UI is easy so it just made sense to leave it, anyway I'm not a designer I want to get paid to drink coffee and push buttons with my dog curled up between my legs and then a little pillow on top of him to hold my laptop. Really I think if we could all just agree to collectively move on from design and style and good taste in general the world might be a better place, you know? It's just like we've so completely commoditised every aspect of self worth and beauty and it all kind of starts with the concept of aesthetic beauty, like the way one thing looks can really be better than another way, when really it's all just light, and even that's a pretty big maybe considering the light is just signals in our little meat brains that we can't definitively prove exist, and the fact that we even have the ability to conceive of the absurdity of that thought makes any sort of external aesthetic consideration seem silly. I mean everything is silly in the grand scheme of things, and what does it even mean to be silly? There I go placing 'aesthetic' value on the concept of value itself, like I know wtf I'm talking about (I don't). And as long as I'm yapping about aesthetics and absurdity... who the hell was in the room when they came up with 'professionalism'? Like really, of all the personalities in the universe we went with the most boring possible one, based on the human equivalent of a cardboard charcuterie sampler. Like is it really that weird that I wanted to name my app 'Fuck it, let's go'? We all say fuck. You say fuck. You are saying it in your head right now, who cares? Why do we all have to pretend we don't say fuck on LinkedIn? That's weird. I mean if you actually do NOT say fuck then that makes you weird. Not qualitatively bad, but empirically weird in the sense of deviation from the norm. And we all just agreed at some point to pretend to be people who don't say "fuck" for most of our waking social lives.. that seems nuts. I want to say fuck on LinkedIn. Do you want to say fuck on LinkedIn? I'll bet you do. If you are the type of person still reading this you absolutely want to say swears on LinkedIn, and that make you my kind of person. I support you. I believe in you. I.. love you? I love the idea of you. I'm glad you're here, honestly. You are the person this was built for. Go build a business, seriously people do it every day. They have been doing it for millennia. Your ancestors survived war and famine and saber tooth tigers and shit (don't come after me science nerd, I don't care if they co existed, I don't know, and I'm not gonna look it up.) They did all that and all got laid at least once over and over just to make you here now and that means you have it in your genes, in your BONES. Success is in you, you are the proof. You can start a fucking business. Go do it. Say fuck on LinkedIn. Make a million bucks. Buy a tuxedo and rip the sleeves off and keep it on for a month, don't even take it off to shower. Why would you? You are a winner. You are success incarnate. You do what you want. You are gonna make it. You are gonna prove your first crush that shot you down wrong. You are gonna make your dad proud. You are gonna be the best thing that ever happened to your friends and family and everyone that ever believed in you. I believe in you! You've got tenacity, if nothing else. Why are you still reading this anyway? THAT is weird. But like good weird. But there I go qualifying things as good and bad again. Go make some money. FUCK!</span><span class=vibe>This UI was vibe coded AF and I know it's butt-ugly but I will never update it, because I believe in my soul that Craigslist was the height of web design and since we started complicating it things have gotten steadily worse in the world and I can't prove that there's a correlation but also you can't prove there's not and anyways it's an app meant for automating planning and building your business so it would kinda be a bad look if I hadn't automated the building of it to some extent and honestly the algorithm stuff was hard and UI is easy so it just made sense to leave it, anyway I'm not a designer I want to get paid to drink coffee and push buttons with my dog curled up between my legs and then a little pillow on top of him to hold my laptop. Really I think if we could all just agree to collectively move on from design and style and good taste in general the world might be a better place, you know? It's just like we've so completely commoditised every aspect of self worth and beauty and it all kind of starts with the concept of aesthetic beauty, like the way one thing looks can really be better than another way, when really it's all just light, and even that's a pretty big maybe considering the light is just signals in our little meat brains that we can't definitively prove exist, and the fact that we even have the ability to conceive of the absurdity of that thought makes any sort of external aesthetic consideration seem silly. I mean everything is silly in the grand scheme of things, and what does it even mean to be silly? There I go placing 'aesthetic' value on the concept of value itself, like I know wtf I'm talking about (I don't). And as long as I'm yapping about aesthetics and absurdity... who the hell was in the room when they came up with 'professionalism'? Like really, of all the personalities in the universe we went with the most boring possible one, based on the human equivalent of a cardboard charcuterie sampler. Like is it really that weird that I wanted to name my app 'Fuck it, let's go'? We all say fuck. You say fuck. You are saying it in your head right now, who cares? Why do we all have to pretend we don't say fuck on LinkedIn? That's weird. I mean if you actually do NOT say fuck then that makes you weird. Not qualitatively bad, but empirically weird in the sense of deviation from the norm. And we all just agreed at some point to pretend to be people who don't say "fuck" for most of our waking social lives.. that seems nuts. I want to say fuck on LinkedIn. Do you want to say fuck on LinkedIn? I'll bet you do. If you are the type of person still reading this you absolutely want to say swears on LinkedIn, and that make you my kind of person. I support you. I believe in you. I.. love you? I love the idea of you. I'm glad you're here, honestly. You are the person this was built for. Go build a business, seriously people do it every day. They have been doing it for millennia. Your ancestors survived war and famine and saber tooth tigers and shit (don't come after me science nerd, I don't care if they co existed, I don't know, and I'm not gonna look it up.) They did all that and all got laid at least once over and over just to make you here now and that means you have it in your genes, in your BONES. Success is in you, you are the proof. You can start a fucking business. Go do it. Say fuck on LinkedIn. Make a million bucks. Buy a tuxedo and rip the sleeves off and keep it on for a month, don't even take it off to shower. Why would you? You are a winner. You are success incarnate. You do what you want. You are gonna make it. You are gonna prove your first crush that shot you down wrong. You are gonna make your dad proud. You are gonna be the best thing that ever happened to your friends and family and everyone that ever believed in you. I believe in you! You've got tenacity, if nothing else. Why are you still reading this anyway? THAT is weird. But like good weird. But there I go qualifying things as good and bad again. Go make some money. FUCK!</span></div></div>
 </div></body></html>"""
