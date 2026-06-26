@@ -1550,7 +1550,10 @@ body.ws .drawerhead b{font-size:9.5px;font-weight:700;text-transform:uppercase;l
 .drawerx:hover{color:var(--ink)}
 body.ws.drawer-collapsed .side{transform:translateX(-100%)}
 body.ws.drawer-collapsed .workspace{margin-left:0}
-body.ws.drawer-collapsed .drawer-rail{display:flex;align-items:center;gap:7px;position:fixed;left:0;top:50%;transform:translateY(-50%);z-index:61;background:#444;color:#fff;border:0;border-radius:0 8px 8px 0;padding:11px 9px;cursor:pointer;font-size:12px;font-weight:700;writing-mode:vertical-rl;letter-spacing:.05em}
+/* minimal reopen chevron (matches the drawer/sidebar collapse tabs); not the old big "Tools" label */
+body.ws.drawer-collapsed .drawer-rail{display:flex;align-items:center;justify-content:center;position:fixed;left:0;top:50%;transform:translateY(-50%);z-index:61;width:20px;height:54px;background:#444;color:#fff;border:0;border-radius:0 8px 8px 0;padding:0;cursor:pointer;font-size:18px;line-height:1}
+body.ws.drawer-collapsed .drawer-rail:hover{background:#222}
+body.sd-open .drawer-rail{display:none!important}   /* a tool drawer is open → don't overlap it with the reopen tab */
 @media(max-width:820px){body.ws .workspace{margin-left:0}body.ws .side{box-shadow:2px 0 18px rgba(0,0,0,.25)}}
 .top{display:flex;justify-content:flex-end;align-items:center;gap:10px;margin-bottom:10px;position:relative}
 .top>h1.logo{margin-right:auto}   /* logo left, everything else (stack crew, account, menu) clusters right */
@@ -1931,7 +1934,7 @@ body.drawer-collapsed .secdrawer{left:0}
   .secdrawer{left:0;width:90vw;max-width:420px}
   body.ws .top .topright{gap:8px}
 }
-.sd-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 14px;border-bottom:1px solid #888;background:var(--paper)}
+.sd-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 18px;border-bottom:1px solid #888;background:var(--paper)}
 /* collapse tab stuck to the middle of the open drawer's outer edge — mirrors the "Tools" reopen rail */
 .sd-rail{position:absolute;right:-19px;top:50%;transform:translateY(-50%);z-index:59;width:20px;height:54px;display:flex;align-items:center;justify-content:center;background:#444;color:#fff;border:0;border-radius:0 8px 8px 0;cursor:pointer;font-size:18px;line-height:1;padding:0}
 .sd-rail:hover{background:#222}
@@ -1949,7 +1952,7 @@ body.drawer-collapsed .secdrawer{left:0}
 .sd-head span{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
 .sd-x{background:none;border:0;font-size:20px;color:var(--muted);cursor:pointer;line-height:1;padding:0 4px}
 .sd-x:hover{color:var(--ink)}
-.sd-body{padding:14px;overflow:auto;flex:1}
+.sd-body{padding:16px 18px;overflow:auto;flex:1}
 .sd-body .sec{background:none;border:0;padding:0}
 .secdrawer-back{position:fixed;inset:0;z-index:57;background:transparent;display:none}
 body.sd-open .secdrawer-back{display:block}
@@ -1969,7 +1972,7 @@ body.sd-open .secdrawer-back{display:block}
 .cmtx{background:none;border:0;color:var(--muted);cursor:pointer;font-size:17px;line-height:1;padding:0 2px;flex:none}
 /* inline comment highlight + balloon marker (theme-agnostic tints work on light or dark) */
 .draft .hascmt{background:rgba(255,194,63,.13);box-shadow:inset 3px 0 0 var(--warn);border-radius:2px}
-.draft .cmt-target{background:rgba(46,124,246,.16);box-shadow:inset 3px 0 0 var(--link);border-radius:2px}
+.draft .cmt-target{background:rgba(46,124,246,.16);box-shadow:inset 3px 0 0 var(--link);border-radius:2px;padding:4px 10px 4px 12px;margin:2px 0}
 .cmtmark{margin-left:7px;white-space:nowrap;user-select:none;font-size:12px}
 .cmtmark button{background:none;border:0;cursor:pointer;font-size:12px;line-height:1;padding:0 2px;color:var(--muted)}
 .cmtmark .cmtmark-e:hover{color:var(--ink)}.cmtmark .cmtmark-x:hover{color:var(--kill)}
@@ -2127,7 +2130,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <div class=cmtpa><button type=button class=ghost onclick=hideCmtPop()>Cancel</button><button type=button onclick=saveComment()>Comment</button></div></div>
 <div class=toasts id=toasts aria-live=polite></div>
 <div class=workspace id=workspace style="display:none">
-<button type=button class=drawer-rail onclick="document.body.classList.remove('drawer-collapsed')" aria-label="Open tools">&#9776; Tools</button>
+<button type=button class=drawer-rail onclick="document.body.classList.remove('drawer-collapsed')" aria-label="Open tools" title="Tools">&#8250;</button>
 <aside class=side>
 <div class=drawerhead><b>Tools</b><button type=button class=drawerx onclick="document.body.classList.add('drawer-collapsed')" aria-label="Collapse tools">&#8249;</button></div>
 <div class=side-scroll>
