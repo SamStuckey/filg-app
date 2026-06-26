@@ -1436,9 +1436,11 @@ async def api_plan_pdf(sid: str, request: Request):
                              "X-FILG-Cost": str(nc), "X-FILG-Tokens": str(nt)})
 
 
-def _render_page() -> str:
+def _render_page(deep: bool = False) -> str:
     """The single-page app shell. Served at `/` and at clean deep-link paths like `/plan/{id}` so the
-    frontend can use real History-API URLs (no `#`) and direct-load / refresh still works."""
+    frontend can use real History-API URLs (no `#`) and direct-load / refresh still works. `deep`
+    (a `/plan/{id}` load) marks the document up front so the intake never flashes before the plan
+    routes in — the boot loader shows instead until render() clears it."""
     cfg = json.dumps({"authEnabled": auth.AUTH_ENABLED,
                       "pdfBilling": billing.PDF_BILLING_ENABLED, "pdfPrice": billing.PDF_PRICE_CENTS,
                       "byokEnabled": keys.enabled(),
@@ -1447,6 +1449,9 @@ def _render_page() -> str:
                                        or os.environ.get("SUPABASE_ANON_KEY", "")),
                       "archetypes": personas.catalog(), "defaultBoard": personas.DEFAULT_BOARD})
     head = f"<script>window.FILG={cfg}</script>"
+    # Set the routing class on <html> BEFORE the body paints → no intake flash on a deep-link/refresh.
+    if deep:
+        head += "<script>document.documentElement.className+=' route-plan'</script>"
     if auth.AUTH_ENABLED:
         head += '<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>'
     return PAGE.replace("__FILG_HEAD__", head)
@@ -1461,7 +1466,7 @@ async def index():
 async def plan_page(sid: str):
     """Serve the SPA shell for a deep-linked plan; the frontend reads the id from the path and loads
     it. (Distinct from `/p/{id}` — the server-rendered public share — and `/r/{id}` teardowns.)"""
-    return _render_page()
+    return _render_page(deep=True)
 
 
 # ── Single-page plan-builder frontend (brand-aligned; no build step) ─────────
@@ -1519,16 +1524,12 @@ body.ws.drawer-collapsed .drawer-rail{display:flex;align-items:center;gap:7px;po
 .top{display:flex;justify-content:flex-end;align-items:center;gap:10px;margin-bottom:10px;position:relative}
 .top>h1.logo{margin-right:auto}   /* logo left, everything else (stack crew, account, menu) clusters right */
 .topright{display:flex;align-items:center;gap:12px}
-.topham{display:none;background:none;border:0;font-size:21px;color:var(--ink);cursor:pointer;padding:0 4px;line-height:1}
-/* progressive header: when it's tight, hide the token meter first … */
+.topham{display:none}   /* hamburger retired — the account is a portrait icon that stays inline on every screen */
+/* the only progressive step left: hide the token meter when it's tight (the rest stays inline) */
 @media(max-width:860px){.meter{display:none!important}}
-/* … then collapse the rest (model crew + account) behind a hamburger so the content fills the screen */
-@media(max-width:680px){
-  .topham{display:inline-flex;align-items:center}
-  .topright{position:absolute;top:100%;right:2px;margin-top:6px;flex-direction:column;align-items:stretch;gap:12px;background:var(--paper);border:1px solid #888;border-radius:8px;padding:14px;min-width:200px;max-width:84vw;z-index:67;display:none;box-shadow:0 8px 24px rgba(0,0,0,.18)}
-  .topright.open{display:flex}
-  .authbar{display:flex;flex-direction:column;align-items:flex-start;gap:10px}
-}
+/* account portrait icon — replaces the "Profile" text link on every screen */
+.pfp{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:50%;border:1px solid #888;background:#fff;color:var(--ink);cursor:pointer;padding:0}
+.pfp:hover{background:#f1f1f1}.pfp svg{width:18px;height:18px;display:block}
 .modesw{display:inline-flex;border:1px solid #888}
 .modesw button{background:#fff;color:var(--muted);border:0;border-right:1px solid var(--line);font:inherit;font-size:11.5px;font-weight:700;padding:4px 9px;cursor:pointer}
 .modesw button:last-child{border-right:0}
@@ -1705,6 +1706,12 @@ body.hasbar .vibestrip{display:none}   /* don't fight the fixed action bar mid-b
 /* Bottom-pinned step actions: rework (back) vs roll-forward (next). Both open the feedback modal. */
 .actionbar{display:none}
 .actionbar.show{display:flex;position:fixed;bottom:0;left:300px;right:0;z-index:55;gap:12px;justify-content:flex-end;align-items:center;padding:12px 22px;background:var(--paper);border-top:1px solid #888;box-shadow:0 -2px 14px rgba(0,0,0,.08);transition:left .2s}
+/* a debounced build is running → cover the buttons with a spinner + animated dots (no inline spew here) */
+.actionbar.working .ab-btn{visibility:hidden}
+.ab-working{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;gap:10px;font-weight:700;color:var(--ink);font-size:14px}
+.ab-working .dots i{font-style:normal;animation:dotblink 1.2s infinite both}
+.ab-working .dots i:nth-child(2){animation-delay:.2s}.ab-working .dots i:nth-child(3){animation-delay:.4s}
+@keyframes dotblink{0%,80%,100%{opacity:.2}40%{opacity:1}}
 body.ws.drawer-collapsed .actionbar.show{left:0}
 @media(max-width:820px){.actionbar.show{left:0}}
 body.hasbar .workspace{padding-bottom:74px}
@@ -1976,6 +1983,13 @@ body.sd-open .secdrawer-back{display:block}
 .leafbody .pending{color:var(--muted);font-style:italic}
 .run-log{padding:10px 12px;display:flex;flex-direction:column;gap:7px;max-height:46vh;overflow-y:auto}
 .run-empty{color:var(--muted);font-size:12.5px;line-height:1.5;font-family:Arial,Helvetica,sans-serif}
+/* shared spinner + the deep-link boot loader (hides the intake flash on /plan/{id} refresh) */
+@keyframes spin{to{transform:rotate(360deg)}}
+.spin{display:inline-block;width:15px;height:15px;border:2px solid var(--line);border-top-color:var(--link);border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle}
+@media(prefers-reduced-motion:reduce){.spin{animation-duration:1.6s}}
+#bootload{display:none}
+html.route-plan #intake{display:none!important}
+html.route-plan #bootload{display:flex;align-items:center;justify-content:center;gap:10px;position:fixed;inset:var(--disc) 0 0 0;background:var(--bg);color:var(--muted);font-size:14px;z-index:40}
 .atask{border:1px solid var(--line);background:#fff;overflow:hidden}
 .atask.done{opacity:.7}
 .ah{display:flex;align-items:center;gap:9px;width:100%;background:none;border:0;color:var(--ink);font:inherit;font-size:13px;font-weight:700;padding:8px 12px;cursor:pointer;text-align:left}
@@ -2005,6 +2019,12 @@ body.sd-open .secdrawer-back{display:block}
 .prof-top h2{font-size:22px;font-weight:700;margin:0}
 .psec{margin:18px 0;padding-top:14px;border-top:1px solid var(--line)}
 .psec:first-of-type{border-top:0;padding-top:0}
+/* profile tab strip (Projects / API config / Account) */
+.ptabs2{display:flex;gap:4px;border-bottom:1px solid var(--line);margin:14px 0 4px;flex-wrap:wrap}
+.ptab2{background:none;border:0;border-bottom:2px solid transparent;color:var(--muted);font:inherit;font-size:14px;font-weight:700;padding:8px 12px;cursor:pointer;margin-bottom:-1px}
+.ptab2:hover{color:var(--ink)}.ptab2.on{color:var(--link);border-bottom-color:var(--link)}
+.acct-block{margin:0 0 18px}.acct-block:last-child{margin-bottom:0}
+.acct-lbl{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin:0 0 8px}
 .psec h3{font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin:0 0 10px}
 .psec-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px}
 .psec-head h3{margin:0}
@@ -2031,8 +2051,9 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
 .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 </style></head><body><div id=disclaimer role=button tabindex=0 onclick=openDisclaimer() onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openDisclaimer();}" title="Read the full disclaimer"><span class=disc-full>This is just for fun. Do your research, talk to your lawyer, family, or God before investing any real time or money into a new business. AI is great at being confidently wrong!</span><span class=disc-short>Disclaimer!</span></div>
+<div id=bootload aria-hidden=true><span class=spin aria-hidden=true></span><span>Loading your plan…</span></div>
 <div class=page>
-<div class=top><h1 class=logo><button type=button class=logobtn onclick=newPlan() aria-label="FILG, start a new idea"><svg class=logomark viewBox="0 0 32 32" aria-hidden=true><rect width=32 height=32 rx=8 fill=#FF6B4A></rect><path d="M16 4c-3.2 2.8-4.3 7.4-4.3 11.8v3.2h8.6v-3.2C20.3 11.4 19.2 6.8 16 4z" fill=#fff></path><circle cx=16 cy=12 r=2.1 fill=#2E7CF6></circle><path d="M11.7 15.5 8.6 20.5l3.1-1.3z" fill=#fff></path><path d="M20.3 15.5 23.4 20.5l-3.1-1.3z" fill=#fff></path><path d="M13.6 19.5h4.8L16 25.5z" fill=#FFC23F></path></svg>FI<span>LG</span><span class=logotip aria-hidden=true>“Fuck it. Let’s go.” — You, 30 seconds ago</span></button></h1><div class=stackdial id=stackdial hidden><button type=button class=stackbtn id=stackbtn aria-haspopup=true aria-expanded=false aria-label="Choose your model crew" onclick=toggleStackPop()><span class=stacklbl id=stacklbl></span><span class=stack-cost id=stackcost aria-hidden=true></span><span class=stackcaret aria-hidden=true>&#9662;</span></button><div class=stackpop id=stackpop role=menu aria-label="Choose a model crew" hidden></div></div><div class=topright><button type=button class=meter id=meter hidden title="Token usage this session (resets when you reload)"></button><div class=authbar id=authbar></div></div><button type=button class=topham id=topham onclick=toggleTopMenu() aria-label="Menu" aria-expanded=false>&#9776;</button></div>
+<div class=top><h1 class=logo><button type=button class=logobtn onclick=newPlan() aria-label="FILG, start a new idea"><svg class=logomark viewBox="0 0 32 32" aria-hidden=true><rect width=32 height=32 rx=8 fill=#FF6B4A></rect><path d="M16 4c-3.2 2.8-4.3 7.4-4.3 11.8v3.2h8.6v-3.2C20.3 11.4 19.2 6.8 16 4z" fill=#fff></path><circle cx=16 cy=12 r=2.1 fill=#2E7CF6></circle><path d="M11.7 15.5 8.6 20.5l3.1-1.3z" fill=#fff></path><path d="M20.3 15.5 23.4 20.5l-3.1-1.3z" fill=#fff></path><path d="M13.6 19.5h4.8L16 25.5z" fill=#FFC23F></path></svg>FI<span>LG</span><span class=logotip aria-hidden=true>“Fuck it. Let’s go.” — You, 30 seconds ago</span></button></h1><div class=stackdial id=stackdial hidden><button type=button class=stackbtn id=stackbtn aria-haspopup=true aria-expanded=false aria-label="Choose your model crew" onclick=toggleStackPop()><span class=stacklbl id=stacklbl></span><span class=stack-cost id=stackcost aria-hidden=true></span><span class=stackcaret aria-hidden=true>&#9662;</span></button><div class=stackpop id=stackpop role=menu aria-label="Choose a model crew" hidden></div></div><div class=topright><button type=button class=meter id=meter hidden title="Token usage this session (resets when you reload)"></button><div class=authbar id=authbar></div></div></div>
 <div class=note-banner id=banner></div>
 <div class=intake id=intake>
 <h2>You've got a business in you. Let's find it. 🚀</h2>
@@ -2086,8 +2107,6 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 </div></div></div>
 <div class="sec collap" id=straightsec style="display:none"><button type=button class=sechead aria-expanded=false onclick="toggleSec('straightsec')"><h3>The straight read</h3><span class=caret aria-hidden=true>▸</span></button>
 <div class=secbody><div id=vet></div></div></div>
-<div class="sec collap" id=takeawaysec style="display:none"><button type=button class=sechead aria-expanded=false onclick="toggleSec('takeawaysec')"><h3>Your board weighed in</h3><span class=caret aria-hidden=true>▸</span></button>
-<div class=secbody><div id=boardround></div></div></div>
 <div class="sec collap" id=dtreesec style="display:none"><button type=button class=sechead aria-expanded=false onclick="toggleSec('dtreesec')"><h3>Decision tree</h3><span class=caret aria-hidden=true>▸</span></button>
 <div class=secbody><p class=bhelp>Every part you build is a node. The highlighted path is your current plan; click any node to jump there, then back up and branch a different direction if you want.</p><div id=dtree></div></div></div>
 <div class="sec collap" id=chatsec style="display:none"><button type=button class=sechead aria-expanded=false onclick="toggleSec('chatsec')"><h3>Chat with your plan</h3><span class=caret aria-hidden=true>▸</span></button>
@@ -2333,7 +2352,10 @@ async function autoGrabPdf(){
   }
   if(pdfUnlocked())download(); else toast('Payment received — tap "Download polished PDF".','ok');
 }
+function _bootDone(){const h=document.documentElement;if(h)h.classList.remove('route-plan');}   // clear the deep-link boot loader
 function render(s){
+  _bootDone();    // content is painting now → drop the boot loader
+  if(s&&s.id&&Activity._restoredSid!==s.id)Activity.restoreFor(s.id);   // lay in this plan's saved machine history (once)
   LAST_S=s;       // stash for the feedback modal (suggested questions, current step)
   meterTick(s);   // tick the session usage meter off this plan's cumulative cost/tokens
   const dlbar=document.getElementById('dlbar');   // "download everything" appears the moment there's data
@@ -2368,7 +2390,6 @@ function syncSidebar(s){
   setOpen('expertsec',phase==='build');
   setOpen('boardsec',phase==='build');
   setOpen('straightsec',phase==='intro');    // the straight read leads the first view
-  setOpen('takeawaysec',phase==='build');
 }
 let CHAT_BUSY=false;
 function renderChat(s){
@@ -2390,7 +2411,7 @@ async function sendChat(){
   CHAT_BUSY=true;btn.disabled=true;t.value='';if(st)st.innerHTML='';
   log.insertAdjacentHTML('beforeend',`<div class="cmsg user">${esc(msg)}</div><div class="cmsg bot md" id=chatthinking><span class=think>Thinking…</span></div>`);
   log.scrollTop=log.scrollHeight;
-  const aid=Activity.start(["Reading your plan","Checking the graded evidence","Thinking it through"],1200,'Chat with your plan');
+  const aid=Activity.start(["Reading your plan","Checking the graded evidence","Thinking it through"],1200,'You asked: '+(msg.length>40?msg.slice(0,40)+'\\u2026':msg));
   try{
     const [r]=await Promise.all([fetch('/api/plan/'+SID+'/chat',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({message:msg})}),new Promise(res=>setTimeout(res,850))]);
     const d=await r.json();const th=document.getElementById('chatthinking');
@@ -2412,11 +2433,13 @@ function skepticCardHtml(sk){
     `<div class="skbody md">${mdToHtml(sk.rationale)}</div>${fix}${conf}</div>`;
 }
 function renderBoardRound(s){
-  const el=document.getElementById('boardround'); if(!el)return;
-  const sec=document.getElementById('takeawaysec');
+  // The auto per-section board review now lives in the SAME "Your board weighed in" section at the top
+  // of the Board of Directors drawer as the on-demand convene result (one home for board output).
+  const el=document.getElementById('conveneresult'); if(!el)return;
+  const wi=document.getElementById('ds-weighedin');
   const reviews=s.board||[];
-  if(!reviews.length){el.innerHTML='';if(sec)sec.style.display='none';return;}
-  if(sec)sec.style.display='';   // board takeaway lives in the left sidebar now (color coding kept)
+  if(!reviews.length){return;}   // leave whatever's there (e.g. a convene result); nothing to add
+  if(wi){wi.hidden=false;wi.classList.add('open');}
   const r=reviews[reviews.length-1];   // the board's take on the section just finalized
   const balloons=(r.directors||[]).map((d,i)=>{
     const id='bal_'+i;
@@ -2467,7 +2490,7 @@ async function runResearchQuery(mode){
   // terminal-style spew, inline in the drawer, until the answer comes back
   if(out)out.innerHTML='<div class=rqspew id=rqspew></div>';
   const spew=document.getElementById('rqspew');
-  const raid=Activity.open(deep?'Researching deeper':'Quick research check');   // mirror into the machine tab
+  const raid=Activity.open((deep?'Researching: ':'Quick check: ')+(q.length>42?q.slice(0,42)+'\\u2026':q||'your question'));   // tight headline + machine-tab mirror
   let si=0; const pushLine=()=>{if(si<steps.length){if(spew){const d=document.createElement('div');d.className='rqline';d.textContent='\\u203a '+steps[si];spew.appendChild(d);spew.scrollTop=spew.scrollHeight;}Activity.push(raid,steps[si]);si++;}};
   pushLine(); const tmr=setInterval(pushLine,1100);
   try{
@@ -2725,8 +2748,13 @@ document.addEventListener('mouseup',onDraftSelect);
 document.addEventListener('keydown',function(e){if(e.key==='Escape')hideCmtPop();});
 const FB_CHIPS=["go bolder","narrower niche","cheaper entry","B2B only","more specific","add an upsell"];
 function addChip(txt){const t=document.getElementById('feedback'); if(!t)return; t.value=(t.value?t.value.replace(/\\s*$/,'')+', ':'')+txt; t.focus();}
-function _navBusy(){const n=document.getElementById('node');if(n)n.querySelectorAll('button').forEach(b=>b.disabled=true);const ab=document.getElementById('actionbar');if(ab)ab.querySelectorAll('button').forEach(b=>b.disabled=true);const f=document.getElementById('ferr');if(f)f.textContent='';document.getElementById('err2').textContent='';}
-function _navFree(){const n=document.getElementById('node');if(n)n.querySelectorAll('button').forEach(b=>b.disabled=false);const ab=document.getElementById('actionbar');if(ab)ab.querySelectorAll('button').forEach(b=>b.disabled=false);}
+function _navBusy(){const n=document.getElementById('node');if(n)n.querySelectorAll('button').forEach(b=>b.disabled=true);
+  const ab=document.getElementById('actionbar');
+  if(ab){ab.querySelectorAll('button').forEach(b=>b.disabled=true);ab.classList.add('working');
+    if(!ab.querySelector('.ab-working'))ab.insertAdjacentHTML('beforeend','<div class=ab-working><span class=spin aria-hidden=true></span><span>Working<span class=dots><i>.</i><i>.</i><i>.</i></span></span></div>');}
+  const f=document.getElementById('ferr');if(f)f.textContent='';document.getElementById('err2').textContent='';}
+function _navFree(){const n=document.getElementById('node');if(n)n.querySelectorAll('button').forEach(b=>b.disabled=false);
+  const ab=document.getElementById('actionbar');if(ab){ab.classList.remove('working');const w=ab.querySelector('.ab-working');if(w)w.remove();ab.querySelectorAll('button').forEach(b=>b.disabled=false);}}
 function fbErr(msg){const f=document.getElementById('ferr');if(f)f.textContent=msg;else document.getElementById('err2').textContent=msg;}
 // Min-dwell so the spew registers even on fast (mock) responses, without slowing real builds much.
 function _aiRun(url,body){   // fetch + a min-show delay; the caller owns its Activity track
@@ -2747,7 +2775,8 @@ async function nextStep(){
   _navBusy();
   const steps=[]; if(full)steps.push("Folding in your notes");
   steps.push("Drafting the next part of your plan","Checking it against your graded research");
-  const aid=Activity.start(steps,1200,'Building the next part');
+  const _sx=(LAST_S&&LAST_S.sections)||[], _nt=(_sx[((LAST_S&&LAST_S.step)||0)+1]||{}).title;   // tight headline
+  const aid=Activity.start(steps,1200,_nt?("Writing \\u2018"+_nt+"\\u2019"):'Building the next part');
   try{
     const r=await _aiRun('/api/plan/'+SID+'/next',{feedback:full});
     const s=await r.json();
@@ -3172,7 +3201,7 @@ function closeSecDrawer(){
 // Small screens: collapse BOTH the tab drawer and the toolbar (sidebar slides off, the "Tools" rail
 // reopens it). Wired to the sidebar's collapse rail and the backdrop (tap outside to dismiss).
 function collapseAll(){closeSecDrawer();document.body.classList.add('drawer-collapsed');}
-const TAB_ICONS={spewsec:'\\u2699\\ufe0f',straightsec:'\\uD83D\\uDCCB',takeawaysec:'\\uD83D\\uDDE3\\ufe0f',dtreesec:'\\uD83C\\uDF3F',chatsec:'\\uD83D\\uDCAC',boardsec:'\\uD83D\\uDC65',researchsec:'\\uD83D\\uDD0D'};
+const TAB_ICONS={spewsec:'\\u2699\\ufe0f',straightsec:'\\uD83D\\uDCCB',dtreesec:'\\uD83C\\uDF3F',chatsec:'\\uD83D\\uDCAC',boardsec:'\\uD83D\\uDC65',researchsec:'\\uD83D\\uDD0D'};
 function setupTabs(){   // turn every collapsible sidebar section into a modern nav tab (icon + label, no caret)
   document.querySelectorAll('.side .sec.collap').forEach(sec=>{
     if(!sec.id)return;
@@ -3304,7 +3333,36 @@ const Activity={
     if(msg)this._line(t.body,msg,true);
     if(t.wrap){ t.wrap.classList.add('done'); t.wrap.classList.add('collapsed'); }  // collapse into history, keep it
     delete this.tracks[id]; this.n=Math.max(0,this.n-1); this._live=Math.max(0,this._live-1);
-    this._trim(); this._busy();
+    this._trim(); this._busy(); this._persist();   // save the terminal history so it survives a refresh
+  },
+  // ── persist the machine's terminal history (per plan) so a page refresh keeps the spew ──
+  _restoredSid:null,
+  _key(){ return SID?('filg_machine_'+SID):null; },
+  _persist(){
+    const key=this._key(), log=this._log(); if(!key||!log)return;
+    const cards=[].slice.call(log.querySelectorAll('.atask.done')).slice(-7);
+    const data=cards.map(c=>({label:((c.querySelector('.alabel')||{}).textContent||''),
+                              html:((c.querySelector('.abody')||{}).innerHTML||'')}));
+    try{localStorage.setItem(key,JSON.stringify(data));}catch(e){}
+  },
+  restoreFor(sid){   // lay this plan's saved terminal history into a fresh machine tab (once per plan)
+    this._restoredSid=sid;
+    const log=this._log(); if(!log)return;
+    log.innerHTML='<div class=run-empty id=run-empty>Nothing running yet. This is the engine\\u2019s terminal: every operation shows here step by step and stays as collapsed history you can reopen.</div>';
+    let data; try{data=JSON.parse(localStorage.getItem('filg_machine_'+sid)||'[]');}catch(e){data=[];}
+    if(!data.length)return;
+    const empty=document.getElementById('run-empty'); if(empty)empty.style.display='none';
+    data.forEach(rec=>{
+      const wrap=document.createElement('div'); wrap.className='atask done collapsed';
+      wrap.innerHTML='<button type=button class=ah><span class=astat aria-hidden=true></span><span class=alabel></span><span class=caret aria-hidden=true>&#9662;</span></button><div class=abody></div>';
+      wrap.querySelector('.alabel').textContent=rec.label||'Done';
+      wrap.querySelector('.abody').innerHTML=rec.html||'';
+      wrap.querySelector('.ah').onclick=()=>wrap.classList.toggle('collapsed');
+      // rebind restored research leaves to a self-contained toggle (the live _leafbox is gone after a refresh)
+      [].forEach.call(wrap.querySelectorAll('.leafnode'),btn=>{btn.onclick=()=>btn.classList.toggle('open');});
+      log.appendChild(wrap);
+    });
+    this._everRan=true; this._busy();
   },
   // ── research fan-out leaves: part of the SAME tree as the spew steps. The leaf nodes nest one level
   // under the "Planning the research fan-out" step (the current active line) inside the op card, grey →
@@ -3352,7 +3410,7 @@ const Activity={
   },
   resetLeaves(){ this._leafbox=null; this._leaflabels=null; },   // the old leaf tree lives in its card; cleared with the log
   stopAll(){ for(const id in this.tracks){if(this.tracks[id].timer)clearInterval(this.tracks[id].timer);}
-    this.tracks={}; this.n=0; this._live=0; this._everRan=false; this.resetLeaves();
+    this.tracks={}; this.n=0; this._live=0; this._everRan=false; this._restoredSid=null; this.resetLeaves();
     // The machine tab stays present (a persistent terminal): clear the cards, restore the idle hint,
     // drop the running/done state. Don't hide it.
     const a=this._el(); if(a)a.classList.remove('min','busy'); this._busy();
@@ -3502,7 +3560,8 @@ function renderAuth(){
   const bar=document.getElementById('authbar');
   if(sb&&session){
     bar.style.display='';
-    bar.innerHTML=`<button class=link onclick=openProfile()>Profile</button>`;   // one entry → the profile page (projects, key, contact, delete)
+    // portrait icon → the profile page (projects / API config / account); same on every screen, no hamburger
+    bar.innerHTML=`<button type=button class=pfp onclick=openProfile() aria-label=Profile title=Profile><svg viewBox="0 0 24 24" aria-hidden=true><circle cx=12 cy=8 r=4 fill=currentColor></circle><path d="M4 20c0-4.4 3.6-7 8-7s8 2.6 8 7" fill=currentColor></path></svg></button>`;
   }else if(sb){bar.style.display='';bar.innerHTML=`<button class=link onclick=authModal()>Log in / Sign up</button>`;}
   else{bar.style.display='none';}
   gateIntake();
@@ -3647,20 +3706,32 @@ function planCardHtml(p,total){
     `<button class=gbtn onclick="deletePlan('${p.id}')" aria-label="Delete plan">Delete</button>`;
   return `<div class=pcard><div class=pcard-main><div class=idea>${esc((p.idea||'Untitled').slice(0,90))}</div><div class=meta>${meta} · ${esc(new Date(p.created_at).toLocaleDateString())}</div></div><div class=act><span class="pill ${p.done?'done':''}">${p.done?'done':'WIP'}</span>${acts}</div></div>`;
 }
+let PROFILE_TAB='projects', PROFILE_PD=null, PROFILE_KEY=null;
+function selectProfileTab(t){PROFILE_TAB=t;renderProfile(PROFILE_PD,PROFILE_KEY);}
 function renderProfile(pd,key){
+  PROFILE_PD=pd; PROFILE_KEY=key;
   const total=pd.total||7;
-  const rows=pd.plans.length?pd.plans.map(p=>planCardHtml(p,total)).join(''):`<p class=empty>No projects yet, build your first one.</p>`;
-  const keySec=!CFG.byokEnabled?'':`<section class=psec><h3>API config</h3>`+
-    (key?`<p class=pnote>Running on your own <b>${esc(key.provider)}</b> key (\\u2022\\u2022\\u2022\\u2022${esc(key.last4)}). Plans use your key, not ours.</p><div class=prow><button class=gbtn onclick=keyForm()>Replace key</button><button class=gbtn onclick=removeKey()>Remove key</button></div>`
-        :`<p class=pnote>No key yet. Add your own OpenRouter or Anthropic key to build plans and use every tool.</p><div class=prow><button onclick=keyForm()>Add a key</button></div>`)+
-    `</section>`;
+  const TABS=[['projects','Projects'],['api','API config'],['account','Account']];
+  const tabbar=TABS.map(([k,l])=>`<button type=button class="ptab2${PROFILE_TAB===k?' on':''}" onclick="selectProfileTab('${k}')">${l}</button>`).join('');
+  let body='';
+  if(PROFILE_TAB==='projects'){
+    const rows=pd.plans.length?pd.plans.map(p=>planCardHtml(p,total)).join(''):`<p class=empty>No projects yet, build your first one.</p>`;
+    body=`<div class=psec-head><h3>Projects</h3><button onclick=newPlan()>+ New plan</button></div>${rows}`;
+  }else if(PROFILE_TAB==='api'){
+    body=!CFG.byokEnabled
+      ? `<p class=pnote>Bring-your-own-key isn\\u2019t enabled here.</p>`
+      : (key?`<p class=pnote>Running on your own <b>${esc(key.provider)}</b> key (\\u2022\\u2022\\u2022\\u2022${esc(key.last4)}). Plans use your key, not ours.</p><div class=prow><button class=gbtn onclick=keyForm()>Replace key</button><button class=gbtn onclick=removeKey()>Remove key</button></div>`
+            :`<p class=pnote>No key yet. Add your own OpenRouter or Anthropic key to build plans and use every tool.</p><div class=prow><button onclick=keyForm()>Add a key</button></div>`);
+  }else{
+    body=`<div class=acct-block><div class=acct-lbl>Contact</div><p class=pcontact>${esc(pd.email||'')}</p></div>`+
+      `<div class=acct-block><div class=acct-lbl>Session</div><div class=prow><button class=gbtn onclick=signout()>Sign out</button></div></div>`+
+      `<div class=acct-block><div class=acct-lbl>Danger zone</div><p class=pnote>Permanently delete your account, all projects, your key, and purchase history.</p><div class=prow><button class=danger onclick=deleteAccount()>Delete account</button></div></div>`;
+  }
   document.getElementById('profile').innerHTML=
     `<div class=profilewrap>`+
     `<div class=prof-top><h2>Profile</h2><button class=link onclick=newPlan()>\\u2190 Back</button></div>`+
-    `<section class=psec><div class=psec-head><h3>Projects</h3><button onclick=newPlan()>+ New plan</button></div>${rows}</section>`+
-    keySec+
-    `<section class=psec><h3>Contact</h3><p class=pcontact>${esc(pd.email||'')}</p></section>`+
-    `<section class=psec><h3>Account</h3><div class=prow><button class=gbtn onclick=signout()>Sign out</button><button class=danger onclick=deleteAccount()>Delete account</button></div></section>`+
+    `<div class=ptabs2 role=tablist>${tabbar}</div>`+
+    `<section class=psec>${body}</section>`+
     `</div>`;
 }
 function _afterKeyChange(){   // key add/replace/remove → close the modal and refresh the profile if open
@@ -3682,7 +3753,7 @@ async function resume(id){
   show('workspace');SESSION_BOARD=null;SIDEBAR_PHASE=null;VET_OPEN=true;VET_STEPPED=false;
   const ab=document.getElementById('addons');if(ab)delete ab.dataset.done;
   closeDrawer();closeViewer();
-  try{const r=await fetch('/api/plan/'+SID,{headers:authHeaders()});const s=await r.json();render(s);if(s.status==='researching')poll();}catch(e){document.getElementById('err2').textContent='Could not load that plan.';}
+  try{const r=await fetch('/api/plan/'+SID,{headers:authHeaders()});const s=await r.json();render(s);if(s.status==='researching')poll();}catch(e){_bootDone();document.getElementById('err2').textContent='Could not load that plan.';}
 }
 function resumeDownload(id){SID=id;download();}
 async function deletePlan(id){
@@ -3700,7 +3771,8 @@ async function sharePlan(id){
     if(!r.ok){toast(d.error||'Could not share.','err');return;}
     try{await navigator.clipboard.writeText(d.url);toast('🔗 Share link copied to clipboard');}
     catch(e){toast('Share link: '+d.url);}
-    showPlans();
+    // copy only — never redirect. If we're already ON the profile, refresh in place so the chip flips to "Shared".
+    const pf=document.getElementById('profile'); if(pf&&pf.style.display!=='none')openProfile();
   }catch(e){toast('Network error.','err');}
 }
 function banner(msg){const b=document.getElementById('banner');b.textContent=msg;b.style.display='block';}
@@ -3735,8 +3807,9 @@ async function initAuth(){
 }
 function routeFromPath(){   // a finished plan lives at /plan/{id} — deep-link / bookmark / revisit / back-fwd
   const m=(location.pathname||'').match(/^\\/plan\\/([a-z0-9]+)/i);
-  if(m&&m[1])resume(m[1]);
-  else if(SID){SID=null;show('intake');renderBoardPick();gateIntake();}   // navigated back to home
+  if(m&&m[1]){resume(m[1]);return;}
+  _bootDone();   // not a plan path → drop the boot loader and show home
+  if(SID){SID=null;show('intake');renderBoardPick();gateIntake();}
 }
 window.addEventListener('popstate',routeFromPath);   // browser back/forward drives the SPA
 function toggleTopMenu(){const r=document.querySelector('.topright'),h=document.getElementById('topham');if(!r)return;const open=r.classList.toggle('open');if(h)h.setAttribute('aria-expanded',String(open));}
