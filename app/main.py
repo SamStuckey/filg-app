@@ -1566,6 +1566,13 @@ body.hasbar .workspace{padding-bottom:74px}
    (anchored to the left of the main content, overlapping it), highlighting the active tab. */
 .sec.collap .sechead{cursor:pointer}
 body.ws .side .sec.collap.tabactive{background:#eef3ff;border-color:var(--link)}
+/* the "The machine" spew tab: highlights (blue, pulsing) while the engine runs, green when done */
+#spewsec.running{border-color:var(--link)}#spewsec.running .sechead h3,#spewsec.running .caret{color:var(--link)}
+#spewsec.running .sechead h3{animation:spewpulse 1.1s ease-in-out infinite}
+@keyframes spewpulse{0%,100%{opacity:1}50%{opacity:.5}}
+#spewsec.done{border-color:var(--ok)}#spewsec.done .sechead h3,#spewsec.done .caret{color:var(--ok)}
+@media(prefers-reduced-motion:reduce){#spewsec.running .sechead h3{animation:none}}
+#spewsec .runner{border:0;background:none;margin:0}#spewsec .run-head{background:none;padding:0 0 6px}
 body.ws .side .sec.collap.tabactive .sechead h3{color:var(--link)}
 .secdrawer{position:fixed;left:300px;top:var(--hdr);bottom:0;width:min(440px,calc(100vw - 320px));background:var(--paper);border-right:1px solid #888;box-shadow:6px 0 24px rgba(0,0,0,.14);z-index:58;transform:translateX(-100%);transition:transform .2s;display:flex;flex-direction:column;visibility:hidden}
 .secdrawer.open{transform:translateX(0);visibility:visible}
@@ -1717,6 +1724,12 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <button type=button class=drawer-rail onclick="document.body.classList.remove('drawer-collapsed')" aria-label="Open tools">&#9776; Tools</button>
 <aside class=side>
 <div class=drawerhead><b>Tools</b><button type=button class=drawerx onclick="document.body.classList.add('drawer-collapsed')" aria-label="Collapse tools">&#8249;</button></div>
+<div class="sec collap" id=spewsec style="display:none"><button type=button class=sechead aria-expanded=false onclick="toggleSec('spewsec')"><h3>The machine</h3><span class=caret aria-hidden=true>▸</span></button>
+<div class=secbody>
+<div class=runner id=runner aria-live=polite>
+<div class=run-head><span class=run-dot aria-hidden=true></span><span class=run-title id=run-title>The machine, working</span><span class=run-spacer></span><button type=button class=run-min id=run-min onclick="document.getElementById('runner').classList.toggle('min')" aria-label="Collapse or expand the runner">&#9662;</button></div>
+<div class=run-log id=runner-log></div>
+</div></div></div>
 <div class="sec collap" id=straightsec style="display:none"><button type=button class=sechead aria-expanded=false onclick="toggleSec('straightsec')"><h3>The straight read</h3><span class=caret aria-hidden=true>▸</span></button>
 <div class=secbody><div id=vet></div></div></div>
 <div class="sec collap" id=takeawaysec style="display:none"><button type=button class=sechead aria-expanded=false onclick="toggleSec('takeawaysec')"><h3>Your board weighed in</h3><span class=caret aria-hidden=true>▸</span></button>
@@ -1760,10 +1773,6 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 </div></div>
 </aside>
 <main class=main>
-<div class=runner id=runner aria-live=polite hidden>
-<div class=run-head><span class=run-dot aria-hidden=true></span><span class=run-title id=run-title>The machine, working</span><span class=run-spacer></span><button type=button class=run-min id=run-min onclick="document.getElementById('runner').classList.toggle('min')" aria-label="Collapse or expand the runner">&#9662;</button></div>
-<div class=run-log id=runner-log></div>
-</div>
 <div id=answer class=summary></div>
 <div class=planwrap id=planwrap style="display:none"><div class=plantabs id=plantabs role=tablist aria-label="Your plan, part by part"></div></div>
 <div id=planview style="display:none"></div>
@@ -1831,7 +1840,7 @@ async function poll(){
   if(s.status==='researching'){
     if(!ACT_RESEARCH){Activity.resetLeaves();ACT_ID=Activity.open('Researching + grading your market');Activity.push(ACT_ID,'Spinning up your research');ACT_RESEARCH=true;ACT_PROG_N=0;}
     _drainProgress(s);                                           // real receipts + the leaf fan-out, streamed
-    document.getElementById('node').innerHTML='<div class=node><span class=eyebrow>Working</span><h3>Researching + grading your market…</h3><p class=lead>Pulling sources and grading every number, so vendor spin gets labeled, not laundered. About 1 to 2 minutes. Watch the leaves green up and the receipts spew in above.</p></div>';
+    document.getElementById('node').innerHTML='<div class=node><span class=eyebrow>Working</span><h3>Researching + grading your market…</h3><p class=lead>Pulling sources and grading every number, so vendor spin gets labeled, not laundered. About 1 to 2 minutes. Open <b>The machine</b> tool to watch the leaves green up and the receipts spew in.</p></div>';
     say('Researching and grading your market.');
     setTimeout(poll,1500);return;
   }
@@ -2839,10 +2848,11 @@ async function submitDrawer(){
 // as HISTORY (collapsed, click to re-read its spew) instead of vanishing, and the research fan-out
 // paints a row of literal leaves 🍃 that turn grey→green as each lane completes.
 const Activity={
-  _seq:0, tracks:{}, n:0, _live:0,
+  _seq:0, tracks:{}, n:0, _live:0, _everRan:false,
   _el(){return document.getElementById('runner');},
   _log(){return document.getElementById('runner-log');},
-  _show(){const a=this._el();if(a){a.hidden=false;a.classList.add('show');a.classList.remove('min');}},
+  _sec(){return document.getElementById('spewsec');},   // the runner now lives in the "The machine" tab
+  _show(){const a=this._el();if(a){a.classList.add('show');a.classList.remove('min');} const sec=this._sec(); if(sec)sec.style.display='';},
   _trim(){ const log=this._log(); if(!log)return; const done=log.querySelectorAll('.atask.done');
     for(let i=0;i<done.length-7;i++)done[i].parentNode.removeChild(done[i]); },   // keep ~7 history cards
   _mkTask(label){
@@ -2865,16 +2875,17 @@ const Activity={
     return li;
   },
   _advance(t,text){ if(t.line)t.line.classList.replace('active','done'); t.line=this._line(t.body,text,false); },
-  _busy(){ const a=this._el(); if(a)a.classList.toggle('busy',this._live>0); },
+  _busy(){ const a=this._el(); if(a)a.classList.toggle('busy',this._live>0);
+    const sec=this._sec(); if(sec){ if(this._live>0){sec.classList.add('running');sec.classList.remove('done');} else {sec.classList.remove('running'); if(this._everRan)sec.classList.add('done');} } },
   start(steps,interval,label){
-    const id=++this._seq; this.n++; this._live++; this._show();
+    const id=++this._seq; this.n++; this._live++; this._everRan=true; this._show();
     const wrap=this._mkTask(label); const body=wrap?wrap.querySelector('.abody'):null;
     const s=(steps||[]).slice(); let i=0; const t={wrap,body,line:null,timer:null}; this.tracks[id]=t;
     if(s.length)this._advance(t,s[0]);
     t.timer=setInterval(()=>{ if(i<s.length-1){i++;this._advance(t,s[i]);} else {clearInterval(t.timer);t.timer=null;} }, interval||1600);
     this._busy(); return id;
   },
-  open(label){ const id=++this._seq; this.n++; this._live++; this._show(); const wrap=this._mkTask(label); this.tracks[id]={wrap,body:wrap?wrap.querySelector('.abody'):null,line:null,timer:null}; this._busy(); return id; },
+  open(label){ const id=++this._seq; this.n++; this._live++; this._everRan=true; this._show(); const wrap=this._mkTask(label); this.tracks[id]={wrap,body:wrap?wrap.querySelector('.abody'):null,line:null,timer:null}; this._busy(); return id; },
   push(id,line){ const t=this.tracks[id]; if(t)this._advance(t,line); },
   done(id,msg){ this._end(id,msg,false); },
   stop(id){ this._end(id,null,true); },
