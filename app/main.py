@@ -1641,6 +1641,7 @@ body.hasbar .vibestrip{display:none}   /* don't fight the fixed action bar mid-b
 #answer.summary h2{font-size:17px;font-weight:700;margin:0}
 #answer.summary .tag{color:var(--muted);font-size:12px;margin:7px 0 0}
 #answer.summary .sum-body p{margin:6px 0 0;font-size:13.5px}
+#answer.summary .sum-react{font-size:15px;line-height:1.45;color:var(--ink);font-weight:600;margin:2px 0 10px}
 #answer.summary .sum-head{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;background:none;border:0;padding:0;cursor:pointer;text-align:left;color:inherit;font:inherit}
 #answer.summary .sum-headl{display:flex;align-items:center;gap:10px;flex-wrap:wrap;min-width:0}
 #answer.summary .sum-headl .verdict{flex:none}
@@ -2492,8 +2493,10 @@ function renderAnswer(s){
   const mt=(s.vetting||{}).model_type||'';                              // its realistic shape, next to the verdict
   const MT_LABELS={'full-time':'Full time','side-hustle':'Side hustle','seasonal':'Seasonal','one-shot':'One shot','gig':'Gig','scalable':'Scalable'};
   const mtb=(mt&&MT_LABELS[mt])?`<span class="modelbadge mt-${esc(mt)}">${esc(MT_LABELS[mt])}</span>`:'';
+  // the cheeky spoken reaction (vet voice) — a plain-spoken sub-header under the title
+  const react=(s.vetting&&s.vetting.reaction)?`<p class=sum-react>${esc(s.vetting.reaction)}</p>`:'';
   a.innerHTML=`<button type=button class=sum-head aria-expanded="${SUM_OPEN}" onclick=toggleSummary()><span class=sum-headl>${stamp}${mtb}<h2>${esc(p.title)}</h2></span><span class=sum-caret aria-hidden=true>\\u25be</span></button>`+
-    `<div class=sum-body><p class=tag>Your offer, with the research graded, vendor spin labeled, not laundered.</p>`+
+    `<div class=sum-body>${react}<p class=tag>Your offer, with the research graded, vendor spin labeled, not laundered.</p>`+
     `<p><b>What you'd sell:</b> ${esc(p.offer)}</p><p><b>How you'd sell it:</b> ${esc(p.gtm)}</p></div>`;
 }
 let BUILT={}, SECMETA={}, PLAN_TAB=-99;
