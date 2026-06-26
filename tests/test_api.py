@@ -97,6 +97,20 @@ def test_branching_next_back_goto(client):
     assert s["tree"]["active"] == other and s["step"] == 1
 
 
+def test_export_txt_available_with_data_unfinished(client):
+    # The free get-your-data-out: one plain-text dump of everything so far, available the moment
+    # there's data (no 'done' gate, no paywall).
+    sid = client.post("/api/plan/start", json={"idea": GRAB_BAG, "email": "exp@x.com"}).json()["id"]
+    wait_status(client, sid)
+    client.post(f"/api/plan/{sid}/next", json={"feedback": ""})   # build one section, still unfinished
+    r = client.get(f"/api/plan/{sid}/export.txt")
+    assert r.status_code == 200 and r.headers["content-type"].startswith("text/plain")
+    assert "attachment" in r.headers.get("content-disposition", "")
+    t = r.text
+    assert "THE IDEA" in t and "THE PLAN, PART BY PART" in t and "THE RESEARCH, GRADED" in t
+    assert client.get("/api/plan/nope/export.txt").status_code == 404
+
+
 def test_nudges_returns_quick_edit_chips(client):
     # The feedback modal's per-step nudge chips: a short list keyed to the current proposal.
     # In mock mode this returns the static set; the route must echo cumulative cost/tokens.
