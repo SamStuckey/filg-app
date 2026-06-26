@@ -53,28 +53,19 @@ import plan_pdf   # noqa: E402 — styled PDF generation (synthesis + fpdf2 rend
 import advisor    # noqa: E402 — "chat with your plan" (grounded advisory layer)
 import provider   # noqa: E402 — BYOK: per-run LLM provider (FILG's key vs a user's OpenRouter key)
 import pipeline   # noqa: E402 — engine: per-run cost ledger (run_ledger) for safe concurrency
-import plans      # noqa: E402 — account plans + entitlements (concurrency limit, future feature gates)
 
 from . import auth, billing, keys, planner, store  # noqa: E402 — persistence, auth, billing, BYOK keys
 
 MOCK = os.environ.get("FILG_MOCK") == "1"
-# FILG_PAID_EMAILS is now only a manual comp/override; real paid status comes from billing.is_paid.
-PAID = {e.strip().lower() for e in os.environ.get("FILG_PAID_EMAILS", "").split(",") if e.strip()}
 
 
-def _is_paid(email: str, verified: bool) -> bool:
-    """Paid = a verified user with a live subscription, OR an allowlisted comp. An unverified
-    (free-tier, email-only) caller can't be billed-paid, but the comp allowlist still applies."""
-    return (verified and billing.is_paid(email)) or (email in PAID)
-
-
-def _has_pdf_access(email: str, verified: bool) -> bool:
-    """True iff this user may generate/download the polished $35 PDF: they bought the one-time unlock,
-    OR they're a comp/dormant-sub (still honored), OR billing isn't configured (dev/local → open).
-    The locked model (business_plan §16.1): raw export is free, the polished PDF is the one paid action."""
+def _has_pdf_access(email: str, verified: bool = False) -> bool:
+    """True iff this user may generate/download the polished PDF: they bought the one-time $13 unlock,
+    OR billing isn't configured (dev/local → open). The monetization model is now a single paid action:
+    the app is free to use on your own key; the polished PDF is the one purchase. No tiers, no sub."""
     if not billing.PDF_BILLING_ENABLED:
         return True
-    return billing.has_purchased(email) or _is_paid(email, verified)
+    return billing.has_purchased(email)
 
 
 def _is_byok(user: str) -> bool:
@@ -157,21 +148,23 @@ def _kill_gate(session: dict):
 
 app = FastAPI(title="FILG")
 
-# Per-user concurrency: a user may run up to their plan's `max_concurrent` AI operations at once
-# (cost is isolated per run via pipeline.run_ledger, so concurrent runs don't mis-bill each other).
+# Per-user concurrency: a flat cap on simultaneous AI operations per user (cost is isolated per run
+# via pipeline.run_ledger, so concurrent runs don't mis-bill each other). Not a monetization tier —
+# just a correctness/cost guard so one user can't fan out unbounded work.
+CONCURRENCY_CAP = 3
 _inflight: dict[str, int] = {}
 _inflight_lock = threading.Lock()
 
 
 class BusyError(Exception):
-    """Raised when a user is already at their plan's concurrent-operation limit."""
+    """Raised when a user is already at the concurrent-operation limit."""
     def __init__(self, cap: int):
         self.cap = cap
         super().__init__(f"at concurrency limit ({cap})")
 
 
 def _concurrency_cap(user: str) -> int:
-    return plans.max_concurrent(store.account_plan(user))
+    return CONCURRENCY_CAP
 
 
 @contextlib.contextmanager
@@ -267,12 +260,11 @@ async def api_run(request: Request):
     if "@" not in user:
         return JSONResponse({"error": "Enter an email so we can send your result."}, status_code=400)
 
-    is_paid = _is_paid(user, verified=authed is not None)
-    allowed, reason = usage.can_run(user, is_paid=is_paid)
+    allowed, reason = usage.can_run(user, is_paid=False)
     if not allowed:
-        return JSONResponse({"error": reason, "upgrade": True}, status_code=402)
+        return JSONResponse({"error": reason}, status_code=402)
 
-    mode = "full" if is_paid else "teardown"   # free → teardown; paid ($39/mo) → full artifact set
+    mode = "teardown"
     job_id = uuid.uuid4().hex[:12]
     store.create(job_id, idea, user, mode)
     threading.Thread(target=_run_job, args=(job_id, idea, user, mode), daemon=True).start()
@@ -289,41 +281,22 @@ async def api_status(job_id: str):
 
 @app.get("/api/me")
 async def api_me(request: Request):
-    """Tell the frontend who it is and whether to show the Upgrade button."""
+    """Tell the frontend who it is and whether the polished PDF is already unlocked."""
     authed = auth.user_from_request(request)
     if not authed:
         return {"signed_in": False, "auth_enabled": auth.AUTH_ENABLED,
-                "billing_enabled": billing.BILLING_ENABLED,
                 "pdf_billing": billing.PDF_BILLING_ENABLED,
                 "pdf_price": billing.PDF_PRICE_CENTS}
     return {"signed_in": True, "email": authed["email"],
-            "paid": _is_paid(authed["email"], verified=True),
-            "pdf_unlocked": _has_pdf_access(authed["email"], verified=True),
+            "pdf_unlocked": _has_pdf_access(authed["email"]),
             "pdf_billing": billing.PDF_BILLING_ENABLED, "pdf_price": billing.PDF_PRICE_CENTS,
-            "auth_enabled": auth.AUTH_ENABLED, "billing_enabled": billing.BILLING_ENABLED}
-
-
-@app.post("/api/checkout")
-async def api_checkout(request: Request):
-    """Start a Stripe Checkout for the $39/mo Operator plan. Requires a verified user."""
-    authed = auth.user_from_request(request)
-    if not authed or not authed["email"]:
-        return JSONResponse({"error": "Sign in first."}, status_code=401)
-    if not billing.BILLING_ENABLED:
-        return JSONResponse({"error": "Billing isn't configured yet."}, status_code=503)
-    if _is_paid(authed["email"], verified=True):
-        return JSONResponse({"error": "You're already on Operator."}, status_code=409)
-    try:
-        url = billing.create_checkout_url(authed["email"], user_id=authed["id"])
-    except billing.StripeError as e:
-        return JSONResponse({"error": str(e)}, status_code=502)
-    return {"url": url}
+            "auth_enabled": auth.AUTH_ENABLED}
 
 
 @app.post("/api/plan/{sid}/buy-pdf")
 async def api_buy_pdf(sid: str, request: Request):
-    """Start the one-time $35 Checkout that unlocks the polished investor-grade PDF (the single paid
-    action). Requires a verified, signed-in owner of a finished plan. Raw export stays free."""
+    """Start the one-time $13 Checkout that unlocks the polished investor-grade PDF (the single paid
+    action). Requires a signed-in owner of a finished plan. Raw export stays free."""
     authed = auth.user_from_request(request)
     if not authed or not authed["email"]:
         return JSONResponse({"error": "Sign in first."}, status_code=401)
@@ -332,7 +305,7 @@ async def api_buy_pdf(sid: str, request: Request):
     s = store.plan_get(sid)
     if not s or not _owns(request, s):
         return JSONResponse({"error": "unknown session"}, status_code=404)
-    if _has_pdf_access(authed["email"], verified=True):
+    if _has_pdf_access(authed["email"]):
         return JSONResponse({"error": "You've already unlocked the polished PDF.", "unlocked": True},
                             status_code=409)
     try:
@@ -423,7 +396,7 @@ async def api_stripe_webhook(request: Request):
 @app.get("/healthz")
 async def healthz():
     return {"ok": True, "mock": MOCK, "auth_enabled": auth.AUTH_ENABLED,
-            "billing_enabled": billing.BILLING_ENABLED, **usage.snapshot()}
+            "pdf_billing": billing.PDF_BILLING_ENABLED, **usage.snapshot()}
 
 
 CTA = ('<div class="cta"><a class="btn btn-primary" href="https://filg.ai/#start">'
@@ -627,9 +600,9 @@ async def api_plan_start(request: Request):
              "needKey": True}, status_code=402)
     else:
         # BYOK off (no FILG_KEY_SECRET — dev/local): keep the legacy free-cap behavior so dev works.
-        allowed, reason = usage.can_run(taste_id, is_paid=_is_paid(user, verified))
+        allowed, reason = usage.can_run(taste_id, is_paid=False)
         if not allowed:
-            return JSONResponse({"error": reason, "upgrade": True}, status_code=402)
+            return JSONResponse({"error": reason}, status_code=402)
     directors = [k for k in (body.get("directors") or []) if k in personas.KEYS]  # optional board
     sid = uuid.uuid4().hex[:12]
     store.plan_create(sid, user, idea, directors=directors)
@@ -644,12 +617,11 @@ async def api_plans(request: Request):
     authed = auth.user_from_request(request)
     if not authed or not authed["email"]:
         return JSONResponse({"error": "Sign in to see your plans."}, status_code=401)
-    paid = _is_paid(authed["email"], verified=True)
     plans = [{"id": p["id"], "idea": p["idea"], "status": p["status"], "step": p["step"],
               "created_at": p["created_at"], "done": p["status"] == "done",
               "shared": bool(p.get("shared"))}
              for p in store.plan_list(authed["email"])]
-    return {"email": authed["email"], "paid": paid, "total": planner.N, "plans": plans}
+    return {"email": authed["email"], "total": planner.N, "plans": plans}
 
 
 @app.get("/api/plan/{sid}")
@@ -1021,9 +993,9 @@ def _slug(text: str) -> str:
 async def api_plan_pdf(sid: str, request: Request):
     """The core artifact: a styled, branded PDF of the finished plan. Synthesizes an exec summary,
     lays out the active branch's sections, and appends the graded-research evidence exhibit. This is
-    the ONE paid action (business_plan §16.1): a one-time $35 unlocks it; raw `.zip`/`.md` export stays
-    free. The $35 covers synthesis, so it runs on FILG's key when the buyer has none. Builds from
-    `s["files"]` = the final decision set."""
+    the ONE paid action: a one-time $13 unlocks it; raw `.zip`/`.md` export stays free. The synthesis
+    runs on the OWNER'S bound key (user-key-only — `_run_slot` binds their provider), same as every
+    other engine call. Builds from `s["files"]` = the final decision set."""
     s = store.plan_get(sid)
     if not s or not _owns(request, s):
         return JSONResponse({"error": "unknown session"}, status_code=404)
@@ -1032,7 +1004,7 @@ async def api_plan_pdf(sid: str, request: Request):
     authed = auth.user_from_request(request)
     if not _has_pdf_access((authed or {}).get("email", ""), verified=authed is not None):
         return JSONResponse(
-            {"error": "Unlock the polished, investor-grade PDF for a one-time $35. Your raw export is free.",
+            {"error": "Unlock the polished, investor-grade PDF for a one-time $13. Your raw export is free.",
              "needPurchase": True, "price": billing.PDF_PRICE_CENTS}, status_code=402)
     try:
         with _run_slot(s.get("user"), s.get("stack")):
@@ -1044,7 +1016,7 @@ async def api_plan_pdf(sid: str, request: Request):
     except Exception as e:  # noqa: BLE001
         traceback.print_exc()
         return JSONResponse({"error": f"Could not build the PDF: {e}"}, status_code=500)
-    # The $35 covers this render, so it does NOT deplete FILG's daily free-run budget; the per-session
+    # Runs on the owner's own key (user-key-only), so it never touches FILG's budget; the per-session
     # usage meter still reflects it (display-only).
     nc, nt = _fold_usage(sid, s, cost, toks)   # binary response → echo usage via headers for the meter
     fn = f"{_slug(s.get('idea'))}-business-plan.pdf"
@@ -1056,7 +1028,7 @@ async def api_plan_pdf(sid: str, request: Request):
 def _render_page() -> str:
     """The single-page app shell. Served at `/` and at clean deep-link paths like `/plan/{id}` so the
     frontend can use real History-API URLs (no `#`) and direct-load / refresh still works."""
-    cfg = json.dumps({"authEnabled": auth.AUTH_ENABLED, "billingEnabled": billing.BILLING_ENABLED,
+    cfg = json.dumps({"authEnabled": auth.AUTH_ENABLED,
                       "pdfBilling": billing.PDF_BILLING_ENABLED, "pdfPrice": billing.PDF_PRICE_CENTS,
                       "byokEnabled": keys.enabled(),
                       "supabaseUrl": os.environ.get("SUPABASE_URL", ""),
@@ -1380,7 +1352,6 @@ button:hover{background:#e8e8e8}button:disabled{opacity:.5;cursor:default}
 .pcard .idea{font-weight:700;font-size:15px}.pcard .meta{color:var(--muted);font-size:12px;margin-top:2px}
 .pcard .act{display:flex;align-items:center;gap:8px;flex:none}.pcard .act button{font-size:13px;padding:8px 12px}
 .pill{font-size:11px;font-weight:700;padding:1px 8px;border:1px solid var(--warn);color:var(--warn)}.pill.done{border-color:var(--ok);color:var(--ok)}
-.integrations{background:var(--card);border:1px dashed var(--line);padding:14px 16px;margin-top:16px;color:var(--muted);font-size:14px}
 .empty{color:var(--muted);text-align:center;margin:30px 0}
 @media(max-width:820px){.workspace{grid-template-columns:1fr}.side{position:static}}
 a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--link);outline-offset:2px}
@@ -1468,7 +1439,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 </main>
 </div>
 <script>
-const CFG=window.FILG||{authEnabled:false,billingEnabled:false};
+const CFG=window.FILG||{authEnabled:false};
 let sb=null, session=null, me=null;
 function authHeaders(){return session?{'Authorization':'Bearer '+session.access_token}:{};}
 let SID=null;
@@ -1496,7 +1467,7 @@ async function start(){
     const r=await fetch('/api/plan/start',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify(body)});
     const d=await r.json();
     if(d.gibberish){showJoke(d);go.disabled=false;go.textContent='Build my plan →';return;}  // nonsense → roast, no run
-    if(!r.ok){err.textContent=d.error||'Something went wrong.';if(d.needKey)err.innerHTML+=' <a href=# onclick="keyModal();return false">Add your key →</a>';else if(d.upgrade)err.innerHTML+=' <a href=# onclick="upgrade();return false">Upgrade →</a>';go.disabled=false;go.textContent='Build my plan →';return;}
+    if(!r.ok){err.textContent=d.error||'Something went wrong.';if(d.needKey)err.innerHTML+=' <a href=# onclick="keyModal();return false">Add your key →</a>';go.disabled=false;go.textContent='Build my plan →';return;}
     SID=d.id;meterBaseline(d.id);   // baseline at 0 so this run's tokens fully count as research streams in
     document.getElementById('intake').style.display='none';
     document.getElementById('workspace').style.display='grid';
@@ -2288,9 +2259,9 @@ const Activity={
 };
 const RESEARCH_STEPS=["Focusing your idea into one sharp thesis","Spinning up research across the web","Pulling sources on the market and competition","Grading every source for credibility","Flagging vendor-marketing spin","Re-sourcing the headline stats to primary sources","Scoring demand, market, and willingness to pay","Drafting your first offer"];
 const PDF_STEPS=["Applying your board's input","Pulling your graded evidence","Building the decision matrix","Laying out a modern, on-brand design","Typesetting your PDF"];
-// ── The one paid action: polished PDF = one-time $35; raw export stays free ──
+// ── The one paid action: polished PDF = one-time $13; raw export stays free ──
 function pdfUnlocked(){ return !CFG.pdfBilling || !!(me&&me.pdf_unlocked); }
-function pdfPriceStr(){ const c=(me&&me.pdf_price)||CFG.pdfPrice||3500; return '$'+Math.round(c/100); }
+function pdfPriceStr(){ const c=(me&&me.pdf_price)||CFG.pdfPrice||1300; return '$'+Math.round(c/100); }
 function pdfBtn(){ return pdfUnlocked()
   ? '<button type=button onclick=download()>⬇ Download polished PDF</button>'
   : '<button type=button onclick=buyPdf()>🔓 Unlock polished PDF, '+pdfPriceStr()+'</button>'; }
@@ -2306,7 +2277,7 @@ async function buyPdf(){
   }catch(e){toast('Network error starting checkout.','err');}
 }
 async function download(){
-  if(!pdfUnlocked()){buyPdf();return;}     // locked → route to the $35 unlock, not a key prompt
+  if(!pdfUnlocked()){buyPdf();return;}     // locked → route to the $13 unlock, not a key prompt
   const aid=Activity.start(PDF_STEPS,1600,'Building your styled PDF');
   const minShow=new Promise(res=>setTimeout(res,2600));   // let the sequence breathe (covers fast mock runs)
   try{
@@ -2368,11 +2339,11 @@ function mdToHtml(md){
 function renderAuth(){
   const bar=document.getElementById('authbar');
   if(sb&&session){
-    const paid=me&&me.paid; bar.style.display='';
+    bar.style.display='';
     bar.innerHTML=`<button class=link onclick=showPlans()>My plans</button>`+
       (CFG.byokEnabled?`<button class=link onclick=keyModal()>🔑 Your key</button>`:'')+
-      `<span class=who>${esc(session.user.email)}${paid?' · <b>Operator</b>':''}</span>`+
-      `<button class=link onclick=signout()>Sign out</button>`;   // no subscription sold yet (§16.1); the $35 PDF unlock lives on the finished plan
+      `<span class=who>${esc(session.user.email)}</span>`+
+      `<button class=link onclick=signout()>Sign out</button>`;   // no subscription; the $13 PDF unlock lives on the finished plan
   }else if(sb){bar.style.display='';bar.innerHTML=`<button class=link onclick=authModal()>Log in / Sign up</button>`;}
   else{bar.style.display='none';}
   gateIntake();
@@ -2472,14 +2443,6 @@ async function signinEmail(){
   toast(error?error.message:'Check your inbox for the sign-in link.',error?'err':'');
 }
 async function signout(){await sb.auth.signOut();session=null;me=null;newPlan();renderAuth();}
-async function upgrade(){
-  if(!session){signinEmail();return;}
-  try{
-    const r=await fetch('/api/checkout',{method:'POST',headers:authHeaders()});
-    const d=await r.json();
-    if(d.url)location.href=d.url; else toast(d.error||'Could not start checkout.','err');
-  }catch(e){toast('Network error starting checkout.','err');}
-}
 function show(id){['intake','workspace','profile'].forEach(x=>{const e=document.getElementById(x);if(e)e.style.display=(x===id?(x==='workspace'?'grid':'block'):'none');});}
 function newPlan(){SIDEBAR_PHASE=null;ACT_RESEARCH=false;ACT_PROG_N=0;ACT_ID=null;VET_OPEN=true;VET_STEPPED=false;DTREE_STEP=-99;Activity.stopAll();closeViewer();SID=null;
   // render a FRESH intake — clear any in-flight button/idea/error left over from a prior build or sign-out
@@ -2502,9 +2465,8 @@ function renderPlans(d){
       `<button class=gbtn onclick="deletePlan('${p.id}')" aria-label="Delete plan">Delete</button>`;
     return `<div class=pcard><div><div class=idea>${esc((p.idea||'Untitled').slice(0,90))}</div><div class=meta>${meta} · ${esc(new Date(p.created_at).toLocaleDateString())}</div></div><div class=act><span class="pill ${p.done?'done':''}">${p.done?'done':'WIP'}</span>${acts}</div></div>`;
   }).join(''):`<p class=empty>No plans yet, build your first one.</p>`;
-  const integ=d.paid?`<div class=integrations><b>Operator integrations</b>, CRM kickstarts &amp; more, coming soon.</div>`:`<div class=integrations>Upgrade to Operator for integrations (CRM kickstarts &amp; more), coming soon.</div>`;
-  document.getElementById('profile').innerHTML=`<div class=plans><h2>Your plans</h2><p class=sub>${esc(d.email)} · ${d.paid?'Operator':'Free'}</p>`+
-    `<div style="margin:10px 0 16px"><button onclick=newPlan()>+ New plan</button></div>`+rows+integ+`</div>`;
+  document.getElementById('profile').innerHTML=`<div class=plans><h2>Your plans</h2><p class=sub>${esc(d.email)}</p>`+
+    `<div style="margin:10px 0 16px"><button onclick=newPlan()>+ New plan</button></div>`+rows+`</div>`;
 }
 async function resume(id){
   SID=id;if(location.pathname!=='/plan/'+id)history.pushState({plan:id},'','/plan/'+id);   // clean URL for any entry point
@@ -2535,8 +2497,6 @@ async function sharePlan(id){
 function banner(msg){const b=document.getElementById('banner');b.textContent=msg;b.style.display='block';}
 async function initAuth(){
   const q=new URLSearchParams(location.search);
-  if(q.get('upgraded'))banner('🎉 You\\'re on Operator. Your plans + integrations are unlocked.');
-  if(q.get('canceled'))banner('Checkout canceled, no charge. You\\'re still on the free tier.');
   if(q.get('pdf'))banner('🎉 Polished PDF unlocked. Download it from your finished plan.');
   if(q.get('pdf_canceled'))banner('Checkout canceled, no charge. Your raw export is still free.');
   restoreIdea();renderBoardPick();renderStack();paintMeter();   // show the crew picker + meter from first paint

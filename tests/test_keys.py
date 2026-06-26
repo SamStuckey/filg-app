@@ -77,7 +77,7 @@ def test_start_legacy_when_byok_off(client, monkeypatch):
     monkeypatch.setattr(main.keys, "enabled", lambda: False)             # no FILG_KEY_SECRET (dev)
     monkeypatch.setattr(main.usage, "can_run", lambda *a, **k: (False, "free limit reached"))
     r = client.post("/api/plan/start", json=_IDEA)
-    assert r.status_code == 402 and r.json()["upgrade"] is True          # legacy cap behavior preserved
+    assert r.status_code == 402 and "limit" in r.json()["error"].lower()  # legacy dev free-cap preserved
 
 
 # ── the section wall: no free API actions past the welcome ─────────────────────

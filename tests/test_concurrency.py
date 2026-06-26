@@ -1,7 +1,8 @@
-"""Per-run cost ledger + per-user concurrency cap (drawn from the account's plan).
+"""Per-run cost ledger + a flat per-user concurrency cap.
 
 The ledger must be isolated per run so concurrent operations don't mis-bill each other, and a user
-may run up to their plan's max_concurrent ops at once (429 past that)."""
+may run up to a flat CONCURRENCY_CAP ops at once (429 past that). There are no monetization tiers —
+the cap is a single constant, not drawn from a plan."""
 
 import types
 from concurrent.futures import ThreadPoolExecutor
@@ -9,8 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 import pipeline
-import plans
-from app import main, store
+from app import main
 
 
 def _usage(tin=10, tout=5):
@@ -37,9 +37,11 @@ def test_bound_carries_ledger_into_worker_threads():
 
 
 # ── per-user concurrency cap ──────────────────────────────────────────────────
-def test_run_slot_caps_at_plan_limit():
-    user = "conc@x.com"                     # no explicit plan → default plan (byok) → cap 3
-    held = [main._run_slot(user) for _ in range(3)]
+def test_run_slot_caps_at_flat_limit():
+    user = "conc@x.com"                     # flat cap = main.CONCURRENCY_CAP (3)
+    cap = main.CONCURRENCY_CAP
+    assert main._concurrency_cap(user) == cap
+    held = [main._run_slot(user) for _ in range(cap)]
     for cm in held:
         cm.__enter__()
     with pytest.raises(main.BusyError):
@@ -49,22 +51,6 @@ def test_run_slot_caps_at_plan_limit():
         cm.__exit__(None, None, None)
     with main._run_slot(user):             # slots freed → works again
         pass
-
-
-def test_plan_override_changes_cap():
-    user = "capped@x.com"
-    store.set_account_plan(user, "free")   # free → cap 1
-    assert main._concurrency_cap(user) == 1
-    cm = main._run_slot(user)
-    cm.__enter__()
-    try:
-        with pytest.raises(main.BusyError):
-            with main._run_slot(user):
-                pass
-    finally:
-        cm.__exit__(None, None, None)
-        store.set_account_plan(user, None)
-    assert main._concurrency_cap(user) == plans.max_concurrent(plans.DEFAULT_PLAN)  # back to default
 
 
 def test_route_returns_429_when_busy(client, monkeypatch):

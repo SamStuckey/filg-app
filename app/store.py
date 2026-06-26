@@ -18,7 +18,6 @@ import json
 import os
 import sqlite3
 import threading
-import time
 from datetime import datetime, timezone
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -56,34 +55,14 @@ def init() -> None:
                     "  result TEXT,"               # JSON blob from the engine
                     "  error TEXT,"
                     "  created_at TEXT NOT NULL)")
-                # Stripe subscription state — `is_paid` is derived from this, not an allowlist.
-                con.execute(
-                    "CREATE TABLE IF NOT EXISTS subscriptions ("
-                    "  email TEXT PRIMARY KEY,"
-                    "  stripe_customer TEXT,"
-                    "  stripe_subscription TEXT,"
-                    "  status TEXT,"               # active | trialing | past_due | canceled | ...
-                    "  current_period_end INTEGER,"
-                    "  updated_at TEXT NOT NULL)")
-                con.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_subs_customer "
-                    "ON subscriptions (stripe_customer)")
-                # One-time $35 PDF unlock (the locked monetization model — business_plan §16). Keyed on
+                # One-time $13 PDF unlock — the single paid action (no subscription, no tiers). Keyed on
                 # the NORMALIZED email (see auth.normalize_email) so a buyer's alias addresses all unlock.
-                # Separate from `subscriptions` (which stays dormant — no sub is sold yet).
                 con.execute(
                     "CREATE TABLE IF NOT EXISTS pdf_purchases ("
                     "  email TEXT PRIMARY KEY,"
                     "  stripe_session TEXT,"
                     "  amount_cents INTEGER,"
                     "  created_at TEXT NOT NULL)")
-                # Account → plan assignment (entitlements live in code, see app/plans.py). A missing
-                # row means "no explicit plan" → the caller applies the default plan.
-                con.execute(
-                    "CREATE TABLE IF NOT EXISTS accounts ("
-                    "  email TEXT PRIMARY KEY,"
-                    "  plan TEXT,"
-                    "  updated_at TEXT NOT NULL)")
                 # Interactive plan-builder sessions (idea → decision-tree → downloadable file tree).
                 con.execute(
                     "CREATE TABLE IF NOT EXISTS plan_sessions ("
@@ -172,68 +151,10 @@ def get(job_id: str) -> dict | None:
     return job
 
 
-# ── Subscriptions (Stripe) ───────────────────────────────────────────────────
-_ACTIVE = ("active", "trialing")
-
-
-def upsert_subscription(email: str, *, customer: str | None = None,
-                        subscription: str | None = None, status: str | None = None,
-                        current_period_end: int | None = None) -> None:
-    """Insert/merge subscription state for an email. COALESCE keeps existing fields when an event
-    carries only some of them (e.g. a status update without the email)."""
-    init()
-    con = _connect()
-    try:
-        with con:
-            con.execute(
-                "INSERT INTO subscriptions "
-                "(email, stripe_customer, stripe_subscription, status, current_period_end, updated_at)"
-                " VALUES (?,?,?,?,?,?) ON CONFLICT(email) DO UPDATE SET "
-                "  stripe_customer=COALESCE(excluded.stripe_customer, stripe_customer),"
-                "  stripe_subscription=COALESCE(excluded.stripe_subscription, stripe_subscription),"
-                "  status=COALESCE(excluded.status, status),"
-                "  current_period_end=COALESCE(excluded.current_period_end, current_period_end),"
-                "  updated_at=excluded.updated_at",
-                (email.strip().lower(), customer, subscription, status, current_period_end,
-                 datetime.now(timezone.utc).isoformat()))
-    finally:
-        con.close()
-
-
-def email_for_customer(customer: str) -> str | None:
-    """Map a Stripe customer id back to the email we keyed on (subscription.* events carry the
-    customer, not the email)."""
-    init()
-    con = _connect()
-    try:
-        row = con.execute("SELECT email FROM subscriptions WHERE stripe_customer=?",
-                          (customer,)).fetchone()
-    finally:
-        con.close()
-    return row["email"] if row else None
-
-
-def is_paid(email: str) -> bool:
-    """True iff this email has an active/trialing subscription that hasn't hard-expired."""
-    if not email:
-        return False
-    init()
-    con = _connect()
-    try:
-        row = con.execute("SELECT status, current_period_end FROM subscriptions WHERE email=?",
-                          (email.strip().lower(),)).fetchone()
-    finally:
-        con.close()
-    if not row or row["status"] not in _ACTIVE:
-        return False
-    cpe = row["current_period_end"]
-    return not (cpe and time.time() > cpe)
-
-
-# ── One-time PDF purchases ($35 polished export unlock) ──────────────────────
+# ── One-time PDF purchases ($13 polished export unlock — the single paid action) ──
 def record_purchase(email: str, *, stripe_session: str | None = None,
                     amount_cents: int | None = None) -> None:
-    """Mark this (normalized) email as having bought the $35 polished-PDF unlock. Idempotent —
+    """Mark this (normalized) email as having bought the $13 polished-PDF unlock. Idempotent —
     re-delivering the same Stripe event just refreshes the row, never double-charges."""
     if not email:
         return
@@ -265,35 +186,6 @@ def has_purchased(email: str) -> bool:
     finally:
         con.close()
     return row is not None
-
-
-# ── Accounts (plan assignment) ───────────────────────────────────────────────
-def account_plan(email: str) -> str | None:
-    """The plan key assigned to this account, or None (caller defaults via app/plans.py)."""
-    if not email:
-        return None
-    init()
-    con = _connect()
-    try:
-        row = con.execute("SELECT plan FROM accounts WHERE email=?",
-                          (email.strip().lower(),)).fetchone()
-    finally:
-        con.close()
-    return row["plan"] if row else None
-
-
-def set_account_plan(email: str, plan: str | None) -> None:
-    """Assign (or clear) an account's plan. Clearing falls the account back to the default plan."""
-    init()
-    con = _connect()
-    try:
-        with con:
-            con.execute(
-                "INSERT INTO accounts (email, plan, updated_at) VALUES (?,?,?) "
-                "ON CONFLICT(email) DO UPDATE SET plan=excluded.plan, updated_at=excluded.updated_at",
-                (email.strip().lower(), plan, datetime.now(timezone.utc).isoformat()))
-    finally:
-        con.close()
 
 
 # ── Plan-builder sessions ────────────────────────────────────────────────────
@@ -399,28 +291,12 @@ if __name__ == "__main__":  # quick self-test (no API)
     fail("abc123", "boom")
     assert get("abc123")["status"] == "error"
     assert get("nope") is None
-    # subscriptions
-    assert is_paid("p@x.com") is False
-    upsert_subscription("p@x.com", customer="cus_1", subscription="sub_1", status="active")
-    assert is_paid("p@x.com") is True
-    assert email_for_customer("cus_1") == "p@x.com"
-    upsert_subscription("p@x.com", status="canceled")          # status-only update keeps customer
-    assert is_paid("p@x.com") is False
-    assert email_for_customer("cus_1") == "p@x.com"
-    upsert_subscription("p@x.com", status="active", current_period_end=1)  # past → expired
-    assert is_paid("p@x.com") is False
-    # one-time PDF purchases (the $35 unlock)
+    # one-time PDF purchases (the $13 unlock — the single paid action)
     assert has_purchased("buyer@x.com") is False
-    record_purchase("buyer@x.com", stripe_session="cs_1", amount_cents=3500)
+    record_purchase("buyer@x.com", stripe_session="cs_1", amount_cents=1300)
     assert has_purchased("buyer@x.com") is True
     record_purchase("buyer@x.com", stripe_session="cs_1")   # idempotent re-delivery
     assert has_purchased("buyer@x.com") is True
-    # accounts (plan assignment)
-    assert account_plan("acct@x.com") is None                 # no row → default applies upstream
-    set_account_plan("Acct@X.com", "pro")
-    assert account_plan("acct@x.com") == "pro"                # case-insensitive
-    set_account_plan("acct@x.com", None)                      # clear → back to default
-    assert account_plan("acct@x.com") is None
     # plan sessions
     plan_create("pl1", "u@x.com", "an idea about guitar coaching", directors=["closer", "cfo"])
     assert plan_get("pl1")["status"] == "researching"

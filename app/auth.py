@@ -74,7 +74,7 @@ def normalize_email(email: str) -> str:
     """Collapse provider-equivalent addresses to ONE identity (anti-abuse, business_plan §16.1):
     lowercase, drop a `+suffix` from the local part, and for gmail/googlemail also strip dots and
     fold googlemail → gmail. Supabase treats `me+1@`/`me.e@`/`me@` as distinct accounts, so we dedupe
-    them ourselves for the free-taste counter (and the $35 PDF unlock). Imperfect by design — separate
+    them ourselves for the free-taste counter (and the $13 PDF unlock). Imperfect by design — separate
     real accounts slip through; the daily free-taste budget is the real ceiling."""
     email = (email or "").strip().lower()
     if "@" not in email:
