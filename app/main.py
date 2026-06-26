@@ -1468,6 +1468,12 @@ body.hasbar .workspace{padding-bottom:74px}
 .ftstep.running{color:var(--ink)}.ftstep.running .ftleaf{filter:grayscale(.3);opacity:.9}
 .ftstep.done{color:var(--ink)}.ftstep.done .ftleaf{filter:none;opacity:1}
 .ftnote{margin-left:auto;font-size:11.5px;color:var(--muted);font-style:italic;text-align:right;max-width:52%}
+/* inline process panel in the tools drawer (forge etc.): a collapsible-style block with spew + result */
+.dpanel-h{display:flex;align-items:center;justify-content:space-between;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:8px}
+.dpanel-x{background:none;border:0;font-size:18px;color:var(--muted);cursor:pointer;line-height:1;padding:0 4px}
+.dpanel-x:hover{color:var(--ink)}
+.dpanel-acts{display:flex;gap:8px;justify-content:flex-end;margin-top:12px;flex-wrap:wrap}
+.dpanel-acts button{font-size:12.5px;padding:8px 12px}
 .forgecard{border:1px solid var(--line);background:#fafafa;padding:12px 14px;margin-top:8px}
 .fc-name{font-size:15px;font-weight:700}.fc-first{color:var(--muted);font-weight:400;font-size:13px}
 .fc-blurb{color:var(--muted);font-size:12.5px;margin:2px 0 8px}
@@ -1484,6 +1490,7 @@ body.hasbar .workspace{padding-bottom:74px}
 .rqrows{margin-top:8px;display:flex;flex-direction:column;gap:5px}
 .rqrow{font-size:12px;color:var(--ink);line-height:1.35}
 .rqsrc{color:var(--muted);font-size:11px}
+.rqspew{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;color:var(--muted);display:flex;flex-direction:column;gap:3px;padding:9px 10px;background:#fafafa;border:1px solid var(--line);max-height:160px;overflow:auto}
 .factsep{margin:14px 0 8px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);border-top:1px solid var(--line);padding-top:10px}
 /* decision tree (sidebar tab) — interactive, descriptive node map */
 #dtree{display:flex;flex-direction:column;gap:1px}
@@ -1537,9 +1544,9 @@ body.hasbar .workspace{padding-bottom:74px}
 .dr-sub{color:var(--muted);font-size:13px;margin:0 0 12px}
 .dr-go{width:100%;margin-top:2px}
 .dr-out{margin-top:16px;font-size:14px;display:none}.dr-out .balloon+.balloon{margin-top:8px}
-.modal-back{position:fixed;inset:0;background:rgba(0,0,0,.35);opacity:0;visibility:hidden;transition:opacity .15s;z-index:50}
+.modal-back{position:fixed;inset:0;background:rgba(0,0,0,.35);opacity:0;visibility:hidden;transition:opacity .15s;z-index:71}
 .modal-back.show{opacity:1;visibility:visible}
-.modal{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(420px,92vw);background:var(--card);border:1px solid #888;padding:20px 22px;z-index:51;opacity:0;visibility:hidden;transition:opacity .15s}
+.modal{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(420px,92vw);background:var(--card);border:1px solid #888;padding:20px 22px;z-index:72;opacity:0;visibility:hidden;transition:opacity .15s}
 .modal.open{opacity:1;visibility:visible}
 .modal h3{font-size:18px;font-weight:700;margin:0 0 8px}
 .modal #modal-body{font-size:14px;color:var(--muted);margin-bottom:16px}.modal #modal-body p{margin:0}
@@ -1674,7 +1681,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <div id=profile style="display:none"></div>
 <div id=live class=sr-only aria-live=polite></div>
 <aside class=drawer id=drawer role=dialog aria-modal=true aria-labelledby=drawer-title aria-hidden=true>
-<div class=dr-head><span id=drawer-title>Ask an expert</span><button type=button class=dr-x onclick=closeDrawer() aria-label="Close panel">×</button></div>
+<div class=dr-head><span id=drawer-title>Your board</span><button type=button class=dr-x onclick=closeDrawer() aria-label="Close panel">×</button></div>
 <div class=dr-body>
 <p class=dr-sub id=drawer-sub></p>
 <label for=drawerq class=sr-only>Your question for the advisor</label>
@@ -1715,7 +1722,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <button type=button class=chatsend id=chatsend onclick=sendChat()>Ask the planner →</button>
 <div class=disc>AI advisor grounded in your plan + graded research, not professional advice.</div></div></div>
 <div class="sec collap board" id=boardsec style="display:none"><button type=button class=sechead aria-expanded=false onclick="toggleSec('boardsec')"><h3>Board of Directors</h3><span class=caret aria-hidden=true>▸</span></button>
-<div class=secbody><p class=bhelp>Tap to add or drop a director, then convene them on your plan.</p>
+<div class=secbody><div id=boardmain><p class=bhelp>Tap to add or drop a director, then convene them on your plan.</p>
 <div class=bdirs id=boarddirs></div>
 <button type=button class=convene id=convene onclick=convene()>Convene the board</button>
 <div class=forge>
@@ -1725,7 +1732,8 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <textarea id=forgeinput rows=2 placeholder="e.g. a ruthless ops nerd who has scaled 3 agencies and hates busywork"></textarea>
 <button type=button class=forge-go onclick=openForge()>✦ Forge a director →</button>
 </div>
-<div class=disc>AI composite directors, not real people, not professional advice.</div></div></div>
+<div class=disc>AI composite directors, not real people, not professional advice.</div></div>
+<div class=dpanel id=forgepanel hidden></div></div></div>
 <div class="sec collap open" id=researchsec><button type=button class=sechead aria-expanded=true onclick="toggleSec('researchsec')"><h3>Check the facts</h3><span class=caret aria-hidden=true>▸</span></button>
 <div class=secbody>
 <p class=bhelp>Ask a question against your graded research. <b>Quick check</b> reads what's already there (and will say when it's not sure); <b>Go deeper</b> spawns fresh research.</p>
@@ -2054,18 +2062,20 @@ async function runResearchQuery(mode){
   const out=document.getElementById('rqout');
   const deep=mode==='deep';
   const steps=deep?["Planning fresh research","Pulling + grading new sources","Answering from what cleared"]:["Reading your graded research","Checking what it actually says"];
-  const aid=Activity.start(steps,1300,deep?'Going deeper on your research':'Quick research check');
-  if(out)out.innerHTML='<p class=lead>'+(deep?'Spinning up fresh research…':'Checking your research…')+'</p>';
+  // terminal-style spew, inline in the drawer, until the answer comes back
+  if(out)out.innerHTML='<div class=rqspew id=rqspew></div>';
+  const spew=document.getElementById('rqspew');
+  let si=0; const pushLine=()=>{if(spew&&si<steps.length){const d=document.createElement('div');d.className='rqline';d.textContent='\\u203a '+steps[si];spew.appendChild(d);spew.scrollTop=spew.scrollHeight;si++;}};
+  pushLine(); const tmr=setInterval(pushLine,1100);
   try{
     const r=await _aiRun('/api/plan/'+SID+'/research/query',{question:q,mode:deep?'deep':'quick'});
-    const d=await r.json();
-    if(!r.ok){Activity.stop(aid);if(out)out.innerHTML='<div class=ferr>'+esc(d.error||'Could not run that.')+'</div>';RQ_BUSY=false;return;}
+    const d=await r.json(); clearInterval(tmr);
+    if(!r.ok){if(out)out.innerHTML='<div class=ferr>'+esc(d.error||'Could not run that.')+'</div>';RQ_BUSY=false;return;}
     if(d.cost!=null)meterTick({id:SID,cost:d.cost,tokens:d.tokens});
-    Activity.done(aid,deep?'Deeper research done.':'Checked.');
     let html='<div class="rqans md">'+mdToHtml(d.answer||'')+'</div>';
     if(d.rows&&d.rows.length){html+='<div class=rqrows>'+d.rows.map(x=>`<div class=rqrow>${x.mark==='ok'?'\\u2705':'\\u26a0\\ufe0f'} ${esc(x.text)} <span class=rqsrc>${esc(host(x.url))}</span></div>`).join('')+'</div>';}
     if(out)out.innerHTML=html;
-  }catch(e){Activity.stop(aid);if(out)out.innerHTML='<div class=ferr>Network error.</div>';}
+  }catch(e){clearInterval(tmr);if(out)out.innerHTML='<div class=ferr>Network error.</div>';}
   RQ_BUSY=false;
 }
 let SUM_OPEN=true;
@@ -2530,7 +2540,8 @@ function toggleSessionBoard(key,el){
   if(i>=0){SESSION_BOARD.splice(i,1);}else{SESSION_BOARD.push(key);}
   el.classList.toggle('on',on);el.setAttribute('aria-pressed',String(on));
 }
-// ── Forge a custom director: distill → draft → QA tree in a modal, then approve / retry / cancel ──
+// ── Forge a custom director: distill → draft → QA spew runs INLINE in the tools drawer (the board's
+// main content collapses), then the drafted director renders in place to approve / retry / cancel. ──
 let FORGE_DRAFT=null, FORGE_DESC='', FORGE_TIMER=null, FORGE_BUSY=false;
 const FORGE_STEPS=[{k:'distill',l:'Distilling the archetype'},{k:'draft',l:'Drafting the director'},{k:'qa',l:"QA: checking they're distinct + useful"}];
 function openForge(){
@@ -2538,14 +2549,19 @@ function openForge(){
   const desc=((document.getElementById('forgeinput')||{}).value||'').trim();
   if(desc.length<4){toast('Describe the director you want first.','err');const t=document.getElementById('forgeinput');if(t)t.focus();return;}
   FORGE_DESC=desc;
-  document.getElementById('modal-title').textContent='Forging your director';
-  document.getElementById('modal-body').innerHTML=
+  const bm=document.getElementById('boardmain'); if(bm)bm.style.display='none';   // collapse the board content
+  const panel=document.getElementById('forgepanel'); if(!panel)return;
+  panel.hidden=false;
+  panel.innerHTML=`<div class=dpanel-h><span>Forging your director</span><button type=button class=dpanel-x onclick=cancelForge() aria-label="Close">\\u00d7</button></div>`+
     `<p class=mfb-hint>Running a quick research + QA pass on: <i>${esc(desc.length>120?desc.slice(0,120)+'\\u2026':desc)}</i></p>`+
     `<div class=forgetree id=forgetree>`+FORGE_STEPS.map(st=>`<div class=ftstep data-k=${st.k}><span class=ftleaf aria-hidden=true>\\uD83C\\uDF43</span><span class=ftlabel>${esc(st.l)}</span><span class=ftnote></span></div>`).join('')+`</div>`+
-    `<div class=forgeout id=forgeout></div>`;
-  document.getElementById('modal-actions').innerHTML=`<button type=button class=ghost onclick=cancelForge()>Cancel</button>`;
-  _openModal('#modal-title');
+    `<div class=forgeout id=forgeout></div><div class=dpanel-acts id=forgeacts></div>`;
   runForge();
+}
+function _forgeClose(){
+  if(FORGE_TIMER){clearInterval(FORGE_TIMER);FORGE_TIMER=null;}
+  const panel=document.getElementById('forgepanel'); if(panel){panel.hidden=true;panel.innerHTML='';}
+  const bm=document.getElementById('boardmain'); if(bm)bm.style.display='';
 }
 function _forgeStep(k,state,note){const row=document.querySelector('#forgetree .ftstep[data-k="'+k+'"]');if(!row)return;
   row.classList.remove('running','done');if(state)row.classList.add(state);if(note!=null){const n=row.querySelector('.ftnote');if(n)n.textContent=note;}}
@@ -2575,14 +2591,14 @@ function showForgeResult(){
     `<div class=fc-blurb>${esc(p.blurb||'')}</div>`+
     `<div class="fc-voice md">${mdToHtml(p.voice||'')}</div>`+
     (doms?`<div class=fc-doms>${doms}</div>`:'')+`</div>`;
-  document.getElementById('modal-actions').innerHTML=
+  const acts=document.getElementById('forgeacts'); if(acts)acts.innerHTML=
     `<button type=button class=ghost onclick=cancelForge()>Cancel</button>`+
-    `<button type=button class=ghost onclick=runForge()>\\u21bb Retry</button>`+
+    `<button type=button class=ghost onclick=runForge()>\\u21bb Redo</button>`+
     `<button type=button class=mfb-go onclick=approveForge()>\\u2713 Seat on my board</button>`;
 }
 function showForgeError(msg){
   const out=document.getElementById('forgeout'); if(out)out.innerHTML=`<div class=ferr>${esc(msg)}</div>`;
-  document.getElementById('modal-actions').innerHTML=
+  const acts=document.getElementById('forgeacts'); if(acts)acts.innerHTML=
     `<button type=button class=ghost onclick=cancelForge()>Cancel</button>`+
     `<button type=button class=mfb-go onclick=runForge()>\\u21bb Retry</button>`;
 }
@@ -2594,11 +2610,11 @@ async function approveForge(){
     if(!r.ok){showForgeError(s.error||'Could not seat the director.');return;}
     SESSION_BOARD=null;                 // re-seed the board chips (the new director is now seated)
     const fi=document.getElementById('forgeinput'); if(fi)fi.value='';
-    _closeModal(); render(s); toast('\\u2726 '+(FORGE_DRAFT.name||'Director')+' seated on your board.','ok');
-    FORGE_DRAFT=null;
+    const nm=FORGE_DRAFT.name||'Director'; FORGE_DRAFT=null;
+    _forgeClose(); render(s); toast('\\u2726 '+nm+' seated on your board.','ok');
   }catch(e){showForgeError('Network error.');}
 }
-function cancelForge(){ if(FORGE_TIMER){clearInterval(FORGE_TIMER);FORGE_TIMER=null;} FORGE_DRAFT=null; FORGE_BUSY=false; _closeModal(); }
+function cancelForge(){ FORGE_DRAFT=null; FORGE_BUSY=false; _forgeClose(); }
 // Ask-an-expert + convene open the advisor drawer (a styled flyout, not a browser dialog).
 function ask(key){openDrawer('expert',key);}
 function convene(){openDrawer('board');}
@@ -2612,7 +2628,7 @@ function openDrawer(mode,key){
   out.style.display='none';out.innerHTML='';q.value='';go.disabled=false;
   if(mode==='expert'){
     const p=(CFG.archetypes||[]).find(a=>a.key===key)||{};
-    title.textContent=p.name||'Ask an expert';
+    title.textContent=p.name||'Expert take';
     sub.textContent=(p.blurb?('Composite advisor · '+p.blurb):'AI composite advisor')+', not professional advice.';
     go.textContent='Ask '+(p.name||'the advisor')+' →';
   }else{
