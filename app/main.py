@@ -1216,9 +1216,9 @@ body.ws .workspace{display:block;margin-left:300px;transition:margin-left .2s}
 body.ws .main{padding-top:14px}   /* line the center column's first card up with the left drawer's */
 body.ws .side{position:fixed;left:0;top:var(--hdr);bottom:0;width:300px;overflow-y:auto;background:var(--paper);border-right:1px solid #888;z-index:60;padding:14px 12px;transition:transform .2s}
 body.ws .side .sec{background:#fff}
-body.ws .drawerhead{display:flex;align-items:center;justify-content:space-between;margin:0 0 8px;padding-bottom:8px;border-bottom:1px solid var(--line)}
-body.ws .drawerhead b{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
-.drawerx{background:none;border:0;color:var(--muted);font-size:20px;line-height:1;cursor:pointer;padding:0 6px}
+body.ws .drawerhead{display:flex;align-items:center;justify-content:space-between;margin:0 0 4px;padding-bottom:3px}
+body.ws .drawerhead b{font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);opacity:.7}
+.drawerx{background:none;border:0;color:var(--muted);font-size:15px;line-height:1;cursor:pointer;padding:0 3px}
 .drawerx:hover{color:var(--ink)}
 body.ws.drawer-collapsed .side{transform:translateX(-100%)}
 body.ws.drawer-collapsed .workspace{margin-left:0}
@@ -3000,7 +3000,11 @@ async function signinEmail(){
 }
 async function signout(){await sb.auth.signOut();session=null;me=null;newPlan();renderAuth();}
 function show(id){['intake','workspace','profile'].forEach(x=>{const e=document.getElementById(x);if(e)e.style.display=(x===id?(x==='workspace'?'block':'block'):'none');});
-  document.body.classList.toggle('ws',id==='workspace');}   // ws → left tools drawer + full-width main
+  document.body.classList.toggle('ws',id==='workspace');
+  if(id==='workspace'&&_toolsNarrow())document.body.classList.add('drawer-collapsed');}   // tablet/smaller → tools start collapsed
+function _toolsNarrow(){return window.innerWidth<=1024;}   // tablet or smaller
+let _wasToolsNarrow=_toolsNarrow();
+window.addEventListener('resize',function(){const n=_toolsNarrow();if(n&&!_wasToolsNarrow&&document.body.classList.contains('ws'))document.body.classList.add('drawer-collapsed');_wasToolsNarrow=n;});
 function newPlan(){SIDEBAR_PHASE=null;ACT_RESEARCH=false;ACT_PROG_N=0;ACT_ID=null;VET_OPEN=true;VET_STEPPED=false;GREETED_SID=null;Activity.stopAll();closeViewer();SID=null;
   // render a FRESH intake — clear any in-flight button/idea/error left over from a prior build or sign-out
   const g=document.getElementById('go'); if(g){g.disabled=false;g.textContent='Build my plan →';}
