@@ -1104,7 +1104,7 @@ PAGE = """<!doctype html><html lang=en><head><meta charset=utf-8>
 <link rel="icon" href='data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"%3E%3Crect width="32" height="32" rx="8" fill="%23FF6B4A"/%3E%3Cpath d="M16 4c-3.2 2.8-4.3 7.4-4.3 11.8v3.2h8.6v-3.2C20.3 11.4 19.2 6.8 16 4z" fill="%23fff"/%3E%3Ccircle cx="16" cy="12" r="2.1" fill="%232E7CF6"/%3E%3Cpath d="M11.7 15.5 8.6 20.5l3.1-1.3z" fill="%23fff"/%3E%3Cpath d="M20.3 15.5 23.4 20.5l-3.1-1.3z" fill="%23fff"/%3E%3Cpath d="M13.6 19.5h4.8L16 25.5z" fill="%23FFC23F"/%3E%3C/svg%3E'>
 __FILG_HEAD__
 <style>
-:root{--bg:#fff;--ink:#222;--muted:#666;--line:#ccc;--card:#fff;--link:#1a0dab;--ok:#067d2f;--ok-bg:#eef6ef;--warn:#a85b00;--warn-bg:#f7f1e8;--kill:#b3261e;--kill-bg:#f7ecec;--coral:#1a0dab;--coral-d:#b3261e;--sky:#1a0dab;--sun:#a85b00}
+:root{--bg:#fff;--ink:#222;--muted:#666;--line:#ccc;--card:#fff;--paper:#f1f1f1;--hdr:52px;--link:#1a0dab;--ok:#067d2f;--ok-bg:#eef6ef;--warn:#a85b00;--warn-bg:#f7f1e8;--kill:#b3261e;--kill-bg:#f7ecec;--coral:#1a0dab;--coral-d:#b3261e;--sky:#1a0dab;--sun:#a85b00}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 Arial,Helvetica,sans-serif}
 a{color:var(--link)}
 .page{max-width:980px;margin:0 auto;padding:16px 16px 64px}
@@ -1112,9 +1112,10 @@ a{color:var(--link)}
 .drawerhead{display:none}.drawer-rail{display:none}
 body.ws .page{max-width:none}
 /* header spans edge-to-edge (FILG top-left), the tools drawer sits BELOW it */
-body.ws .top{position:sticky;top:0;z-index:65;background:var(--paper);border-bottom:1px solid #888;margin:-16px -16px 0;padding:9px 18px;min-height:30px}
+body.ws .top{position:sticky;top:0;z-index:65;background:var(--paper);border-bottom:1px solid #888;margin:-16px -16px 0;padding:0 18px;height:var(--hdr);margin-bottom:0}
 body.ws .workspace{display:block;margin-left:300px;transition:margin-left .2s}
-body.ws .side{position:fixed;left:0;top:49px;bottom:0;width:300px;overflow-y:auto;background:var(--paper);border-right:1px solid #888;z-index:60;padding:14px 12px;transition:transform .2s}
+body.ws .main{padding-top:14px}   /* line the center column's first card up with the left drawer's */
+body.ws .side{position:fixed;left:0;top:var(--hdr);bottom:0;width:300px;overflow-y:auto;background:var(--paper);border-right:1px solid #888;z-index:60;padding:14px 12px;transition:transform .2s}
 body.ws .side .sec{background:#fff}
 body.ws .drawerhead{display:flex;align-items:center;justify-content:space-between;margin:0 0 8px;padding-bottom:8px;border-bottom:1px solid var(--line)}
 body.ws .drawerhead b{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
@@ -1228,7 +1229,7 @@ body.hasbar .vibestrip{display:none}   /* don't fight the fixed action bar mid-b
 .node .eyebrow{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:700}
 .node h3{font-size:19px;font-weight:700;margin:4px 0 2px}.node .h3sub{color:var(--muted);font-size:13px;margin:0 0 12px}
 /* sticky offer summary pinned to the top of the center column (hidden until research fills it) */
-.main #answer.summary{position:sticky;top:49px;z-index:30;background:var(--card);border:1px solid var(--line);padding:13px 18px;margin:0 0 14px}
+.main #answer.summary{position:sticky;top:var(--hdr);z-index:30;background:var(--card);border:1px solid var(--line);padding:13px 18px;margin:0 0 14px}
 .main #answer.summary:empty{display:none}
 #answer.summary h2{font-size:17px;font-weight:700;margin:0 0 3px}
 #answer.summary .tag{color:var(--muted);font-size:12px;margin:0 0 7px}
