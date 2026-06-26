@@ -2132,9 +2132,8 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <div class="dsec open" id=ds-directors><button type=button class=dsec-h onclick="this.parentNode.classList.toggle('open')"><span>Your directors</span><span class=dsec-caret aria-hidden=true>▸</span></button>
 <div class=dsec-b><p class=bhelp>Tap to add or drop a director.</p>
 <div class=bdirs id=boarddirs></div>
-<button type=button class=convene id=convene onclick=convene()>Convene the board</button></div></div>
-<div class=dsec id=ds-convene><button type=button class=dsec-h onclick="this.parentNode.classList.toggle('open')"><span>Convene the board</span><span class=dsec-caret aria-hidden=true>▸</span></button>
-<div class=dsec-b id=convenebody></div></div>
+<button type=button class=convene id=convene onclick=convene()>Convene the board</button>
+<div id=convenebody></div></div></div>
 <div class=dsec id=ds-forge><button type=button class=dsec-h onclick="this.parentNode.classList.toggle('open')"><span>Forge a director</span><span class=dsec-caret aria-hidden=true>▸</span></button>
 <div class=dsec-b>
 <div id=forgemain><p class=forge-sub>Describe the advisor you wish you had. We can't say we trained them on anyone real… but we can't stop you from asking.</p>
@@ -2614,6 +2613,8 @@ function renderNode(s){
 // modal carries the optional notes, the suggested questions, and the per-step nudge chips.
 function renderActionBar(s){
   const bar=document.getElementById('actionbar'); if(!bar)return;
+  bar.classList.remove('working');                       // clear any leftover spinner state (the run finished → render)
+  const w=bar.querySelector('.ab-working'); if(w)w.remove();
   const killed=(s.vetting||{}).verdict==='kill';
   const show=!!(s&&s.proposal&&!s.done&&!killed&&(s.status==='building'||s.status==null));
   bar.classList.toggle('show',show);
@@ -3075,8 +3076,7 @@ function ask(key){openDrawer('expert',key);}
 // it with terminal spew, then render the board's take (skeptic + directors + takeaway) in place.
 function convene(){
   if(!requireKey())return;
-  ['ds-directors','ds-forge'].forEach(id=>{const e=document.getElementById(id);if(e)e.classList.remove('open');});
-  const ds=document.getElementById('ds-convene'); if(ds)ds.classList.add('open');
+  const dd=document.getElementById('ds-directors'); if(dd)dd.classList.add('open');   // keep the directors section open; the input renders inline below the button
   const body=document.getElementById('convenebody'); if(!body)return;
   body.innerHTML=`<p class=forge-sub>Convene your board on the plan so far. Leave it blank for a general read, or aim them at one thing.</p>`+
     `<label for=conveneq class=sr-only>What should the board weigh in on?</label>`+
