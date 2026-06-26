@@ -9,9 +9,9 @@ from conftest import wait_status
 GRAB_BAG = "I like basketball, Magic the Gathering, and food, and I'm good at sales"
 
 
-def test_coupon_redeem_unlocks_and_caps():
-    # The free-unlock coupon: redeeming grants PDF access (record_purchase); a re-redeem on the same
-    # account doesn't burn a use; a code is spent once used >= max_uses; the count is admin-only.
+def test_coupon_redeem_grants_credits_and_caps():
+    # A coupon redemption grants COUPON_CREDITS plan-unlock credits (capped, not unlimited); a re-redeem
+    # on the same account doesn't burn a use or re-grant; a code is spent once used >= max_uses.
     from app import store
     store.init()
     code = "TESTCAP2"
@@ -21,14 +21,15 @@ def test_coupon_redeem_unlocks_and_caps():
                     "VALUES (?,2,0,1,'t')", (code,))
     con.close()
     ok, _ = store.redeem_coupon(code, "a@x.com")
-    assert ok and store.has_purchased("a@x.com")
+    assert ok and store.credits_left("a@x.com") == store.COUPON_CREDITS
     assert store.coupon_status(code)["used"] == 1
-    ok2, reason2 = store.redeem_coupon(code, "a@x.com")          # same account → no second use burned
+    ok2, reason2 = store.redeem_coupon(code, "a@x.com")          # same account → no second use, no re-grant
     assert ok2 and reason2 == "already" and store.coupon_status(code)["used"] == 1
+    assert store.credits_left("a@x.com") == store.COUPON_CREDITS
     ok3, _ = store.redeem_coupon(code, "b@x.com")                # second distinct redeem hits the cap
     assert ok3 and store.coupon_status(code)["used"] == 2
     ok4, reason4 = store.redeem_coupon(code, "c@x.com")          # cap reached → spent
-    assert not ok4 and reason4 == "spent" and not store.has_purchased("c@x.com")
+    assert not ok4 and reason4 == "spent" and store.credits_left("c@x.com") == 0
     assert store.redeem_coupon("NOPE", "d@x.com") == (False, "invalid")
     assert store.coupon_status("FUCKYOUIMNOTGIVINGYOU7BUCKS")["max_uses"] == 100  # standing code seeded
 

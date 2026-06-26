@@ -95,6 +95,13 @@ def init() -> None:
                     "  used INTEGER NOT NULL DEFAULT 0,"
                     "  active INTEGER NOT NULL DEFAULT 1,"
                     "  created_at TEXT NOT NULL)")
+                # Who redeemed which coupon → a redemption grants its credits ONCE per account.
+                con.execute(
+                    "CREATE TABLE IF NOT EXISTS coupon_redemptions ("
+                    "  code TEXT NOT NULL,"
+                    "  email TEXT NOT NULL,"
+                    "  created_at TEXT NOT NULL,"
+                    "  PRIMARY KEY (code, email))")
                 # Seed the standing comp code. INSERT OR IGNORE → idempotent: re-deploys never reset the
                 # `used` counter (it lives on the persistent disk), so 100 uses means 100 across all time.
                 con.execute(
@@ -340,15 +347,20 @@ def record_purchase(email: str, *, stripe_session: str | None = None,
         con.close()
 
 
-# ── Coupons (free PDF unlock — bypass Stripe) ────────────────────────────────
+# ── Coupons (free PDF credits — bypass Stripe) ───────────────────────────────
+COUPON_CREDITS = 100   # a coupon redemption grants this many plan-unlock credits (capped, not unlimited)
+
+
 def redeem_coupon(code: str, normalized_email: str) -> tuple[bool, str]:
-    """Atomically redeem a coupon for `normalized_email`: if the code is active and has uses left,
-    bump its counter and grant the PDF unlock (record_purchase). Returns (ok, reason). `reason` is
-    coarse ('invalid' | 'spent') and never leaks the remaining-uses count. Idempotent-ish: a buyer
-    who already unlocked still 'succeeds' without burning a use."""
+    """Atomically redeem a coupon for `normalized_email`: if the code is active and has uses left, bump
+    its counter and grant COUPON_CREDITS plan-unlock credits to the account. Returns (ok, reason);
+    `reason` is coarse ('invalid' | 'spent') and never leaks the remaining-uses count. Redeeming the
+    same code on the same account again just confirms — no extra use burned, no extra credits."""
     code = (code or "").strip()
     if not code or not normalized_email:
         return False, "invalid"
+    normalized_email = normalized_email.strip().lower()
+    init()
     con = _connect()
     try:
         with con:  # single transaction → the SELECT + UPDATE can't race two redemptions past the cap
@@ -356,19 +368,20 @@ def redeem_coupon(code: str, normalized_email: str) -> tuple[bool, str]:
                 "SELECT max_uses, used, active FROM coupons WHERE code=?", (code,)).fetchone()
             if not row or not row["active"]:
                 return False, "invalid"
-            # Already unlocked on this account → don't spend a use, just confirm.
-            have = con.execute("SELECT 1 FROM pdf_purchases WHERE email=?",
-                               (normalized_email,)).fetchone()
-            if have:
+            # Already redeemed on this account → confirm without burning a use or re-granting credits.
+            if con.execute("SELECT 1 FROM coupon_redemptions WHERE code=? AND email=?",
+                           (code, normalized_email)).fetchone():
                 return True, "already"
             if row["used"] >= row["max_uses"]:
                 return False, "spent"
             now = datetime.now(timezone.utc).isoformat()
             con.execute("UPDATE coupons SET used=used+1 WHERE code=?", (code,))
+            con.execute("INSERT INTO coupon_redemptions (code, email, created_at) VALUES (?,?,?)",
+                        (code, normalized_email, now))
             con.execute(
-                "INSERT INTO pdf_purchases (email, stripe_session, amount_cents, created_at) "
-                "VALUES (?,?,?,?) ON CONFLICT(email) DO UPDATE SET created_at=excluded.created_at",
-                (normalized_email, f"coupon:{code}", 0, now))
+                "INSERT INTO pdf_credits (email, credits, updated_at) VALUES (?,?,?) "
+                "ON CONFLICT(email) DO UPDATE SET credits=credits+excluded.credits, updated_at=excluded.updated_at",
+                (normalized_email, COUPON_CREDITS, now))
         return True, "redeemed"
     finally:
         con.close()
@@ -502,6 +515,7 @@ def delete_account(email: str, normalized: str | None = None) -> None:
                 con.execute("DELETE FROM pdf_purchases WHERE email=?", (e,))
                 con.execute("DELETE FROM pdf_credits WHERE email=?", (e,))
                 con.execute("DELETE FROM pdf_unlocks WHERE email=?", (e,))
+                con.execute("DELETE FROM coupon_redemptions WHERE email=?", (e,))
     finally:
         con.close()
 

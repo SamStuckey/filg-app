@@ -3532,8 +3532,8 @@ async function redeemCoupon(){
     const r=await fetch('/api/coupon',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({code})});
     const d=await r.json();
     if(r.ok&&d.unlocked){
-      await loadMe();                               // refresh me.pdf_unlocked
-      toast('Code applied, your PDF is unlocked.','ok');
+      await loadMe();                               // refresh credits
+      toast('Code applied, PDF credits added.','ok');
       try{const pr=await fetch('/api/plan/'+SID,{headers:authHeaders()});render(await pr.json());}catch(e){}  // flip the button to Download
     } else { toast(d.error||'That code isn\\'t valid.','err'); }
   }catch(e){toast('Network error.','err');}
