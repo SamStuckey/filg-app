@@ -97,6 +97,21 @@ def test_branching_next_back_goto(client):
     assert s["tree"]["active"] == other and s["step"] == 1
 
 
+def test_nudges_returns_quick_edit_chips(client):
+    # The feedback modal's per-step nudge chips: a short list keyed to the current proposal.
+    # In mock mode this returns the static set; the route must echo cumulative cost/tokens.
+    sid = client.post("/api/plan/start",
+                      json={"idea": GRAB_BAG, "email": "nudge@x.com"}).json()["id"]
+    wait_status(client, sid)
+    r = client.get(f"/api/plan/{sid}/nudges")
+    assert r.status_code == 200
+    d = r.json()
+    assert isinstance(d["chips"], list) and len(d["chips"]) >= 1
+    assert "cost" in d and "tokens" in d
+    # unknown session → 404
+    assert client.get("/api/plan/nope/nudges").status_code == 404
+
+
 def test_redraft_regenerates_current_part_as_sibling(client):
     # "Not feeling it" regenerates the CURRENT part in place (a sibling at the same step), not a step back.
     sid = client.post("/api/plan/start",

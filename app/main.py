@@ -1272,6 +1272,29 @@ button:hover{background:#e8e8e8}button:disabled{opacity:.5;cursor:default}
 .couponrow{display:flex;gap:8px;margin-top:10px;max-width:340px}
 .couponrow input{flex:1;padding:8px 11px;border:1px solid var(--line);border-radius:8px;font:inherit;background:#fff}
 .couponrow .ghost{background:#fff;color:var(--ink);border:1px solid var(--line);white-space:nowrap}
+/* Bottom-pinned step actions: rework (back) vs roll-forward (next). Both open the feedback modal. */
+.actionbar{display:none}
+.actionbar.show{display:flex;position:fixed;bottom:0;left:300px;right:0;z-index:55;gap:12px;justify-content:flex-end;align-items:center;padding:12px 22px;background:var(--paper);border-top:1px solid #888;box-shadow:0 -2px 14px rgba(0,0,0,.08);transition:left .2s}
+body.ws.drawer-collapsed .actionbar.show{left:0}
+@media(max-width:820px){.actionbar.show{left:0}}
+body.hasbar .workspace{padding-bottom:74px}
+.ab-btn{font:inherit;font-weight:700;font-size:14px;padding:11px 20px;border-radius:9px;cursor:pointer;border:1px solid var(--line)}
+.ab-btn[disabled]{opacity:.5;cursor:default}
+.ab-back{background:#fff;color:var(--ink)}
+.ab-back:hover:not([disabled]){background:#f4f4f4}
+.ab-next{background:var(--ink);color:#fff;border-color:var(--ink)}
+.ab-next:hover:not([disabled]){opacity:.9}
+/* Feedback modal: the engine's open questions, the per-step nudge chips, and the note box. */
+.mfb-hint{margin:0 0 12px;color:var(--muted);font-size:13.5px}
+.mfb-sg{margin:0 0 12px}
+.mfb-h{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 6px}
+.mfb-q{display:block;width:100%;text-align:left;background:#f7f7f7;border:1px solid var(--line);color:var(--ink);font:inherit;font-size:13px;padding:7px 10px;border-radius:7px;margin:0 0 6px;cursor:pointer}
+.mfb-q:hover{background:#eee}
+.mfb-chips{display:flex;flex-wrap:wrap;gap:7px;margin:0 0 12px;min-height:30px}
+.mfb-chips .chip{cursor:pointer;font-size:12.5px;padding:5px 11px;border-radius:14px}
+.mfb-chips .chip:hover{background:#e8e8e8}
+.mfb-load{color:var(--muted);font-size:12.5px;font-style:italic;align-self:center}
+.mfb-go{background:var(--ink);color:#fff;border:1px solid var(--ink);font-weight:700}
 .addons .ax{display:flex;flex-wrap:wrap;gap:8px}
 .addons .ax button{flex:1;min-width:120px;background:#fff;border:1px solid var(--line);color:var(--ink);font-size:13px;font-weight:700;padding:9px 10px;text-align:left}
 .addons .ax .bl{display:block;font-size:11px;color:var(--muted);font-weight:400}
@@ -1513,6 +1536,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <div id=boardround></div>
 <div class=err id=err2></div>
 </main>
+<div class=actionbar id=actionbar aria-label="Plan step actions"></div>
 </div>
 <script>
 const CFG=window.FILG||{authEnabled:false};
@@ -1685,7 +1709,9 @@ function paintMeter(){
   const est=(KEY_PROVIDER==='anthropic')?'<span class=m-est> (estimated)</span>':'';
   el.innerHTML=`<span class=m-dot></span><b>${fmtTokens(tok)}</b> tokens · <b>$${cost.toFixed(d)}</b>${est}`;
 }
+let LAST_S=null;
 function render(s){
+  LAST_S=s;       // stash for the feedback modal (suggested questions, current step)
   meterTick(s);   // tick the session usage meter off this plan's cumulative cost/tokens
   CUR_NODE=(s.tree&&s.tree.active)||null;   // #7 key inline comments to the active node
   hideCmtPop();
@@ -1695,7 +1721,7 @@ function render(s){
     document.getElementById('node').innerHTML='<div class=node><h3>Hit a snag</h3><p class=lead>'+esc(s.error||'Something went wrong.')+'</p>'+fix+'<button type=button class=ghost onclick=newPlan()>Start over</button></div>';
     say('Something went wrong: '+(s.error||'')); return;
   }
-  renderResearch(s);renderVet(s);renderAnswer(s);renderTree(s);renderNode(s);renderAddons(s);renderBoard(s);renderBoardRound(s);renderDecisionTree(s);renderChat(s);renderStack(s);syncSidebar(s);
+  renderResearch(s);renderVet(s);renderAnswer(s);renderTree(s);renderNode(s);renderActionBar(s);renderAddons(s);renderBoard(s);renderBoardRound(s);renderDecisionTree(s);renderChat(s);renderStack(s);syncSidebar(s);
   if(s.done&&SID&&location.pathname!=='/plan/'+SID)history.pushState({plan:SID},'','/plan/'+SID);   // finished plan gets a clean URL (revisit + bookmark)
   if(s.done)say('Your plan is complete, all '+s.total+' parts ready to download.');
   else if(s.vetting&&s.vetting.verdict)say('Research graded. Verdict: '+s.vetting.verdict+'. Ready to build part '+((s.step||0)+1)+'.');
@@ -1843,20 +1869,25 @@ function renderNode(s){
   const intro=s.step===0?`<p class=lead>We build your plan in ${s.total} parts, one at a time, your call on each (watch them fill in on the left). First up:</p>`:'';
   const changeFlag=p.change?`<div class=changeflag><span class=cf-l>↳ Your note shaped this</span>${esc(p.change)}</div>`:'';
   const killed=(s.vetting||{}).verdict==='kill';   // hard gate: an unbuildable idea can't roll forward
-  const qs=killed?[]:suggestedFb(s);   // the engine's open questions, surfaced as clickable feedback
-  const sfb=qs.length?`<div class=sfb><div class=sfbh>Suggested feedback — the engine's open questions</div><ul class=sfbl>${qs.map(q=>`<li><button type=button data-q="${esc(q)}" onclick="useFb(this.dataset.q)">${esc(q)}</button></li>`).join('')}</ul></div>`:'';
-  const tail=killed?killGateHtml(s):
-    `<div class=fbk>${sfb}<label for=feedback class=sr-only>Your feedback on this part</label>`+
-    `<textarea id=feedback rows=2 placeholder="Give optional feedback and roll forward, or say what's not landing and regenerate this part."></textarea>`+
-    `<div class=chips>${FB_CHIPS.map(x=>`<button type=button class=chip onclick="addChip('${x}')">${esc(x)}</button>`).join('')}</div>`+
-    `<div class=navrow><button type=button class=b-back onclick=regenStep() title="Regenerate this part with your feedback (to go back a step, use the decision tree)">\\u21bb Not feeling it</button>`+
-    `<button type=button class=b-next onclick=nextStep()>I'm with you →</button></div>`+
-    `<div class=ferr id=ferr></div></div>`;
+  // The feedback input now lives in a modal opened by the bottom action bar (see renderActionBar).
+  const tail=killed?killGateHtml(s):`<div class=ferr id=ferr></div>`;
   const cmtbox=killed?'':`<div class=cmts id=cmtlist></div>`;   // #7 inline comments live under a buildable draft
   n.innerHTML=`<div class=node><span class=eyebrow>Your plan · part ${s.step+1} of ${s.total}</span><h3>${esc(p.title)}</h3><p class=h3sub>${esc(sec.sub||'')}</p>`+
     changeFlag+intro+
     `<div class="draft md">${mdToHtml(p.draft)}</div>`+cmtbox+tail;
   renderComments();
+}
+// The two pinned-to-the-bottom actions. They open the feedback modal (regen vs roll-forward); the
+// modal carries the optional notes, the suggested questions, and the per-step nudge chips.
+function renderActionBar(s){
+  const bar=document.getElementById('actionbar'); if(!bar)return;
+  const killed=(s.vetting||{}).verdict==='kill';
+  const show=!!(s&&s.proposal&&!s.done&&!killed&&(s.status==='building'||s.status==null));
+  bar.classList.toggle('show',show);
+  document.body.classList.toggle('hasbar',show);
+  if(show)bar.innerHTML=
+    `<button type=button class="ab-btn ab-back" onclick="openFeedbackModal('regen')" title="Rework this part with a note">\\u21bb Not feeling it</button>`+
+    `<button type=button class="ab-btn ab-next" onclick="openFeedbackModal('next')">I'm with you \\u2192</button>`;
 }
 // The kill gate is now a COACHING LADDER, not a hard wall. First hit = genuine advisement (Coach voice
 // + the off-ramps: add substance / re-check, or talk it through). Forcing past it with no substance rolls
@@ -1978,8 +2009,8 @@ document.addEventListener('mouseup',onDraftSelect);
 document.addEventListener('keydown',function(e){if(e.key==='Escape')hideCmtPop();});
 const FB_CHIPS=["go bolder","narrower niche","cheaper entry","B2B only","more specific","add an upsell"];
 function addChip(txt){const t=document.getElementById('feedback'); if(!t)return; t.value=(t.value?t.value.replace(/\\s*$/,'')+', ':'')+txt; t.focus();}
-function _navBusy(){const n=document.getElementById('node');if(n)n.querySelectorAll('button').forEach(b=>b.disabled=true);const f=document.getElementById('ferr');if(f)f.textContent='';document.getElementById('err2').textContent='';}
-function _navFree(){const n=document.getElementById('node');if(n)n.querySelectorAll('button').forEach(b=>b.disabled=false);}
+function _navBusy(){const n=document.getElementById('node');if(n)n.querySelectorAll('button').forEach(b=>b.disabled=true);const ab=document.getElementById('actionbar');if(ab)ab.querySelectorAll('button').forEach(b=>b.disabled=true);const f=document.getElementById('ferr');if(f)f.textContent='';document.getElementById('err2').textContent='';}
+function _navFree(){const n=document.getElementById('node');if(n)n.querySelectorAll('button').forEach(b=>b.disabled=false);const ab=document.getElementById('actionbar');if(ab)ab.querySelectorAll('button').forEach(b=>b.disabled=false);}
 function fbErr(msg){const f=document.getElementById('ferr');if(f)f.textContent=msg;else document.getElementById('err2').textContent=msg;}
 // Min-dwell so the spew registers even on fast (mock) responses, without slowing real builds much.
 function _aiRun(url,body){   // fetch + a min-show delay; the caller owns its Activity track
@@ -1988,9 +2019,14 @@ function _aiRun(url,body){   // fetch + a min-show delay; the caller owns its Ac
     new Promise(res=>setTimeout(res,850))
   ]).then(([r])=>r);
 }
+// The feedback value comes from the modal; commitFeedback stashes it so the action survives the
+// modal closing (and any confirm modal that reuses #modal). Falls back to a live #feedback if present.
+let PENDING_FB=null;
+function _fbRead(){ if(PENDING_FB!=null){const v=PENDING_FB;PENDING_FB=null;return v;}
+  return ((document.getElementById('feedback')||{}).value||'').trim(); }
 async function nextStep(){
   if(!requireKey())return;
-  const fb=((document.getElementById('feedback')||{}).value||'').trim();
+  const fb=_fbRead();
   const full=(fb+commentsSteer()).trim();   // #7 fold inline comments into the roll-forward
   _navBusy();
   const steps=[]; if(full)steps.push("Folding in your notes");
@@ -2022,8 +2058,8 @@ async function reCheck(){       // kill-gate rescue: re-vet with the substance t
 function startOver(){try{localStorage.removeItem('filg_idea');}catch(e){}location.href='/';}   // clean intake
 async function backStep(){
   if(!requireKey())return;
-  const fb=((document.getElementById('feedback')||{}).value||'').trim();
-  if(!fb){fbErr('Add a quick note on what to change, a note is required to go back a step.');const t=document.getElementById('feedback');if(t)t.focus();return;}
+  const fb=_fbRead();
+  if(!fb){fbErr('Add a quick note on what to change, a note is required to go back a step.');return;}
   _navBusy();
   const aid=Activity.start(["Re-opening the previous part","Re-drafting it from your note"],1200,'Going back a step');
   try{
@@ -2036,9 +2072,9 @@ async function backStep(){
 let REDRAFTS=0;   // consecutive regenerations of the CURRENT part → escalate to a snark nudge toward the tree
 async function regenStep(){
   if(!requireKey())return;
-  const fb=((document.getElementById('feedback')||{}).value||'').trim();
+  const fb=_fbRead();
   const steer=(fb+commentsSteer()).trim();   // #7 a note OR inline comments can steer the rework
-  if(!steer){fbErr("Tell me what's not landing — add a note or a comment to steer the rework.");const t=document.getElementById('feedback');if(t)t.focus();return;}
+  if(!steer){fbErr("Tell me what's not landing — add a note or a comment to steer the rework.");return;}
   if(REDRAFTS>=2){   // they keep mashing it — nudge toward backing up via the decision tree
     const ok=await uiConfirm('Still not feeling it?',"We can regenerate this part all day. If a rework keeps missing, try backing up to an earlier part from the decision tree on the left. Regenerate again?",'Regenerate anyway');
     if(!ok)return;
@@ -2052,6 +2088,45 @@ async function regenStep(){
     REDRAFTS++;
     Activity.done(aid,'Reworked this part.');render(s);
   }catch(e){Activity.stop(aid);fbErr('Network error.');_navFree();}
+}
+// ── Feedback modal: opened by the bottom action bar. Holds the suggested questions, the per-step
+// nudge chips, and the note box; "Go" commits to roll-forward (next) or rework (regen). ──
+let FB_MODE='next', NUDGE_CACHE={};
+function openFeedbackModal(mode){
+  if(!requireKey())return;
+  FB_MODE=mode; const s=LAST_S||{};
+  const qs=suggestedFb(s);
+  const sfb=qs.length?(`<div class=mfb-sg><div class=mfb-h>The engine's open questions</div>`+
+    qs.map(q=>`<button type=button class=mfb-q data-q="${esc(q)}" onclick="useFb(this.dataset.q)">${esc(q)}</button>`).join('')+`</div>`):'';
+  const regen=mode==='regen';
+  document.getElementById('modal-title').textContent=regen?"What's not landing?":'Roll forward, any notes?';
+  document.getElementById('modal-body').innerHTML=
+    `<p class=mfb-hint>${regen?"Tell me what to change and I'll rework this part.":'Add an optional note to steer the next part, or just go.'}</p>`+sfb+
+    `<div class=mfb-chips id=fbchips><span class=mfb-load>thinking up quick edits\\u2026</span></div>`+
+    `<label for=feedback class=sr-only>Your feedback</label>`+
+    `<textarea id=feedback rows=3 placeholder="${regen?'e.g. simpler pricing, drop the second tier':'Optional note\\u2026'}"></textarea>`+
+    `<div class=ferr id=ferr></div>`;
+  document.getElementById('modal-actions').innerHTML=
+    `<button type=button class=ghost onclick="_closeModal()">Cancel</button>`+
+    `<button type=button class=mfb-go onclick="commitFeedback()">${regen?'Rework it':'Go'} \\u2192</button>`;
+  _openModal('#feedback'); loadNudges();
+}
+function loadNudges(){
+  const node=CUR_NODE||'_';
+  const paint=(chips)=>{const el=document.getElementById('fbchips');if(!el)return;
+    el.innerHTML=(chips&&chips.length)?chips.map(c=>`<button type=button class=chip data-c="${esc(c)}" onclick="addChip(this.dataset.c)">${esc(c)}</button>`).join(''):'';};
+  if(NUDGE_CACHE[node]){paint(NUDGE_CACHE[node]);return;}
+  fetch('/api/plan/'+SID+'/nudges',{headers:authHeaders()}).then(r=>r.json()).then(d=>{
+    const chips=(d&&d.chips)||[]; NUDGE_CACHE[node]=chips; paint(chips);
+    if(d&&d.cost!=null)meterTick({id:SID,cost:d.cost,tokens:d.tokens});
+  }).catch(()=>paint([]));
+}
+function commitFeedback(){
+  const fb=((document.getElementById('feedback')||{}).value||'').trim();
+  const steer=(fb+commentsSteer()).trim();
+  if(FB_MODE==='regen'&&!steer){const f=document.getElementById('ferr');if(f)f.textContent='Add a note (or a comment) so I know what to change.';return;}
+  PENDING_FB=fb; _closeModal();
+  if(FB_MODE==='regen')regenStep(); else nextStep();
 }
 async function gotoNode(id){
   document.getElementById('err2').textContent='';
