@@ -1085,18 +1085,20 @@ a{color:var(--link)}
 .page{max-width:980px;margin:0 auto;padding:16px 16px 64px}
 /* Workspace = a pinned, collapsible left tools drawer + full-width main content. */
 .drawerhead{display:none}.drawer-rail{display:none}
-body.ws .page{max-width:none;padding-left:316px;transition:padding-left .2s}
-body.ws .workspace{display:block}
-body.ws .side{position:fixed;left:0;top:0;bottom:0;width:300px;overflow-y:auto;background:var(--paper);border-right:1px solid #888;z-index:60;padding:14px 12px;transition:transform .2s}
+body.ws .page{max-width:none}
+/* header spans edge-to-edge (FILG top-left), the tools drawer sits BELOW it */
+body.ws .top{position:sticky;top:0;z-index:65;background:var(--paper);border-bottom:1px solid #888;margin:-16px -16px 0;padding:9px 18px;min-height:30px}
+body.ws .workspace{display:block;margin-left:300px;transition:margin-left .2s}
+body.ws .side{position:fixed;left:0;top:49px;bottom:0;width:300px;overflow-y:auto;background:var(--paper);border-right:1px solid #888;z-index:60;padding:14px 12px;transition:transform .2s}
 body.ws .side .sec{background:#fff}
 body.ws .drawerhead{display:flex;align-items:center;justify-content:space-between;margin:0 0 8px;padding-bottom:8px;border-bottom:1px solid var(--line)}
 body.ws .drawerhead b{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
 .drawerx{background:none;border:0;color:var(--muted);font-size:20px;line-height:1;cursor:pointer;padding:0 6px}
 .drawerx:hover{color:var(--ink)}
 body.ws.drawer-collapsed .side{transform:translateX(-100%)}
-body.ws.drawer-collapsed .page{padding-left:16px}
+body.ws.drawer-collapsed .workspace{margin-left:0}
 body.ws.drawer-collapsed .drawer-rail{display:flex;align-items:center;gap:7px;position:fixed;left:0;top:50%;transform:translateY(-50%);z-index:61;background:#444;color:#fff;border:0;border-radius:0 8px 8px 0;padding:11px 9px;cursor:pointer;font-size:12px;font-weight:700;writing-mode:vertical-rl;letter-spacing:.05em}
-@media(max-width:820px){body.ws .page{padding-left:16px}body.ws .side{box-shadow:2px 0 18px rgba(0,0,0,.25)}}
+@media(max-width:820px){body.ws .workspace{margin-left:0}body.ws .side{box-shadow:2px 0 18px rgba(0,0,0,.25)}}
 .top{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
 .topright{display:flex;align-items:center;gap:12px}
 .modesw{display:inline-flex;border:1px solid #888}
