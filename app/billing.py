@@ -91,9 +91,20 @@ def create_pdf_checkout_url(email: str, *, user_id: str | None = None,
 
 
 def has_purchased(email: str, plan_key: str | None = None) -> bool:
-    """True iff this email may download the PDF for `plan_key` (normalized for alias dedup). An
-    account-wide grant (coupon/comp/legacy) unlocks every branch regardless of plan_key."""
+    """READ-only (no credit spent): may this email download `plan_key`'s PDF for free right now —
+    because it's comped or already unlocked this plan? Normalized for alias dedup."""
     return store.has_purchased(auth.normalize_email(email), plan_key)
+
+
+def credits_left(email: str) -> int:
+    """Remaining paid plan-unlock credits for this account (normalized)."""
+    return store.credits_left(auth.normalize_email(email))
+
+
+def claim_pdf(email: str, plan_key: str) -> bool:
+    """Claim `plan_key`'s PDF: free if comped/already-unlocked, else spend one credit. False if there's
+    no access and no credit (caller asks for payment). Normalized for alias dedup."""
+    return store.claim_pdf(auth.normalize_email(email), plan_key)
 
 
 def verify_webhook(payload: bytes, sig_header: str, tolerance: int = 300) -> dict | None:
@@ -120,8 +131,8 @@ def verify_webhook(payload: bytes, sig_header: str, tolerance: int = 300) -> dic
 
 
 def handle_event(event: dict) -> None:
-    """Translate a completed one-time Stripe Checkout into the PDF unlock — the only billing state we
-    keep."""
+    """Translate a completed one-time Stripe Checkout into 3 PDF plan-unlock credits (idempotent on the
+    session id, since Stripe retries webhooks)."""
     if event.get("type") != "checkout.session.completed":
         return
     obj = event.get("data", {}).get("object", {})
@@ -131,11 +142,7 @@ def handle_event(event: dict) -> None:
              or (obj.get("customer_details") or {}).get("email") or "").strip().lower()
     if not email:
         return
-    plan_key = (obj.get("metadata") or {}).get("plan_key") or None   # per-branch scope
-    store.record_purchase(auth.normalize_email(email),
-                          plan_key=plan_key,
-                          stripe_session=obj.get("id"),
-                          amount_cents=obj.get("amount_total"))
+    store.credit_for_session(auth.normalize_email(email), obj.get("id"))   # +3 credits, once per session
 
 
 if __name__ == "__main__":  # self-test (no network): webhook verification + event handling
@@ -150,9 +157,9 @@ if __name__ == "__main__":  # self-test (no network): webhook verification + eve
         sig = hmac.new(WEBHOOK_SECRET.encode(), ts.encode() + b"." + raw, hashlib.sha256).hexdigest()
         return raw, f"t={ts},v1={sig}"
 
-    # one-time $7 PDF unlock (mode=payment) → recorded as a purchase
+    # a $7 payment (mode=payment) → 3 plan-unlock credits on the normalized account
     pdf_ev = {"type": "checkout.session.completed",
-              "data": {"object": {"mode": "payment", "id": "cs_77", "amount_total": 1300,
+              "data": {"object": {"mode": "payment", "id": "cs_77", "amount_total": 700,
                                   "metadata": {"kind": "pdf"},
                                   "customer_details": {"email": "Pdf+x@Gmail.com"}}}}
     raw, header = _signed(pdf_ev)
@@ -160,5 +167,8 @@ if __name__ == "__main__":  # self-test (no network): webhook verification + eve
     assert verify_webhook(raw, header.replace("v1=", "v1=dead")) is None   # bad signature
     assert verify_webhook(raw, "garbage") is None
     handle_event(verify_webhook(raw, header))
-    assert has_purchased("pdf@gmail.com") is True          # normalized alias unlocks
-    print("billing.py self-test OK — $7 PDF unlock, no subscription")
+    assert credits_left("pdf@gmail.com") == 3              # normalized alias gets the credits
+    handle_event(verify_webhook(raw, header))              # Stripe retries the SAME session → no double grant
+    assert credits_left("pdf@gmail.com") == 3
+    assert claim_pdf("pdf@gmail.com", "sid:leaf") is True and credits_left("pdf@gmail.com") == 2
+    print("billing.py self-test OK — $7 = 3 plan credits, idempotent webhook")

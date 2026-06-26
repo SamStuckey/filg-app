@@ -30,7 +30,7 @@ def test_coupon_redeem_unlocks_and_caps():
     ok4, reason4 = store.redeem_coupon(code, "c@x.com")          # cap reached → spent
     assert not ok4 and reason4 == "spent" and not store.has_purchased("c@x.com")
     assert store.redeem_coupon("NOPE", "d@x.com") == (False, "invalid")
-    assert store.coupon_status("FUCKYOUIMNOTGIVINGYOU13BUCKS")["max_uses"] == 100  # standing code seeded
+    assert store.coupon_status("FUCKYOUIMNOTGIVINGYOU7BUCKS")["max_uses"] == 100  # standing code seeded
 
 
 def test_full_plan_flow_with_board(client):
@@ -113,17 +113,27 @@ def test_qa_pass_and_pdf_unlock_on_finish(client):
     assert s["pdfUnlocked"] is True                 # billing off in tests → PDF is open
 
 
-def test_per_branch_pdf_purchase_scoping():
-    # The $7 unlock is per finished branch: paying for one plan_key doesn't unlock another (a new
-    # branch built from an earlier node), but an account-wide grant unlocks every branch.
+def test_pdf_credits_three_plans_per_purchase():
+    # $7 grants 3 plan-unlock credits; a plan = a finished branch (plan_key). Claiming a new branch
+    # spends a credit; re-downloading an unlocked one is free; a comp grant unlocks everything.
     from app import store
     store.init()
-    assert store.has_purchased("brancher@x.com", "sidX:leaf1") is False
-    store.record_purchase("brancher@x.com", plan_key="sidX:leaf1", amount_cents=700)
+    assert store.credits_left("brancher@x.com") == 0
+    assert store.claim_pdf("brancher@x.com", "sidX:leaf1") is False    # no credits → must pay
+    store.grant_credits("brancher@x.com")                             # one $7 → 3 credits
+    assert store.credits_left("brancher@x.com") == 3
+    assert store.claim_pdf("brancher@x.com", "sidX:leaf1") is True and store.credits_left("brancher@x.com") == 2
+    assert store.claim_pdf("brancher@x.com", "sidX:leaf1") is True and store.credits_left("brancher@x.com") == 2  # re-download free
     assert store.has_purchased("brancher@x.com", "sidX:leaf1") is True
-    assert store.has_purchased("brancher@x.com", "sidX:leaf2") is False   # a new branch pays again
-    store.record_purchase("wide@x.com")                                   # account-wide grant
-    assert store.has_purchased("wide@x.com", "anything:goes") is True
+    assert store.has_purchased("brancher@x.com", "sidX:leaf2") is False   # a new branch isn't unlocked yet
+    assert store.claim_pdf("brancher@x.com", "sidX:leaf2") and store.claim_pdf("brancher@x.com", "sidX:leaf3")
+    assert store.credits_left("brancher@x.com") == 0
+    assert store.claim_pdf("brancher@x.com", "sidX:leaf4") is False    # 4th plan → out of credits
+    store.record_purchase("wide@x.com")                               # comp grant → unlimited
+    assert store.has_purchased("wide@x.com", "anything:goes") is True and store.claim_pdf("wide@x.com", "z:z") is True
+    # Stripe session idempotency: the same session grants credits only once
+    assert store.credit_for_session("s@x.com", "cs_1") is True and store.credits_left("s@x.com") == 3
+    assert store.credit_for_session("s@x.com", "cs_1") is False and store.credits_left("s@x.com") == 3
 
 
 def test_export_txt_available_with_data_unfinished(client):
@@ -469,18 +479,19 @@ def _finish_plan(client, email):
 
 
 def test_pdf_purchase_gate_raw_stays_free(client, monkeypatch):
-    # The locked model (business_plan §16.1): the polished PDF is the one paid action ($35 one-time),
-    # but the raw export is always free. When PDF billing is live and the user hasn't bought, the PDF
-    # route returns 402 needPurchase; the raw .zip is untouched.
+    # The polished PDF is the one paid action (3 plan-unlocks per $7); the raw export is always free.
+    # With billing live and no access/credits, the PDF route returns 402 needPurchase; the raw .zip is
+    # untouched. A claim (credit or unlock) lets it through.
     from app import main
     sid = _finish_plan(client, "gate@x.com")
 
-    monkeypatch.setattr(main, "_has_pdf_access", lambda *a, **k: False)   # locked (hasn't bought)
+    monkeypatch.setattr(main.billing, "PDF_BILLING_ENABLED", True)
+    monkeypatch.setattr(main.billing, "claim_pdf", lambda *a, **k: False)   # no access, no credits
     r = client.get(f"/api/plan/{sid}/plan.pdf")
     assert r.status_code == 402 and r.json().get("needPurchase") is True
     assert client.get(f"/api/plan/{sid}/download").status_code == 200    # raw export still free
 
-    monkeypatch.setattr(main, "_has_pdf_access", lambda *a, **k: True)    # bought → unlocked
+    monkeypatch.setattr(main.billing, "claim_pdf", lambda *a, **k: True)    # a credit/unlock clears it
     r = client.get(f"/api/plan/{sid}/plan.pdf")
     assert r.status_code == 200 and r.content[:5] == b"%PDF-"
 

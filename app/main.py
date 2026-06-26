@@ -61,10 +61,10 @@ MOCK = os.environ.get("FILG_MOCK") == "1"
 
 
 def _has_pdf_access(email: str, plan_key: str | None = None, verified: bool = False) -> bool:
-    """True iff this user may generate/download the polished PDF for `plan_key`: they bought the
-    one-time $7 unlock for THIS finished branch (or hold an account-wide comp/coupon grant), OR
-    billing isn't configured (dev/local → open). The $7 is per finished branch — go back in the
-    decision tree and build a new branch and the new plan is paid again, on its own data."""
+    """READ-only: may this user download `plan_key`'s PDF for FREE right now — already unlocked this
+    plan, or holds a comp grant — OR billing is off (dev/local → open)? Does NOT count available-but-
+    unspent credits (the button checks those separately); does NOT consume one. Spending a credit on a
+    new plan happens at download time via billing.claim_pdf."""
     if not billing.PDF_BILLING_ENABLED:
         return True
     return billing.has_purchased(email, plan_key)
@@ -302,15 +302,17 @@ async def api_me(request: Request):
                 "pdf_billing": billing.PDF_BILLING_ENABLED,
                 "pdf_price": billing.PDF_PRICE_CENTS}
     return {"signed_in": True, "email": authed["email"],
-            "pdf_unlocked": _has_pdf_access(authed["email"]),
+            "pdf_unlocked": _has_pdf_access(authed["email"]),   # account-wide comp (coupon) → unlimited
+            "pdf_credits": billing.credits_left(authed["email"]),   # paid plan-unlock credits remaining
             "pdf_billing": billing.PDF_BILLING_ENABLED, "pdf_price": billing.PDF_PRICE_CENTS,
             "auth_enabled": auth.AUTH_ENABLED}
 
 
 @app.post("/api/plan/{sid}/buy-pdf")
 async def api_buy_pdf(sid: str, request: Request):
-    """Start the one-time $7 Checkout that unlocks the polished investor-grade PDF (the single paid
-    action). Requires a signed-in owner of a finished plan. Raw export stays free."""
+    """Start a $7 Checkout that grants 3 PDF plan-unlock credits. Requires a signed-in owner of a
+    finished plan. If this plan is already unlocked (or there are credits to spend on it), no payment
+    is needed — the client just downloads. Raw export stays free."""
     authed = auth.user_from_request(request)
     if not authed or not authed["email"]:
         return JSONResponse({"error": "Sign in first."}, status_code=401)
@@ -319,8 +321,9 @@ async def api_buy_pdf(sid: str, request: Request):
     s = store.plan_get(sid)
     if not s or not _owns(request, s):
         return JSONResponse({"error": "unknown session"}, status_code=404)
-    if _has_pdf_access(authed["email"], _plan_key(s)):
-        return JSONResponse({"error": "You've already unlocked the polished PDF.", "unlocked": True},
+    # Already accessible (comped or already unlocked), or there are credits left → no payment needed.
+    if _has_pdf_access(authed["email"], _plan_key(s)) or billing.credits_left(authed["email"]) > 0:
+        return JSONResponse({"error": "You can download this plan already.", "unlocked": True},
                             status_code=409)
     try:
         url = billing.create_pdf_checkout_url(authed["email"], user_id=authed["id"], plan_id=sid,
@@ -626,9 +629,11 @@ def _plan_state(s: dict) -> dict:
         "progress": s.get("progress") or [],
         "cost": s.get("cost") or 0, "tokens": s.get("tokens") or 0,   # live session usage meter
         "stack": s.get("stack") or provider.DEFAULT_STACK,            # chosen model stack
-        # Per-branch PDF unlock for THIS active branch (the $7 is per finished branch). Drives the
-        # Download vs Unlock button; a new branch built from an earlier node comes back locked.
+        # PDF access for THIS active branch + the account's remaining credits. The button shows
+        # Download when this plan is already unlocked OR there are credits to spend; else Unlock ($7=3).
+        # A new branch built from an earlier node is a fresh plan_key → locked until claimed.
         "pdfUnlocked": _has_pdf_access((s.get("user") or "").strip(), _plan_key(s), verified=True),
+        "pdfCredits": store.credits_left((s.get("user") or "").strip()),
     }
 
 
@@ -1434,19 +1439,22 @@ def _slug(text: str) -> str:
 @app.get("/api/plan/{sid}/plan.pdf")
 async def api_plan_pdf(sid: str, request: Request):
     """The core artifact: a styled, branded PDF of the finished plan. Synthesizes an exec summary,
-    lays out the active branch's sections, and appends the graded-research evidence exhibit. This is
-    the ONE paid action: a one-time $7 unlocks it; raw `.zip`/`.md` export stays free. The synthesis
-    runs on the OWNER'S bound key (user-key-only — `_run_slot` binds their provider), same as every
-    other engine call. Builds from `s["files"]` = the final decision set."""
+    lays out the active branch's sections, and appends the graded-research evidence exhibit. Paid via
+    plan-unlock credits ($7 = 3 plans); re-downloading a plan you've already unlocked is free. The
+    synthesis runs on the OWNER'S bound key (`_run_slot` binds their provider). Builds from `s["files"]`
+    = the active branch's final decision set."""
     s = store.plan_get(sid)
     if not s or not _owns(request, s):
         return JSONResponse({"error": "unknown session"}, status_code=404)
     if s["status"] != "done":
         return JSONResponse({"error": "plan isn't finished yet"}, status_code=400)
     authed = auth.user_from_request(request)
-    if not _has_pdf_access((authed or {}).get("email", ""), _plan_key(s), verified=authed is not None):
+    email = (authed or {}).get("email", "")
+    # Claim this plan: free if comped or already unlocked, else spends one of the account's credits.
+    # When billing is off (dev) it's always open. False → no access and no credits → ask for payment.
+    if billing.PDF_BILLING_ENABLED and not billing.claim_pdf(email, _plan_key(s)):
         return JSONResponse(
-            {"error": "Unlock the polished, investor-grade PDF for a one-time $7. Your raw export is free.",
+            {"error": "You're out of PDF credits. Unlock 3 plans for $7. Your raw export is free.",
              "needPurchase": True, "price": billing.PDF_PRICE_CENTS}, status_code=402)
     try:
         with _run_slot(s.get("user"), s.get("stack")):
@@ -1730,6 +1738,7 @@ body.hasbar .vibestrip{display:none}   /* don't fight the fixed action bar mid-b
 .compose .row{display:flex;gap:8px;margin-top:10px}.compose .row button{flex:none}.compose .ghost{background:#fff;color:var(--muted);border:1px solid var(--line)}
 .done{background:var(--ok-bg);border:1px solid var(--line);padding:14px 16px;font-size:15px}
 .planacts{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}.planacts .ghost{background:#fff;color:var(--ink);border:1px solid var(--line)}
+.credithint{font-weight:400;font-size:11px;opacity:.85}
 .qabox{margin:12px 0;border:1px solid var(--line);background:var(--ok-bg);border-radius:8px;padding:10px 12px;font-size:13px}
 .qabox summary{cursor:pointer;font-weight:700;color:var(--ok)}
 .qabox ul{margin:8px 0 0;padding-left:18px}.qabox li{margin:2px 0}
@@ -2384,18 +2393,19 @@ function paintMeter(){
   el.innerHTML=`<span class=m-dot></span><b>${fmtTokens(tok)}</b> tokens · <b>$${cost.toFixed(d)}</b>${est}`;
 }
 let LAST_S=null;
-let PENDING_PDF=false;   // set on return from Stripe (?pdf=1): auto-download once the plan loads + unlocks
-// Back from Stripe checkout: poll for the per-branch unlock to land (the webhook is async), re-render
-// so the button flips Unlock→Download, then auto-grab the PDF. Stays on the finished plan throughout.
+let PENDING_PDF=false;   // set on return from Stripe (?pdf=1): auto-download once the credits land
+// Back from Stripe checkout: poll for the 3 credits to land (the webhook is async), re-render so the
+// button flips to Download, then auto-grab the PDF (which spends one credit). Stays on the plan.
+function pdfReady(){ return pdfUnlocked()||pdfCredits()>0; }
 async function autoGrabPdf(){
   for(let i=0;i<6;i++){
-    if(pdfUnlocked()){download();return;}
+    if(pdfReady()){download();return;}
     await loadMe();
     try{const r=await fetch('/api/plan/'+SID,{headers:authHeaders()});if(r.ok)render(await r.json());}catch(e){}
-    if(pdfUnlocked()){download();return;}
+    if(pdfReady()){download();return;}
     await new Promise(res=>setTimeout(res,1300));
   }
-  if(pdfUnlocked())download(); else toast('Payment received — tap "Download polished PDF".','ok');
+  if(pdfReady())download(); else toast('Payment received — tap "Download polished PDF".','ok');
 }
 function _bootDone(){const h=document.documentElement;if(h)h.classList.remove('route-plan');}   // clear the deep-link boot loader
 function render(s){
@@ -3484,14 +3494,17 @@ const Activity={
 };
 const RESEARCH_STEPS=["Focusing your idea into one sharp thesis","Spinning up research across the web","Pulling sources on the market and competition","Grading every source for credibility","Flagging vendor-marketing spin","Re-sourcing the headline stats to primary sources","Scoring demand, market, and willingness to pay","Drafting your first offer"];
 const PDF_STEPS=["Applying your board's input","Pulling your graded evidence","Building the decision matrix","Laying out a modern, on-brand design","Typesetting your PDF"];
-// ── The one paid action: polished PDF = one-time $7; raw export stays free ──
-// The $7 unlock is per finished branch: prefer the active plan's own flag (LAST_S.pdfUnlocked); fall
-// back to an account-wide grant (me.pdf_unlocked = coupon/comp/legacy) or billing-off dev.
+// ── PDF = plan-unlock credits: $7 buys 3 plans; re-downloading an unlocked plan is free ──
+// pdfUnlocked(): THIS plan is already free to grab (already unlocked, a comp grant, or billing-off dev).
 function pdfUnlocked(){ return !CFG.pdfBilling || !!(LAST_S&&LAST_S.pdfUnlocked) || !!(me&&me.pdf_unlocked); }
+// pdfCredits(): account credits left to spend on a new plan (prefer the plan state, fall back to /me).
+function pdfCredits(){ const v=(LAST_S&&LAST_S.pdfCredits); return (v!=null?v:((me&&me.pdf_credits)||0)); }
 function pdfPriceStr(){ const c=(me&&me.pdf_price)||CFG.pdfPrice||700; return '$'+Math.round(c/100); }
-function pdfBtn(){ return pdfUnlocked()
-  ? '<button type=button onclick=download()>⬇ Download polished PDF</button>'
-  : '<button type=button onclick=buyPdf()>🔓 Unlock polished PDF, '+pdfPriceStr()+'</button>'; }
+function pdfBtn(){
+  if(pdfUnlocked())return '<button type=button onclick=download()>⬇ Download polished PDF</button>';
+  if(pdfCredits()>0)return '<button type=button onclick=download()>⬇ Download polished PDF <span class=credithint>('+pdfCredits()+' plan'+(pdfCredits()>1?'s':'')+' left)</span></button>';
+  return '<button type=button onclick=buyPdf()>🔓 Unlock polished PDF, '+pdfPriceStr()+' for 3 plans</button>';
+}
 // The final QA pass report — surfaced on the finished plan so the editing step is visible (the
 // agentic-showcase point: show the machine checking its own work before it ships).
 function qaHtml(qa){
@@ -3526,18 +3539,20 @@ async function redeemCoupon(){
   }catch(e){toast('Network error.','err');}
 }
 async function download(){
-  if(!pdfUnlocked()){buyPdf();return;}     // locked → route to the $7 unlock, not a key prompt
+  if(!pdfUnlocked()&&pdfCredits()<=0){buyPdf();return;}   // no access + no credits → checkout
+  const willSpend=!pdfUnlocked()&&pdfCredits()>0;          // a new plan, paid from credits
   const aid=Activity.start(PDF_STEPS,1600,'Building your styled PDF');
   const minShow=new Promise(res=>setTimeout(res,2600));   // let the sequence breathe (covers fast mock runs)
   try{
     const [r]=await Promise.all([fetch('/api/plan/'+SID+'/plan.pdf',{headers:authHeaders()}),minShow]);
     if(!r.ok){let d={};try{d=await r.json();}catch(e){} Activity.stop(aid);
-      if(d.needPurchase){buyPdf();return;}             // server says locked → open checkout
+      if(d.needPurchase){buyPdf();return;}             // server says out of credits → open checkout
       toast(d.error||'Could not build the PDF.','err');return;}
     const blob=await r.blob();
     meterTick({id:SID,cost:r.headers.get('X-FILG-Cost'),tokens:r.headers.get('X-FILG-Tokens')});
     Activity.done(aid,'Your PDF is ready.');
     const u=URL.createObjectURL(blob),a=document.createElement('a');a.href=u;a.download='filg-business-plan.pdf';a.click();URL.revokeObjectURL(u);
+    if(willSpend){await loadMe();try{const pr=await fetch('/api/plan/'+SID,{headers:authHeaders()});if(pr.ok)render(await pr.json());}catch(e){}}  // refresh credits + flip to free re-download
   }catch(e){Activity.stop(aid);toast('Network error building the PDF.','err');}
 }
 async function downloadZip(){   // power-user escape hatch: the raw source files
