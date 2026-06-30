@@ -30,18 +30,9 @@ from pathlib import Path
 SKILLS_DIR = Path(__file__).resolve().parent / "skills"
 
 # Standing voice rule — appended to EVERY skill's system block so all generated, user-facing text
-# avoids the usual AI tells. One place to edit; applies everywhere (synthesis, advisor, board, …).
-VOICE = (
-    "## Voice (applies to everything you write)\n\n"
-    "Write like a human operator, not an AI.\n"
-    "- Do NOT use the em-dash or en-dash characters (— or –). Use commas, periods, or parentheses.\n"
-    "- Never use the words \"honest\" or \"honestly\" (or \"to be honest\"). Say it straight instead.\n"
-    "- Avoid these AI-tell words: delve, tapestry, comprehensive, leverage, synergy, robust, "
-    "seamless, elevate, unlock, realm, testament, ever-evolving, pivotal, crucial, vibrant, "
-    "underscore (as a verb), navigate (when used figuratively).\n"
-    "- Be plain, specific, and direct. No throat-clearing, no preamble.\n"
-    "- Structure with markdown headings and lists. Do not output rows of dashes as separators."
-)
+# avoids the usual AI tells. Single-sourced from `voice_lint.VOICE_RULE` (the same canonical blocklist
+# the deterministic linter gates on), so the prompt and the gate can never drift. One place to edit.
+from voice_lint import VOICE_RULE as VOICE  # noqa: E402
 
 
 def _parse(text: str) -> tuple[dict, str]:

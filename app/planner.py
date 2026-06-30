@@ -258,11 +258,18 @@ def propose(idea: str, section_key: str, research_data: dict, history: list,
                   f"do NOT repeat them):\n{plan_so_far}") if plan_so_far else ""
     # Durable instruction (the IP) lives in the synth_section skill → cached system block; only the
     # runtime data (which section, the idea, decisions, graded research, board) goes in the user message.
-    draft = call(f"plan_{section_key}", SONNET, max_tokens=800,
-                 system=skills.system("synth_section"), cache=True, prompt=(
+    base_prompt = (
         f"SECTION TO WRITE: **{section['title']}** ({section['sub']}).{guide_block}\n\n"
         f"IDEA:\n{idea}\n\nDECISIONS SO FAR:\n{prior}{plan_block}{founder_block}{steer_block}{board_block}\n\n"
-        f"CITED RESEARCH:\n{cited}\n\nFLAGGED (vendor) CLAIMS:\n{flagged}"))
+        f"CITED RESEARCH:\n{cited}\n\nFLAGGED (vendor) CLAIMS:\n{flagged}")
+    # VOICE author seam (spine): generate → voice-lint → reprompt until clean (bounded, accumulating).
+    # The system block stays cached (the IP); only the appended lint feedback varies per attempt.
+    import spine, voice_lint  # noqa: PLC0415 — engine modules, real mode only
+    def _gen(fb: str) -> str:
+        return call(f"plan_{section_key}", SONNET, max_tokens=800,
+                    system=skills.system("synth_section"), cache=True,
+                    prompt=base_prompt + (f"\n\n{fb}" if fb else ""))
+    draft, _residual = spine.run_author(_gen, voice_lint.lint, max_fix=3)
     return draft, round(LEDGER.cost_slice(start), 4)
 
 

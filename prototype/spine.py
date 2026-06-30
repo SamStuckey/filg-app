@@ -122,6 +122,46 @@ def _assemble_rows(cleared: list, rescues: list, to_label: list, claim_lane: dic
     return rows
 
 
+# ── the author seam (generate → validate → reprompt) ─────────────────────────
+def run_author(generate, validate, feedback_fn=None, max_fix: int = 3):
+    """Author seam runner. `generate(feedback: str) -> str` produces the artifact (feedback="" on the
+    first attempt); `validate(text) -> list` returns findings ([] = clean). Loop: generate → validate →
+    on findings, reprompt with located feedback, bounded by `max_fix`. Accumulates unique findings
+    across rounds (so a rewrite doesn't regress earlier fixes) and plateau-stops if a round repeats the
+    previous round's finding set. Returns `(text, findings)`: findings is empty on success, or the
+    residual on exhaustion/plateau — the CALLER surfaces it; we never strip the text (no post-processing).
+
+    This is the spine's author contract: the model rewrites, the validator gates, the script bounds."""
+    if feedback_fn is None:
+        import voice_lint  # noqa: PLC0415
+        feedback_fn = voice_lint.feedback
+
+    def _sig(findings):
+        return frozenset((getattr(f, "kind", str(f)), getattr(f, "context", "")) for f in findings)
+
+    seen: list = []
+    seen_keys: set = set()
+    feedback = ""
+    prev_sig = None
+    text = ""
+    for _ in range(max_fix):
+        text = generate(feedback)
+        findings = validate(text)
+        if not findings:
+            return text, []
+        for f in findings:                       # accumulate unique offenders across rounds
+            k = (getattr(f, "kind", str(f)), getattr(f, "context", ""))
+            if k not in seen_keys:
+                seen_keys.add(k)
+                seen.append(f)
+        sig = _sig(findings)
+        if sig == prev_sig:                      # plateau: same offenders twice running → stop
+            break
+        prev_sig = sig
+        feedback = feedback_fn(seen)
+    return text, validate(text)
+
+
 # ── the conductor ────────────────────────────────────────────────────────────
 def run_engine(idea: str, headlines: int, on_progress=None, on_phase=None):
     """Walk the engine phase DAG, delegating to the pipeline at each seam, and return
