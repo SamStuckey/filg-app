@@ -2101,6 +2101,8 @@ html.route-plan #bootload{display:flex;align-items:center;justify-content:center
   .pcard .act button{flex:1;min-width:88px}
 }
 .empty{color:var(--muted);text-align:center;margin:30px 0}
+.intro{color:var(--muted);max-width:62ch;margin:0 0 12px;line-height:1.55}
+.intro-how{color:var(--muted);max-width:62ch;margin:0 0 18px;line-height:1.55;font-size:14px}
 @media(max-width:820px){.workspace{grid-template-columns:1fr}}
 a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--link);outline-offset:2px}
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
@@ -2112,6 +2114,8 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <div class=note-banner id=banner></div>
 <div class=intake id=intake>
 <h2>You've got a business in you. Let's find it. 🚀</h2>
+<p class=intro>FILG turns a rough idea, or just your skills and interests, into a sellable plan: the offer, the pricing, the go-to-market, and a delivery playbook. It researches your market live and runs every stat through a source-credibility gate, so vendor marketing gets labeled instead of repeated back to you as fact.</p>
+<p class=intro-how>How to use it: type what you've got below (a real idea, or just what you're good at), then watch it research, grade the numbers, and build the plan with you. Free to run on your own API key.</p>
 <label for=idea class=sr-only>Your business idea</label>
 <textarea id=idea placeholder="e.g. I know automation and feel like I could help scale small dental businesses… OR I like doggies, the color purple, and live in a bunker with my 12 brothers, either way, let's find the business."></textarea>
 <div class=boardpick id=boardpick></div>
