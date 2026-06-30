@@ -549,3 +549,10 @@ def test_engine_error_sets_needkey_flag():
     import json
     body = json.loads(bytes(r.body))
     assert body.get("needKey") is True and "key" in body["error"].lower()
+
+
+def test_help_chat_returns_reply(client):
+    # The in-app product-help chat answers without a plan/session; mock mode returns a canned reply
+    # (real mode runs on the user's own key).
+    r = client.post("/api/help", json={"message": "how do I advance the build?", "history": []})
+    assert r.status_code == 200 and r.json().get("reply")

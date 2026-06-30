@@ -782,6 +782,68 @@ async def api_plans(request: Request):
     return {"email": authed["email"], "total": planner.N, "plans": plans}
 
 
+# ── In-app product help (a standard website help chat; runs on the user's key) ──
+HELP_SYSTEM = (
+    "You are the in-app help assistant for FILG (a tool that turns a rough business idea, or just "
+    "someone's skills and interests, into a vetted, buildable business plan). Help the user USE the "
+    "product. Be brief and concrete (2 to 5 sentences), friendly and plain.\n\n"
+    "How FILG works:\n"
+    "- Start on the home page: type your idea (or just what you're good at) and submit. FILG researches "
+    "the market and grades every stat through a source-credibility gate, so vendor marketing is labeled, "
+    "not repeated as fact. Then it vets the idea (pursue / pivot / kill).\n"
+    "- Then you build the plan one part at a time (7 parts: the setup, what you sell, why you win, "
+    "pricing, go-to-market, delivery, and a 30-day plan).\n"
+    "- To move through the build, use the buttons at the bottom: 'I'm with you' locks the current part in "
+    "and builds the next one; 'Not feeling it' redraws the current part, and you can add a note to steer "
+    "the rewrite. You can branch back to an earlier part anytime from the plan tree.\n"
+    "- Board of Directors: optional AI advisors that review your sections; you can convene them or forge a "
+    "custom one. 'Chat with your plan' is an advisor grounded in your actual plan and research.\n"
+    "- Export: the raw files (.zip) and the LLM hand-off prompt are free; the polished investor-grade PDF "
+    "is a one-time $13 unlock.\n"
+    "- Your key: FILG runs on your own API key (OpenRouter or Anthropic). Add or change it in the key "
+    "modal or the API config tab of your profile. Everything uses your key, usually pennies per plan.\n"
+    "- Your profile (/account) has tabs for your plans, files, API config, and account settings.\n\n"
+    "Only answer questions about USING FILG. If they ask for strategy on their specific business, point "
+    "them to 'Chat with your plan' or the Board. Do not invent features you're unsure about. Write "
+    "plainly: no em-dashes, no AI-tell words."
+)
+
+_HELP_MOCK = ("This is mock help (no key bound). In the real app: type your idea on the home page, then "
+              "use 'I'm with you' to lock each part and build the next, or 'Not feeling it' to redo a part. "
+              "It runs on your own API key.")
+
+
+@app.post("/api/help")
+async def api_help(request: Request):
+    """A standard website-style help chat for using the product. Runs on the user's own key (BYOK),
+    same as every other engine call; no plan/session required."""
+    if MOCK:
+        return {"reply": _HELP_MOCK}
+    authed = auth.user_from_request(request)
+    user = authed["email"] if authed else None
+    if _needs_key(user):
+        return JSONResponse({"error": "Add your API key to use help (it runs on your own key).",
+                             "needKey": True}, status_code=402)
+    body = await request.json()
+    message = (body.get("message") or "").strip()
+    if not message:
+        return JSONResponse({"error": "Ask a question."}, status_code=400)
+    if len(message) > 1000:
+        return JSONResponse({"error": "Keep it under 1000 characters."}, status_code=400)
+    convo = ""
+    for m in (body.get("history") or [])[-6:]:
+        who = "User" if m.get("role") == "user" else "Help"
+        convo += f"\n{who}: {str(m.get('content', ''))[:600]}"
+    try:
+        with provider.use(_provider_for(user)), provider.use_stack(provider.DEFAULT_STACK), pipeline.run_ledger():
+            reply = pipeline.call("help", pipeline.SONNET, max_tokens=400, system=HELP_SYSTEM, cache=True,
+                                  prompt=f"Conversation so far:{convo or ' (none)'}\n\nUser: {message}\n\n"
+                                         "Reply as the FILG help assistant.")
+    except Exception as e:  # noqa: BLE001
+        return _engine_error(e)
+    return {"reply": (reply or "").strip() or "Sorry, I couldn't generate a reply, try rephrasing."}
+
+
 @app.get("/api/plan/{sid}")
 async def api_plan_get(sid: str, request: Request):
     s = store.plan_get(sid)
@@ -1768,6 +1830,31 @@ body.hasbar .workspace{padding-bottom:74px}
 .ab-back:hover:not([disabled]){background:#f4f4f4}
 .ab-next{background:var(--ink);color:#fff;border-color:var(--ink)}
 .ab-next:hover:not([disabled]){opacity:.9}
+.actionbar .ab-hint{margin-right:auto;color:var(--muted);font-size:12.5px;max-width:50ch;line-height:1.35}
+@media(max-width:820px){.actionbar .ab-hint{display:none}}
+/* one-time coachmark explaining how to advance the build (shown once, dismissible) */
+.stephint{position:fixed;right:22px;bottom:80px;z-index:56;max-width:300px;background:var(--ink);color:#fff;padding:12px 14px;border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,.25);font-size:13px;line-height:1.45;display:none}
+.stephint.show{display:block}
+.stephint b{color:#fff}
+.stephint .sh-got{margin-top:9px;background:#fff;color:var(--ink);border:none;font-weight:700;font-size:12px;padding:6px 12px;border-radius:7px;cursor:pointer}
+@media(max-width:820px){.stephint{right:12px;left:12px;max-width:none;bottom:86px}}
+/* in-app product help chat (standard website help bubble; runs on the user's key) */
+.helpfab{position:fixed;right:18px;bottom:18px;z-index:60;width:48px;height:48px;border-radius:50%;background:var(--ink);color:#fff;border:none;cursor:pointer;font-size:22px;font-weight:700;box-shadow:0 2px 12px rgba(0,0,0,.22);display:flex;align-items:center;justify-content:center}
+.helpfab:hover{opacity:.92}
+body.hasbar .helpfab{bottom:78px}   /* lift above the action bar during a build */
+.helppanel{position:fixed;right:18px;bottom:78px;z-index:61;width:340px;max-width:calc(100vw - 36px);height:440px;max-height:calc(100vh - 130px);background:#fff;border:1px solid #888;border-radius:10px;overflow:hidden;flex-direction:column;display:none;box-shadow:0 6px 24px rgba(0,0,0,.2)}
+.helppanel.open{display:flex}
+body.hasbar .helppanel{bottom:138px}
+@media(max-width:820px){.helppanel{right:10px;left:10px;width:auto;bottom:84px}}
+.help-head{padding:10px 12px;border-bottom:1px solid var(--line);font-weight:700;display:flex;justify-content:space-between;align-items:center}
+.help-x{background:none;border:none;font-size:20px;line-height:1;cursor:pointer;color:var(--muted)}
+.help-body{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:8px;font-size:14px}
+.help-msg{padding:8px 10px;border-radius:9px;max-width:88%;line-height:1.45;white-space:normal}
+.help-msg.u{align-self:flex-end;background:var(--ink);color:#fff}
+.help-msg.a{align-self:flex-start;background:#f1f1f1;color:var(--ink)}
+.help-foot{border-top:1px solid var(--line);padding:8px;display:flex;gap:6px}
+.help-foot input{flex:1;min-width:0;border:1px solid var(--line);padding:8px;font:inherit;font-size:14px;border-radius:7px}
+.help-foot button{background:var(--ink);color:#fff;border:none;padding:0 14px;font-weight:700;cursor:pointer;border-radius:7px}
 /* Feedback modal: the engine's open questions, the per-step nudge chips, and the note box. */
 .mfb-hint{margin:0 0 12px;color:var(--muted);font-size:13.5px}
 .mfb-sg{margin:0 0 12px}
@@ -2221,6 +2308,13 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <div class=err id=err2></div>
 </main>
 <div class=actionbar id=actionbar aria-label="Plan step actions"></div>
+<div class=stephint id=stephint></div>
+<button type=button class=helpfab id=helpfab onclick=toggleHelp() aria-label="Help with using FILG" title="Help">?</button>
+<div class=helppanel id=helppanel role=dialog aria-label="FILG help">
+<div class=help-head><span>Help</span><button type=button class=help-x onclick=toggleHelp() aria-label="Close help">×</button></div>
+<div class=help-body id=help-body></div>
+<div class=help-foot><label for=help-input class=sr-only>Ask for help using FILG</label><input id=help-input type=text placeholder="How do I…?" onkeydown="if(event.key==='Enter')sendHelp()"><button type=button onclick=sendHelp()>Send</button></div>
+</div>
 </div>
 <script>
 const CFG=window.FILG||{authEnabled:false};
@@ -2680,8 +2774,10 @@ function renderActionBar(s){
   bar.classList.toggle('show',show);
   document.body.classList.toggle('hasbar',show);
   if(show)bar.innerHTML=
-    `<button type=button class="ab-btn ab-back" onclick="openFeedbackModal('regen')" title="Rework this part with a note">\\u21bb Not feeling it</button>`+
-    `<button type=button class="ab-btn ab-next" onclick="openFeedbackModal('next')">I'm with you \\u2192</button>`;
+    `<span class=ab-hint><b>I'm with you</b> locks this part and builds the next \\u00b7 <b>Not feeling it</b> redraws it (add a note to steer)</span>`+
+    `<button type=button class="ab-btn ab-back" onclick="openFeedbackModal('regen')" title="Redo this part \\u2014 you can add a note to steer the rewrite">\\u21bb Not feeling it</button>`+
+    `<button type=button class="ab-btn ab-next" onclick="openFeedbackModal('next')" title="Lock this part in and build the next one">I'm with you \\u2192</button>`;
+  if(show)maybeStepHint(); else dismissStepHint(true);
 }
 // The kill gate is now a COACHING LADDER, not a hard wall. First hit = genuine advisement (Coach voice
 // + the off-ramps: add substance / re-check, or talk it through). Forcing past it with no substance rolls
@@ -3935,6 +4031,44 @@ function routeFromPath(){   // deep-link / bookmark / revisit / back-fwd for /pl
   if(SID){SID=null;show('intake');renderBoardPick();gateIntake();}
 }
 window.addEventListener('popstate',routeFromPath);   // browser back/forward drives the SPA
+// ── First-run coachmark: explain how to advance the build (once, dismissible) ──
+function maybeStepHint(){
+  try{if(localStorage.getItem('filg_seen_stephint'))return;}catch(e){}
+  const el=document.getElementById('stephint'); if(!el||el.classList.contains('show'))return;
+  el.innerHTML=`<div>Two ways forward from here: <b>I'm with you \\u2192</b> locks this part in and builds the next one. `+
+    `<b>\\u21bb Not feeling it</b> redraws this part (add a note to steer it). You can branch back to any earlier part from the plan tree.</div>`+
+    `<button type=button class=sh-got onclick=dismissStepHint()>Got it</button>`;
+  el.classList.add('show');
+}
+function dismissStepHint(silent){
+  const el=document.getElementById('stephint'); if(el)el.classList.remove('show');
+  if(silent!==true){try{localStorage.setItem('filg_seen_stephint','1');}catch(e){}}
+}
+// ── In-app product help chat (standard website help bubble; runs on the user's key) ──
+let HELP_MSGS=[];
+function helpBubble(m){return `<div class="help-msg ${m.role==='user'?'u':'a'}">${esc(m.content).replace(/\\n/g,'<br>')}</div>`;}
+function renderHelp(){const b=document.getElementById('help-body'); if(!b)return; b.innerHTML=HELP_MSGS.map(helpBubble).join(''); b.scrollTop=b.scrollHeight;}
+function toggleHelp(){
+  const p=document.getElementById('helppanel'); if(!p)return;
+  const open=p.classList.toggle('open');
+  if(open){
+    if(!HELP_MSGS.length){HELP_MSGS.push({role:'assistant',content:"Hi! I can help you use FILG \\u2014 building a plan, the buttons, the board, exporting, or your key. What do you need?"});renderHelp();}
+    setTimeout(()=>{const i=document.getElementById('help-input'); if(i)i.focus();},30);
+  }
+}
+async function sendHelp(){
+  const i=document.getElementById('help-input'); const msg=(i.value||'').trim(); if(!msg)return;
+  if(!await requireKey())return;               // help runs on the user's own key (same BYOK wall)
+  i.value=''; HELP_MSGS.push({role:'user',content:msg}); renderHelp();
+  const b=document.getElementById('help-body');
+  const wait=document.createElement('div'); wait.className='help-msg a'; wait.textContent='\\u2026'; if(b){b.appendChild(wait);b.scrollTop=b.scrollHeight;}
+  try{
+    const r=await fetch('/api/help',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({message:msg,history:HELP_MSGS.slice(-8)})});
+    const d=await r.json(); wait.remove();
+    if(!r.ok){HELP_MSGS.push({role:'assistant',content:d.error||'Something went wrong.'}); renderHelp(); if(d.needKey)keyForm(); return;}
+    HELP_MSGS.push({role:'assistant',content:d.reply||'(no reply)'}); renderHelp();
+  }catch(e){wait.remove(); HELP_MSGS.push({role:'assistant',content:'Network error, try again.'}); renderHelp();}
+}
 function toggleTopMenu(){const r=document.querySelector('.topright'),h=document.getElementById('topham');if(!r)return;const open=r.classList.toggle('open');if(h)h.setAttribute('aria-expanded',String(open));}
 document.addEventListener('click',function(e){   // click outside the crew picker closes it
   const sp=document.getElementById('stackpop');
