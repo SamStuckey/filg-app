@@ -2347,7 +2347,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <div class=help-foot><label for=help-input class=sr-only>Ask for help using FILG</label><input id=help-input type=text placeholder="How do I…?" onkeydown="if(event.key==='Enter')sendHelp()"><button type=button onclick=sendHelp()>Send</button></div>
 </div>
 <div class=wpop-back id=welcomepop><div class=wpop role=dialog aria-modal=true aria-labelledby=wpop-title>
-<h2 id=wpop-title>Your first plan is on the house 🎁</h2>
+<h2 id=wpop-title>Your first prompt is on the house 🎁</h2>
 <p>The opening run, market research, the source-credibility grading, and your first draft, is free and on our key. No card, no setup.</p>
 <p>After that, add your own API key (OpenRouter or Anthropic) to keep building. It runs entirely on your key, usually pennies a plan.</p>
 <div class=wpop-acts><button type=button onclick=dismissWelcome()>Let's go</button></div>
