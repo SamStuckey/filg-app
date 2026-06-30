@@ -79,3 +79,37 @@ def test_no_board_means_no_reviews():
     s = _fresh_session()
     upd = planner.advance(s, "yes_and", None, mock=True)   # no directors
     assert "board" not in upd
+
+
+def test_qa_plan_voted_checklist_flags_and_feeds_editor(patch_call):
+    cap = {}
+
+    def reply(stage, prompt):
+        if stage == "plan_qa_check":          # the voted boolean checklist (×3 → same fail each round)
+            return ('[{"i":1,"verdict":"fail","why":"buyer drifts: dentists vs plumbers"},'
+                    '{"i":2,"verdict":"pass","why":""},{"i":3,"verdict":"pass","why":""}]')
+        if stage == "plan_qa":                # the editor pass must receive the failed check as feedback
+            cap["editor_prompt"] = prompt
+            return '{"notes": ["tightened a line"], "fixes": {}}'
+        return ""
+
+    patch_call(reply)
+    files = {"1-the-setup.md": "# Setup\nSell to dentists at $500.",
+             "2-what-you-sell.md": "# Offer\nSell to plumbers at $900."}
+    _revised, report, _cost = planner.qa_plan("idea", files, mock=False)
+    assert report["checks_failed"] == ["CONSISTENT"]
+    assert any("CONSISTENT" in n for n in report["notes"])
+    assert "CONSISTENT" in cap["editor_prompt"] and "buyer drifts" in cap["editor_prompt"]
+
+
+def test_qa_plan_all_checks_pass(patch_call):
+    def reply(stage, prompt):
+        if stage == "plan_qa_check":
+            return ('[{"i":1,"verdict":"pass","why":""},{"i":2,"verdict":"pass","why":""},'
+                    '{"i":3,"verdict":"pass","why":""}]')
+        return '{"notes": [], "fixes": {}}'
+
+    patch_call(reply)
+    _r, report, _c = planner.qa_plan("idea", {"1-the-setup.md": "# Setup\nbody long enough to be kept here"}, mock=False)
+    assert report["checks_failed"] == []
+    assert any("passed" in n for n in report["notes"])

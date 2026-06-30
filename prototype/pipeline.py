@@ -444,8 +444,31 @@ class Claim:
     as_of: int | None = None   # the year the stat refers to (for staleness labeling); None if unstated
 
 
+RESEARCH_ATTEMPTS = 2   # one reprompt if the first reply has no parseable, gradeable claims
+
+
+def _parse_claims(data) -> list[Claim]:
+    """The research seam's schema validator: a claim must carry text AND a real http(s) source URL
+    (a claim with no gradeable source can't go through the moat, so it's dropped, not laundered)."""
+    claims: list[Claim] = []
+    for c in data if isinstance(data, list) else []:
+        if not (isinstance(c, dict) and c.get("text") and c.get("source_url")):
+            continue
+        url = str(c["source_url"]).strip()
+        if not url.startswith(("http://", "https://")):
+            continue
+        claims.append(Claim(
+            text=str(c["text"]).strip(),
+            source_url=url,
+            quantitative=bool(c.get("quantitative", True)),
+            promotes_category=(c.get("promotes_category") or None),
+            as_of=_as_year(c.get("as_of")),
+        ))
+    return claims
+
+
 def research_lane(idea: str, lane: str) -> list[Claim]:
-    out = call("research", HAIKU, max_tokens=1600, tools=[WEB_SEARCH_TOOL], prompt=(
+    base = (
         "You are a research agent for an Idea→Offer engine. Use web_search to answer "
         "the question with SPECIFIC, sourced facts. Prefer hard numbers. For every "
         "claim, record the exact source URL you took it from.\n\n"
@@ -457,18 +480,18 @@ def research_lane(idea: str, lane: str) -> list[Claim]:
         '"as_of": 2024}]\n'
         "as_of = the year the statistic actually refers to (NOT today’s date), or null if the "
         "source states no year. This is used to flag stale numbers."
-    ))
-    data = extract_json(out) or []
-    claims = []
-    for c in data if isinstance(data, list) else []:
-        if isinstance(c, dict) and c.get("text") and c.get("source_url"):
-            claims.append(Claim(
-                text=str(c["text"]).strip(),
-                source_url=str(c["source_url"]).strip(),
-                quantitative=bool(c.get("quantitative", True)),
-                promotes_category=(c.get("promotes_category") or None),
-                as_of=_as_year(c.get("as_of")),
-            ))
+    )
+    # generate → validate (schema) → reprompt once if nothing parseable came back. Good runs return on
+    # the first attempt; only an empty/malformed reply costs the (bounded) retry.
+    feedback = ""
+    claims: list[Claim] = []
+    for _ in range(RESEARCH_ATTEMPTS):
+        out = call("research", HAIKU, max_tokens=1600, tools=[WEB_SEARCH_TOOL], prompt=base + feedback)
+        claims = _parse_claims(extract_json(out))
+        if claims:
+            return claims
+        feedback = ("\n\nYour previous reply had no parseable claims with real http(s) source URLs. "
+                    "Reply with ONLY the JSON array described above, each claim with a real source_url.")
     return claims
 
 

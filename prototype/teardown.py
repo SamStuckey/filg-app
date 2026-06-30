@@ -128,8 +128,9 @@ def build_evidence(idea: str, headlines: int, on_progress=None, on_phase=None):
 
 def write_prose(idea: str, rows) -> dict:
     from pipeline import call, extract_json, SONNET
+    import spine, voice_lint
     cleared_block = "\n".join(f"- {r['text']}" for r in rows if r["mark"] == "ok") or "- (none cleared)"
-    out = call("teardown_synth", SONNET, max_tokens=700, prompt=(
+    base = (
         "You write a short, punchy 'Cited Offer Teardown' for an operator audience. From the "
         "plain-text idea and the gate-CLEARED evidence below, output strictly JSON:\n"
         '{"title": "<=8-word hook", "idea_line": "one sentence restating the idea", '
@@ -137,7 +138,11 @@ def write_prose(idea: str, rows) -> dict:
         '"gtm": "one sentence: the sharpest first go-to-market move"}\n\n'
         "Be concrete and specific. Do NOT invent statistics, only the evidence section carries numbers.\n\n"
         f"IDEA:\n{idea}\n\nGATE-CLEARED EVIDENCE (context only):\n{cleared_block}"
-    ))
+    )
+    # VOICE author seam: generate → voice-lint → reprompt until clean (bounded).
+    out, _residual = spine.run_author(
+        lambda fb: call("teardown_synth", SONNET, max_tokens=700, prompt=base + (f"\n\n{fb}" if fb else "")),
+        voice_lint.lint)
     data = extract_json(out)
     data = data if isinstance(data, dict) else {}
     return {"title": data.get("title") or "Cited Offer Teardown",
@@ -215,18 +220,23 @@ def generate_full(idea: str, headlines: int = HEADLINES_TO_RESEARCH, mock: bool 
     if mock:
         return {**MOCK_FULL}
     from pipeline import LEDGER, call, SONNET
+    import spine, voice_lint
     start = len(LEDGER.rows)
     rows, stats, _lanes = build_evidence(idea, headlines)
     cited = "\n".join(f"- {r['text']} [{r['url']}]" for r in rows if r["mark"] == "ok") or "- (none)"
     flagged = "\n".join(f"- {r['text']} [{r['url']}]" for r in rows if r["mark"] == "warn") or "- (none)"
-    artifacts = call("synth_full", SONNET, max_tokens=3500, prompt=(
+    base = (
         "You are the synthesis stage of FILG. Produce a sellable artifact set in markdown with these "
         "sections: (1) Structured brief, (2) Offer definition, (3) Packaging + pricing, "
         "(4) Go-to-market, (5) Delivery playbook, (6) 30-day roadmap. Be concrete and specific.\n\n"
         "Use the CITED research freely (cite it inline with its URL). You MAY reference a FLAGGED "
         "claim only if you append '(unverified vendor claim)' right after it. Never present a flagged "
         "number as established fact.\n\n"
-        f"IDEA:\n{idea}\n\nCITED RESEARCH:\n{cited}\n\nFLAGGED (vendor) CLAIMS:\n{flagged}"))
+        f"IDEA:\n{idea}\n\nCITED RESEARCH:\n{cited}\n\nFLAGGED (vendor) CLAIMS:\n{flagged}")
+    # VOICE author seam: generate → voice-lint → reprompt until clean (bounded).
+    artifacts, _residual = spine.run_author(
+        lambda fb: call("synth_full", SONNET, max_tokens=3500, prompt=base + (f"\n\n{fb}" if fb else "")),
+        voice_lint.lint)
     return {"artifacts_md": artifacts, "rows": rows, "stats": stats,
             "cost": round(LEDGER.cost_slice(start), 4)}
 
