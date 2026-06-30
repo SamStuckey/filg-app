@@ -4107,7 +4107,8 @@ function toggleHelp(){
 }
 async function sendHelp(){
   const i=document.getElementById('help-input'); const msg=(i.value||'').trim(); if(!msg)return;
-  if(!await requireKey())return;               // help runs on the user's own key (same BYOK wall)
+  if(CFG.authEnabled&&!session){authModal();return;}   // login-gated like the rest of the app
+  if(!CFG.freeTaste){if(!await requireKey())return;}    // no hosted free path → must use your own key
   i.value=''; HELP_MSGS.push({role:'user',content:msg}); renderHelp();
   const b=document.getElementById('help-body');
   const wait=document.createElement('div'); wait.className='help-msg a'; wait.textContent='\\u2026'; if(b){b.appendChild(wait);b.scrollTop=b.scrollHeight;}
