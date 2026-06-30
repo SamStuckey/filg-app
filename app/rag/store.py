@@ -14,7 +14,9 @@ the schema grows without a rewrite.
 
 from __future__ import annotations
 
+import math
 import os
+import re
 import sqlite3
 import threading
 import uuid
@@ -26,6 +28,8 @@ DB = os.environ.get("FILG_DB") or os.path.join(os.path.dirname(_HERE), "filg.db"
 
 _init_lock = threading.Lock()
 _initialized = False
+_FTS_OK: bool | None = None        # set in init(): True if SQLite has FTS5, else fall back to a TF scan
+_TOKEN_RE = re.compile(r"[A-Za-z0-9]+")   # words for the FTS MATCH expr + the fallback scorer
 
 
 def _now() -> str:
@@ -71,6 +75,19 @@ def init() -> None:
                     con.execute("ALTER TABLE rag_chunks ADD COLUMN embedding BLOB")
                 if "dim" not in have:                       # vector length (validates query↔chunk match)
                     con.execute("ALTER TABLE rag_chunks ADD COLUMN dim INTEGER")
+                # Stage 3: a full-text index for keyword/BM25 search. FTS5 is a compile-time SQLite
+                # option; if this build lacks it we degrade to a term-frequency scan (still functional,
+                # just not true BM25). A contentless-ish standalone table keyed by chunk_id, backfilled
+                # from any pre-existing rows so it survives the stage-2→3 migration.
+                global _FTS_OK
+                try:
+                    con.execute("CREATE VIRTUAL TABLE IF NOT EXISTS rag_chunks_fts "
+                                "USING fts5(chunk_id UNINDEXED, text)")
+                    con.execute("INSERT INTO rag_chunks_fts(chunk_id, text) SELECT id, text "
+                                "FROM rag_chunks WHERE id NOT IN (SELECT chunk_id FROM rag_chunks_fts)")
+                    _FTS_OK = True
+                except sqlite3.OperationalError:
+                    _FTS_OK = False
         finally:
             con.close()
         _initialized = True
@@ -91,6 +108,9 @@ def add_document(title: str, chunks: list[str], source: str | None = None) -> st
             con.executemany(
                 "INSERT INTO rag_chunks (id, doc_id, ord, text, created_at) VALUES (?,?,?,?,?)",
                 [(f"{doc_id}:{i}", doc_id, i, c, now) for i, c in enumerate(chunks)])
+            if _FTS_OK:                              # mirror into the keyword index
+                con.executemany("INSERT INTO rag_chunks_fts(chunk_id, text) VALUES (?,?)",
+                                [(f"{doc_id}:{i}", c) for i, c in enumerate(chunks)])
     finally:
         con.close()
     return doc_id
@@ -234,6 +254,62 @@ def chunks_missing_embeddings(doc_id: str | None = None) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+# ── Keyword / BM25 search (stage 3) ──────────────────────────────────────────
+def fts_enabled() -> bool:
+    """True iff this SQLite build has FTS5 (so keyword search uses real BM25, not the fallback)."""
+    init()
+    return bool(_FTS_OK)
+
+
+def keyword_match(query: str, k: int = 5, doc_id: str | None = None) -> list[dict]:
+    """Top-k chunks by KEYWORD relevance. Uses SQLite FTS5's bm25() when available, else a
+    term-frequency fallback. Returns hit dicts {chunk_id, doc_id, ord, text, score} with score
+    normalized to higher=better (so it lines up with semantic_search's cosine score)."""
+    init()
+    toks = _TOKEN_RE.findall(query or "")
+    if not toks:
+        return []
+    con = _connect()
+    try:
+        if _FTS_OK:
+            # Quote each term so FTS treats it as a literal (no AND/OR/NEAR/column operators from user
+            # text); OR them so any term can match. bm25() returns more-negative = better, so negate it.
+            expr = " OR ".join(f'"{t}"' for t in toks)
+            params: list = [expr]
+            scope = ""
+            if doc_id:
+                scope = " AND c.doc_id=?"
+                params.append(doc_id)
+            params.append(k)
+            rows = con.execute(
+                "SELECT c.id AS chunk_id, c.doc_id, c.ord, c.text, bm25(rag_chunks_fts) AS b "
+                "FROM rag_chunks_fts f JOIN rag_chunks c ON c.id=f.chunk_id "
+                f"WHERE rag_chunks_fts MATCH ?{scope} ORDER BY b LIMIT ?", params).fetchall()
+            return [{"chunk_id": r["chunk_id"], "doc_id": r["doc_id"], "ord": r["ord"],
+                     "text": r["text"], "score": -float(r["b"])} for r in rows]
+        return _keyword_fallback(con, [t.lower() for t in toks], k, doc_id)
+    finally:
+        con.close()
+
+
+def _keyword_fallback(con, toks: list[str], k: int, doc_id: str | None) -> list[dict]:
+    """No-FTS5 fallback: score each chunk by how many query terms it contains, with a light length
+    normalization (long chunks shouldn't win just by being long). Crude vs BM25 but keeps keyword
+    search working anywhere; hybrid merge is rank-based (RRF) so the score scale doesn't matter."""
+    sql = "SELECT id, doc_id, ord, text FROM rag_chunks" + (" WHERE doc_id=?" if doc_id else "")
+    rows = con.execute(sql, (doc_id,) if doc_id else ()).fetchall()
+    scored = []
+    wanted = set(toks)
+    for r in rows:
+        words = _TOKEN_RE.findall(r["text"].lower())
+        tf = sum(words.count(t) for t in wanted)
+        if tf:
+            scored.append((tf / (1.0 + math.log(len(words) + 1)), r))
+    scored.sort(key=lambda x: -x[0])
+    return [{"chunk_id": r["id"], "doc_id": r["doc_id"], "ord": r["ord"], "text": r["text"],
+             "score": float(s)} for s, r in scored[:k]]
+
+
 def delete_document(doc_id: str) -> None:
     init()
     con = _connect()
@@ -241,6 +317,8 @@ def delete_document(doc_id: str) -> None:
         with con:
             con.execute("DELETE FROM rag_chunks WHERE doc_id=?", (doc_id,))
             con.execute("DELETE FROM rag_documents WHERE id=?", (doc_id,))
+            if _FTS_OK:
+                con.execute("DELETE FROM rag_chunks_fts WHERE chunk_id LIKE ?", (f"{doc_id}:%",))
     finally:
         con.close()
 
@@ -253,6 +331,8 @@ def clear() -> None:
         with con:
             con.execute("DELETE FROM rag_chunks")
             con.execute("DELETE FROM rag_documents")
+            if _FTS_OK:
+                con.execute("DELETE FROM rag_chunks_fts")
     finally:
         con.close()
 
@@ -277,6 +357,14 @@ if __name__ == "__main__":  # self-test (no API)
     emb = embedded_chunks(did)
     assert len(emb) == 3 and not chunks_missing_embeddings(did)
     assert emb[1]["dim"] == 3 and list(emb[1]["vector"]) == [0.0, 1.0, 0.0]   # decodes back exactly
+    # stage 3: keyword/BM25 over the FTS index
+    kid = add_document("Codes", ["restart the device to reset",
+                                 "error E-4021 means a failed auth token", "office in Denver"])
+    km = keyword_match("E-4021 token", k=2)
+    assert km and km[0]["text"].startswith("error E-4021"), km   # exact rare term wins
+    assert keyword_match("nonexistentword", k=5) == [] and keyword_match("", k=5) == []
+    assert all(km[i]["score"] >= km[i + 1]["score"] for i in range(len(km) - 1))   # higher=better
+    delete_document(kid)
     delete_document(did)
     assert counts() == {"documents": 1, "chunks": 2} and get_document(did) is None
     clear()

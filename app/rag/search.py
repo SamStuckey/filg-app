@@ -63,6 +63,24 @@ def semantic_search(query: str, k: int = DEFAULT_K, *, doc_id: str | None = None
              "text": rows[i]["text"], "score": score} for i, score in _cosine_topk(qvec, mat, k)]
 
 
+def keyword_search(query: str, k: int = DEFAULT_K, *, doc_id: str | None = None) -> list[dict]:
+    """Top-k chunks by KEYWORD relevance (BM25 via SQLite FTS5; a term-frequency fallback where FTS5
+    isn't compiled in). Same hit shape as semantic_search; score is higher=better.
+
+    WHY KEEP THIS ALONGSIDE SEMANTIC SEARCH
+        Semantic search is fuzzy on exact tokens — a product name, an error code like 'E-4021', a rare
+        bit of jargon — because those get averaged into the chunk's meaning vector. BM25 matches the
+        literal term and rewards it precisely (rare words count more, see store.keyword_match). It's
+        blind to synonyms, which is exactly semantic search's strength — so stage 4 runs BOTH and
+        merges them. That complementarity is the whole point of 'hybrid'.
+
+    BM25, in one breath: score a chunk by how many query terms it contains (term frequency, with
+    diminishing returns), weighting RARE terms more than common ones (inverse document frequency), and
+    discounting long chunks so they don't win just by being long. SQLite's bm25() does all of this.
+    """
+    return store.keyword_match(query, k, doc_id=doc_id)
+
+
 def index_pending(*, doc_id: str | None = None, mock: bool = False, key: str | None = None,
                   model: str = embed.DEFAULT_MODEL) -> int:
     """Embed every chunk that doesn't have a vector yet and persist it. Returns how many were embedded.
@@ -93,5 +111,16 @@ if __name__ == "__main__":  # self-test (mock embeddings, no API)
     fin = semantic_search("how much did revenue grow?", k=1, mock=True)
     assert fin[0]["ord"] == 2, fin                      # the revenue chunk (shares "revenue")
     assert index_pending(mock=True) == 0                # idempotent
+
+    # keyword/BM25: nails an exact rare token that semantic search would smear
     store.clear()
-    print(f"rag/search.py self-test OK — cat→chunk0 ({hits[0]['score']:.3f}), revenue→chunk2 semantic top-k")
+    store.add_document("codes", [
+        "To reset, restart the device and clear the cache.",
+        "Error E-4021 indicates a failed authentication token.",
+        "Our billing office is located in downtown Denver.",
+    ])
+    kw = keyword_search("E-4021", k=2)
+    assert kw and kw[0]["ord"] == 1, kw                  # the error-code chunk
+    store.clear()
+    print(f"rag/search.py self-test OK — semantic top-k (cat {hits[0]['score']:.3f}) + "
+          f"keyword/BM25 exact-term (E-4021→chunk1); fts={store.fts_enabled()}")
