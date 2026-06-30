@@ -58,6 +58,10 @@ import pipeline   # noqa: E402 — engine: per-run cost ledger (run_ledger) for 
 from . import auth, billing, keys, planner, store  # noqa: E402 — persistence, auth, billing, BYOK keys
 
 MOCK = os.environ.get("FILG_MOCK") == "1"
+# "First query on us": when FILG has its own hosted Anthropic key (ANTHROPIC_API_KEY on Render), a
+# keyless user gets a free welcome run on it — metered by usage.py (per-user free cap + daily kill
+# switch). No hosted key → fully BYOK (the user must bring their own key from the first submit).
+HOSTED_FREE = bool(os.environ.get("ANTHROPIC_API_KEY"))
 
 
 def _has_pdf_access(email: str, plan_key: str | None = None, verified: bool = False) -> bool:
@@ -101,15 +105,18 @@ def _build_provider(kind: str, key: str):
 
 
 def _provider_for(user: str):
-    """The provider a session should run on: the user's saved key (OpenRouter or Anthropic), else None
-    (FILG's key). provider.use(None) is a no-op, so callers can wrap unconditionally."""
-    if not (user and keys.enabled()):
-        return None
-    key = keys.get_key(user)
-    if not key:
-        return None
-    kind = (keys.key_meta(user) or {}).get("provider") or "openrouter"
-    return _build_provider(kind, key)
+    """The provider a session should run on: the user's saved key (OpenRouter or Anthropic, bills_filg
+    False), else FILG's hosted key for the free taste (bills_filg True, metered), else None. Keyless
+    users are walled (`_key_wall`) on every route EXCEPT the free-taste ones (start, help), so the
+    hosted fallback only ever runs there."""
+    if user and keys.enabled():
+        key = keys.get_key(user)
+        if key:
+            kind = (keys.key_meta(user) or {}).get("provider") or "openrouter"
+            return _build_provider(kind, key)
+    if HOSTED_FREE:
+        return provider.anthropic_provider()   # FILG's hosted key (bills_filg=True → metered + clamped)
+    return None
 
 
 def _meter(user: str, cost: float) -> None:
@@ -193,7 +200,8 @@ def _run_slot(user: str, stack: str | None = None):
         _inflight[user] = _inflight.get(user, 0) + 1
     try:
         prov = _provider_for(user)
-        stk = provider.clamp_stack(stack, byok=prov is not None)
+        # Only a user-PAID provider unlocks the premium (Opus) tiers; FILG's hosted free key stays clamped.
+        stk = provider.clamp_stack(stack, byok=bool(prov and not prov.bills_filg))
         with provider.use(prov), provider.use_stack(stk), pipeline.run_ledger():
             yield
     finally:
@@ -706,13 +714,14 @@ def _plan_research(session_id: str, idea: str, user: str) -> None:
             progress.append(line)            # the UI spews it live AND the session meter ticks during research
             store.plan_save(session_id, progress=list(progress),
                             tokens=pipeline.LEDGER.tokens(), cost=round(pipeline.LEDGER.cost(), 4))
-        prov = _provider_for(user)   # BYOK: run the whole pre-build pass on the user's key if they have one
+        prov = _provider_for(user)   # user's own key if they have one, else FILG's hosted free key
         sess0 = store.plan_get(session_id) or {}
-        stk = provider.clamp_stack(sess0.get("stack"), byok=prov is not None)  # premium clamped off FILG's key
+        # premium (Opus) only on a user-paid key; FILG's hosted free key is clamped to the default tier
+        stk = provider.clamp_stack(sess0.get("stack"), byok=bool(prov and not prov.bills_filg))
         with provider.use(prov), provider.use_stack(stk), pipeline.run_ledger():
             prep = planner.prepare(idea, mock=MOCK, on_progress=on_progress)  # intake → research → vet → draft
             toks = pipeline.LEDGER.tokens()   # the welcome run's token usage → seeds the session meter
-        if prov is None:   # FILG's key → meter the free run; BYOK is the user's spend, not metered
+        if prov is not None and prov.bills_filg:   # FILG's hosted key → meter the free run (invariant #3)
             # the per-user free-taste counter dedupes on the normalized email (alias anti-abuse)
             usage.record_run(auth.normalize_email(user), prep["research_cost"])  # free run + daily total
             usage.record_spend(prep["cost"] - prep["research_cost"])  # intake + vet + first draft → daily
@@ -741,13 +750,20 @@ async def api_plan_start(request: Request):
     if _is_byok(user):
         pass   # has a key → unlimited plans on their own spend
     elif keys.enabled():
-        # BYOK on, no key: require a key from the very first submit. FILG covers no runs now —
-        # the free "welcome" plan is gone (Sam 2026-06-25); even the first query is on the user's key.
-        return JSONResponse(
-            {"error": "Add your API key to build your plan — an OpenRouter key (any model) or your "
-                      "own Anthropic key (Claude direct). You pay the provider directly, usually "
-                      "pennies a plan.",
-             "needKey": True}, status_code=402)
+        # BYOK on, no key: the FIRST query is on us when FILG has a hosted key (metered + kill-switch).
+        # Once the free taste is used (or the daily budget is hit), degrade to a key prompt, not a wall.
+        if not HOSTED_FREE:
+            return JSONResponse(
+                {"error": "Add your API key to build your plan — an OpenRouter key (any model) or your "
+                          "own Anthropic key (Claude direct), usually pennies a plan.",
+                 "needKey": True}, status_code=402)
+        allowed, _reason = usage.can_run(taste_id, is_paid=False)   # per-user free cap + daily kill switch
+        if not allowed:
+            return JSONResponse(
+                {"error": "Your free plan is used up (or today's free pool is tapped). Add your own "
+                          "API key to keep building — usually pennies a plan.",
+                 "needKey": True}, status_code=402)
+        # else: first query on the house → runs on FILG's hosted key; _plan_research meters it
     else:
         # BYOK off (no FILG_KEY_SECRET — dev/local): keep the legacy free-cap behavior so dev works.
         allowed, reason = usage.can_run(taste_id, is_paid=False)
@@ -821,8 +837,12 @@ async def api_help(request: Request):
         return {"reply": _HELP_MOCK}
     authed = auth.user_from_request(request)
     user = authed["email"] if authed else None
-    if _needs_key(user):
+    prov = _provider_for(user)   # the user's own key, else FILG's hosted free key (if configured)
+    if prov is None:
         return JSONResponse({"error": "Add your API key to use help (it runs on your own key).",
+                             "needKey": True}, status_code=402)
+    if prov.bills_filg and usage.kill_switch_tripped():   # help on FILG's key respects the daily budget
+        return JSONResponse({"error": "Today's free pool is tapped. Add your own API key to keep going.",
                              "needKey": True}, status_code=402)
     body = await request.json()
     message = (body.get("message") or "").strip()
@@ -835,10 +855,12 @@ async def api_help(request: Request):
         who = "User" if m.get("role") == "user" else "Help"
         convo += f"\n{who}: {str(m.get('content', ''))[:600]}"
     try:
-        with provider.use(_provider_for(user)), provider.use_stack(provider.DEFAULT_STACK), pipeline.run_ledger():
+        with provider.use(prov), provider.use_stack(provider.DEFAULT_STACK), pipeline.run_ledger():
             reply = pipeline.call("help", pipeline.SONNET, max_tokens=400, system=HELP_SYSTEM, cache=True,
                                   prompt=f"Conversation so far:{convo or ' (none)'}\n\nUser: {message}\n\n"
                                          "Reply as the FILG help assistant.")
+            if prov.bills_filg:                    # FILG-key help → count it against the daily budget
+                usage.record_spend(round(pipeline.LEDGER.cost(), 4))
     except Exception as e:  # noqa: BLE001
         return _engine_error(e)
     return {"reply": (reply or "").strip() or "Sorry, I couldn't generate a reply, try rephrasing."}
@@ -1547,6 +1569,7 @@ def _render_page(deep: bool = False) -> str:
     cfg = json.dumps({"authEnabled": auth.AUTH_ENABLED,
                       "pdfBilling": billing.PDF_BILLING_ENABLED, "pdfPrice": billing.PDF_PRICE_CENTS,
                       "byokEnabled": keys.enabled(),
+                      "freeTaste": bool(HOSTED_FREE and keys.enabled()),   # first query on FILG's key
                       "supabaseUrl": os.environ.get("SUPABASE_URL", ""),
                       "supabaseAnon": (os.environ.get("SUPABASE_PUBLISHABLE_KEY")
                                        or os.environ.get("SUPABASE_ANON_KEY", "")),
@@ -1855,6 +1878,14 @@ body.hasbar .helppanel{bottom:138px}
 .help-foot{border-top:1px solid var(--line);padding:8px;display:flex;gap:6px}
 .help-foot input{flex:1;min-width:0;border:1px solid var(--line);padding:8px;font:inherit;font-size:14px;border-radius:7px}
 .help-foot button{background:var(--ink);color:#fff;border:none;padding:0 14px;font-weight:700;cursor:pointer;border-radius:7px}
+/* welcome popup: "your first plan is on us" (shown once when a free taste is offered) */
+.wpop-back{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:70;display:none;align-items:center;justify-content:center;padding:20px}
+.wpop-back.show{display:flex}
+.wpop{background:#fff;border:1px solid #888;border-radius:12px;max-width:440px;width:100%;padding:22px 24px;box-shadow:0 10px 40px rgba(0,0,0,.3)}
+.wpop h2{margin:0 0 10px;font-size:22px;line-height:1.2}
+.wpop p{margin:0 0 12px;color:var(--muted);line-height:1.5;font-size:15px}
+.wpop .wpop-acts{display:flex;justify-content:flex-end;margin-top:4px}
+.wpop button{font:inherit;font-weight:700;border:1px solid var(--ink);background:var(--ink);color:#fff;padding:9px 18px;border-radius:8px;cursor:pointer}
 /* Feedback modal: the engine's open questions, the per-step nudge chips, and the note box. */
 .mfb-hint{margin:0 0 12px;color:var(--muted);font-size:13.5px}
 .mfb-sg{margin:0 0 12px}
@@ -2315,6 +2346,12 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <div class=help-body id=help-body></div>
 <div class=help-foot><label for=help-input class=sr-only>Ask for help using FILG</label><input id=help-input type=text placeholder="How do I…?" onkeydown="if(event.key==='Enter')sendHelp()"><button type=button onclick=sendHelp()>Send</button></div>
 </div>
+<div class=wpop-back id=welcomepop><div class=wpop role=dialog aria-modal=true aria-labelledby=wpop-title>
+<h2 id=wpop-title>Your first plan is on the house 🎁</h2>
+<p>The opening run, market research, the source-credibility grading, and your first draft, is free and on our key. No card, no setup.</p>
+<p>After that, add your own API key (OpenRouter or Anthropic) to keep building. It runs entirely on your key, usually pennies a plan.</p>
+<div class=wpop-acts><button type=button onclick=dismissWelcome()>Let's go</button></div>
+</div></div>
 </div>
 <script>
 const CFG=window.FILG||{authEnabled:false};
@@ -2345,7 +2382,9 @@ async function start(){
   const go=document.getElementById('go'), err=document.getElementById('err');
   err.textContent='';document.getElementById('joke').innerHTML='';
   if(CFG.authEnabled&&!session){authModal();return;}   // signed-out → prompt them with the sign-in modal
-  if(!await requireKey())return;                              // no key → open the key modal; we cover no runs now
+  // First query is on us when a free taste is offered → let the server gate (it 402s needKey once the
+  // taste is used). Otherwise (no hosted key) require a key up front.
+  if(!CFG.freeTaste){if(!await requireKey())return;}
   const body={idea, stack:STACK_CUR}; if(!session) body.email=email;   // signed in → identity from the token
   if(BOARD.length) body.directors=BOARD;               // optional Board of Directors → vets each step
   go.disabled=true; go.textContent='Researching…'; ACT_RESEARCH=false;
@@ -2353,7 +2392,7 @@ async function start(){
     const r=await fetch('/api/plan/start',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify(body)});
     const d=await r.json();
     if(d.gibberish){showJoke(d);go.disabled=false;go.textContent='Build my plan →';return;}  // nonsense → roast, no run
-    if(!r.ok){err.textContent=d.error||'Something went wrong.';if(d.needKey)err.innerHTML+=' <a href=# onclick="keyModal();return false">Add your key →</a>';go.disabled=false;go.textContent='Build my plan →';return;}
+    if(!r.ok){err.textContent=d.error||'Something went wrong.';go.disabled=false;go.textContent='Build my plan →';if(d.needKey)keyForm();return;}
     SID=d.id;meterBaseline(d.id);   // baseline at 0 so this run's tokens fully count as research streams in
     clearWorkspace();   // new idea → never flash the previous plan's PURSUE block / tabs / research
     history.replaceState({plan:SID},'','/plan/'+SID);   // put the plan in the URL NOW so a mid-build refresh restores it
@@ -4029,6 +4068,7 @@ function routeFromPath(){   // deep-link / bookmark / revisit / back-fwd for /pl
   }
   _bootDone();   // not a known route → drop the boot loader and show home
   if(SID){SID=null;show('intake');renderBoardPick();gateIntake();}
+  maybeWelcome();   // first-time "your first plan is on us" popup (once, only when a free taste is offered)
 }
 window.addEventListener('popstate',routeFromPath);   // browser back/forward drives the SPA
 // ── First-run coachmark: explain how to advance the build (once, dismissible) ──
@@ -4044,6 +4084,15 @@ function dismissStepHint(silent){
   const el=document.getElementById('stephint'); if(el)el.classList.remove('show');
   if(silent!==true){try{localStorage.setItem('filg_seen_stephint','1');}catch(e){}}
 }
+// ── Welcome popup: "your first plan is on us" (once, only when a free taste is offered) ──
+function maybeWelcome(){
+  if(!CFG.freeTaste)return;
+  try{if(localStorage.getItem('filg_seen_welcome'))return;}catch(e){}
+  const el=document.getElementById('welcomepop'); if(el)el.classList.add('show');
+}
+function dismissWelcome(){const el=document.getElementById('welcomepop');if(el)el.classList.remove('show');
+  try{localStorage.setItem('filg_seen_welcome','1');}catch(e){}
+  const i=document.getElementById('idea'); if(i)i.focus();}
 // ── In-app product help chat (standard website help bubble; runs on the user's key) ──
 let HELP_MSGS=[];
 function helpBubble(m){return `<div class="help-msg ${m.role==='user'?'u':'a'}">${esc(m.content).replace(/\\n/g,'<br>')}</div>`;}
