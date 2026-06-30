@@ -24,7 +24,6 @@ import json
 import os
 import re
 import sys
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 from urllib.parse import urlparse
 
@@ -112,102 +111,19 @@ def page_shell(title: str, desc: str, body: str) -> str:
             f'</div></body></html>')
 
 
-# ─── Evidence assembly (deterministic, the gate's labels are authoritative) ──
-def build_evidence(idea: str, headlines: int, on_progress=None):
-    from pipeline import plan, research_lane, gate_claims, research_primary, bound  # lazy: --rebuild needs no API
-
-    def emit(line: str) -> None:
-        if on_progress:
-            try:
-                on_progress(line)
-            except Exception:  # noqa: BLE001 — progress is best-effort, never break the run
-                pass
-
-    lanes = plan(idea)
-    # Announce the fan-out shape so the UI can paint one leaf per research lane up front (grey), then
-    # turn each leaf green as its §LANEDONE§ arrives. All emits run on THIS (the prepare) thread — never
-    # inside a worker — so there's no cross-thread store write.
-    emit("§LANES§" + json.dumps(lanes))
-    # bound() re-binds the active provider/stack/ledger inside each worker — threads don't inherit
-    # contextvars, so without it the fan-out runs on FILG's default key, not the user's BYOK key.
-    lane_claims_map: dict[int, list] = {}
-    with ThreadPoolExecutor(max_workers=3) as ex:
-        futs = {ex.submit(bound(lambda ln=ln: research_lane(idea, ln))): li
-                for li, ln in enumerate(lanes)}
-        for f in as_completed(futs):
-            li = futs[f]
-            lane_claims_map[li] = f.result()
-            emit("§LANEDONE§" + str(li))   # leaf li → green
-    lane_claims = [lane_claims_map.get(li, []) for li in range(len(lanes))]
-    # remember which lane each claim came from, so the UI can show who researched what (persona-owned
-    # lanes are assigned app-side; this just carries the provenance through the gate).
-    claim_lane = {id(c): lanes[li] for li, lane in enumerate(lane_claims) for c in lane}
-    quant = [c for lane in lane_claims for c in lane if c.quantitative]
-
-    verdicts = gate_claims(quant)  # one batched judge call for all claims (token win)
-    cleared = [v for v in verdicts if not v.flagged]
-    flagged = [v for v in verdicts if v.flagged]
-
-    to_chase, to_label = flagged[:headlines], flagged[headlines:]
-    rescues = []
-    if to_chase:
-        with ThreadPoolExecutor(max_workers=3) as ex:
-            rescues = list(ex.map(bound(lambda v: research_primary(v.claim)), to_chase))
-        for v, r in zip(to_chase, rescues):
-            r.original = v
-
-    rows = []
-    # tier + judge are the gate's per-claim reasoning — carried through so the UI can show HOW the
-    # moat graded each number (surfaced in 'see how it works' mode), not just the ok/warn outcome.
-    for v in cleared:
-        rows.append({"mark": "ok", "text": v.claim.text, "url": v.claim.source_url,
-                     "note": f"{v.tier.lower()} source, passed the gate",
-                     "tier": v.tier, "judge": v.judge, "as_of": v.claim.as_of,
-                     "lane": claim_lane.get(id(v.claim), "")})
-    for r in rescues:
-        if r.rescued and r.new_url:
-            rows.append({"mark": "ok", "text": r.original.claim.text, "url": r.new_url,
-                         "note": "re-sourced to a primary/neutral cite by the gate",
-                         "tier": r.original.tier, "judge": r.original.judge,
-                         "as_of": r.original.claim.as_of,
-                         "lane": claim_lane.get(id(r.original.claim), "")})
-        else:
-            v = r.original
-            rows.append({"mark": "warn", "text": v.claim.text, "url": v.claim.source_url,
-                         "note": "no neutral source found, treat as a vendor marketing claim",
-                         "tier": v.tier, "judge": v.judge, "as_of": v.claim.as_of,
-                         "lane": claim_lane.get(id(v.claim), "")})
-    for v in to_label:
-        rows.append({"mark": "warn", "text": v.claim.text, "url": v.claim.source_url,
-                     "note": "flagged self-interested/vendor source, unverified",
-                     "tier": v.tier, "judge": v.judge, "as_of": v.claim.as_of,
-                     "lane": claim_lane.get(id(v.claim), "")})
-
-    _label_triangulation(rows)   # cheap surface-only: mark cleared claims single-source vs corroborated
-    n_clean = sum(1 for r in rows if r["mark"] == "ok")
-    stats = {"checked": len(rows), "cleared": n_clean, "flagged": len(rows) - n_clean}
-    return rows, stats, lanes
+# ─── Evidence assembly — delegates to the deterministic spine conductor ───────
+# The engine's control flow (plan → research → grade → re-search → assemble) lives in
+# `spine.run_engine` now: a fixed phase DAG walked by a conductor, the model only at the
+# typed seams, every phase logged. build_evidence stays the public entry point (same
+# signature + return shape) so the app layer is unchanged. `on_phase(PhaseEvent)` is an
+# optional typed run-log stream (the showcase activity feed); on_progress still carries the
+# §LANES§/§LANEDONE§ leaf sentinels. Design: filg-docs/engine_spine_design.md.
+from spine import _label_triangulation, _row_host  # noqa: E402,F401 — engine helpers live in the spine now
 
 
-def _row_host(url: str) -> str:
-    m = re.search(r"https?://([^/]+)", url or "")
-    return (m.group(1).replace("www.", "") if m else (url or "")).strip().lower()
-
-
-def _label_triangulation(rows: list) -> None:
-    """No extra research calls (label-don't-chase, invariant #2). A cleared claim is 'corroborated'
-    only if another cleared claim in the SAME lane cites a DIFFERENT host; otherwise it rests on a
-    single source. We just label it — we never go re-search to force a second cite."""
-    by_lane: dict = {}
-    for r in rows:
-        if r["mark"] == "ok":
-            by_lane.setdefault(r.get("lane", ""), []).append(_row_host(r["url"]))
-    for r in rows:
-        if r["mark"] != "ok":
-            continue
-        hosts = by_lane.get(r.get("lane", ""), [])
-        r["sources"] = len(set(hosts))
-        r["corroborated"] = len({h for h in hosts if h and h != _row_host(r["url"])}) >= 1
+def build_evidence(idea: str, headlines: int, on_progress=None, on_phase=None):
+    from spine import run_engine  # lazy: --rebuild needs no API and no pipeline import
+    return run_engine(idea, headlines, on_progress=on_progress, on_phase=on_phase)
 
 
 def write_prose(idea: str, rows) -> dict:
