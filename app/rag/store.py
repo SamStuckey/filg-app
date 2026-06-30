@@ -65,9 +65,12 @@ def init() -> None:
                     "  created_at TEXT NOT NULL)")
                 con.execute("CREATE INDEX IF NOT EXISTS ix_rag_chunks_doc ON rag_chunks(doc_id)")
                 # Migration block for columns/tables added in later stages (SQLite has no
-                # ADD COLUMN IF NOT EXISTS) — stages 2/3 fill this in.
+                # ADD COLUMN IF NOT EXISTS) — add any missing column, ignore if present.
                 have = {r["name"] for r in con.execute("PRAGMA table_info(rag_chunks)")}
-                _ = have  # (no added columns yet; stage 2 adds `embedding`)
+                if "embedding" not in have:                 # stage 2: the chunk's vector
+                    con.execute("ALTER TABLE rag_chunks ADD COLUMN embedding BLOB")
+                if "dim" not in have:                       # vector length (validates query↔chunk match)
+                    con.execute("ALTER TABLE rag_chunks ADD COLUMN dim INTEGER")
         finally:
             con.close()
         _initialized = True
@@ -150,6 +153,87 @@ def counts() -> dict:
     return {"documents": d, "chunks": c}
 
 
+# ── Embeddings (stage 2) ─────────────────────────────────────────────────────
+# Vectors are stored as raw float32 bytes in the `embedding` BLOB — compact and trivially decoded back
+# to a numpy array with np.frombuffer. numpy is imported lazily so stage-1 callers stay dep-free.
+def _to_blob(vector):
+    import numpy as np
+    return np.asarray(vector, dtype=np.float32).tobytes()
+
+
+def save_embedding(chunk_id: str, vector) -> None:
+    """Attach one vector to its chunk."""
+    init()
+    blob = _to_blob(vector)
+    con = _connect()
+    try:
+        with con:
+            con.execute("UPDATE rag_chunks SET embedding=?, dim=? WHERE id=?",
+                        (blob, len(vector), chunk_id))
+    finally:
+        con.close()
+
+
+def save_embeddings(items) -> None:
+    """Batch-attach vectors: `items` is an iterable of (chunk_id, vector). One transaction."""
+    rows = [(_to_blob(v), len(v), cid) for cid, v in items]
+    if not rows:
+        return
+    init()
+    con = _connect()
+    try:
+        with con:
+            con.executemany("UPDATE rag_chunks SET embedding=?, dim=? WHERE id=?", rows)
+    finally:
+        con.close()
+
+
+def _decode_rows(rows) -> list[dict]:
+    import numpy as np
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["vector"] = np.frombuffer(d.pop("embedding"), dtype=np.float32) if d.get("embedding") else None
+        out.append(d)
+    return out
+
+
+def embedded_chunks(doc_id: str | None = None) -> list[dict]:
+    """Chunks that HAVE an embedding, each with its `vector` decoded to a numpy array. The candidate
+    set semantic_search scores against. Optionally scoped to one document."""
+    init()
+    con = _connect()
+    try:
+        if doc_id:
+            rows = con.execute(
+                "SELECT * FROM rag_chunks WHERE embedding IS NOT NULL AND doc_id=? ORDER BY doc_id, ord",
+                (doc_id,)).fetchall()
+        else:
+            rows = con.execute(
+                "SELECT * FROM rag_chunks WHERE embedding IS NOT NULL ORDER BY doc_id, ord").fetchall()
+    finally:
+        con.close()
+    return _decode_rows(rows)
+
+
+def chunks_missing_embeddings(doc_id: str | None = None) -> list[dict]:
+    """Chunks with no embedding yet (for incremental indexing). Text included; no vector."""
+    init()
+    con = _connect()
+    try:
+        if doc_id:
+            rows = con.execute(
+                "SELECT id, doc_id, ord, text FROM rag_chunks WHERE embedding IS NULL AND doc_id=? "
+                "ORDER BY ord", (doc_id,)).fetchall()
+        else:
+            rows = con.execute(
+                "SELECT id, doc_id, ord, text FROM rag_chunks WHERE embedding IS NULL "
+                "ORDER BY doc_id, ord").fetchall()
+    finally:
+        con.close()
+    return [dict(r) for r in rows]
+
+
 def delete_document(doc_id: str) -> None:
     init()
     con = _connect()
@@ -186,8 +270,15 @@ if __name__ == "__main__":  # self-test (no API)
     add_document("Second", ["a", "b"])
     assert counts() == {"documents": 2, "chunks": 5}
     assert len(list_documents()) == 2
+    # stage 2: embeddings round-trip through the BLOB column
+    assert chunks_missing_embeddings(did) and not embedded_chunks(did)   # none embedded yet
+    save_embeddings([(f"{did}:0", [1.0, 0.0, 0.0]), (f"{did}:1", [0.0, 1.0, 0.0])])
+    save_embedding(f"{did}:2", [0.0, 0.0, 1.0])
+    emb = embedded_chunks(did)
+    assert len(emb) == 3 and not chunks_missing_embeddings(did)
+    assert emb[1]["dim"] == 3 and list(emb[1]["vector"]) == [0.0, 1.0, 0.0]   # decodes back exactly
     delete_document(did)
     assert counts() == {"documents": 1, "chunks": 2} and get_document(did) is None
     clear()
     assert counts() == {"documents": 0, "chunks": 0}
-    print("rag/store.py self-test OK — documents + chunks persist, scope, delete, clear")
+    print("rag/store.py self-test OK — documents, chunks, embeddings persist; scope, delete, clear")
