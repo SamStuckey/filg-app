@@ -2774,7 +2774,7 @@ function renderActionBar(s){
   bar.classList.toggle('show',show);
   document.body.classList.toggle('hasbar',show);
   if(show)bar.innerHTML=
-    `<span class=ab-hint><b>I'm with you</b> locks this part and builds the next \\u00b7 <b>Not feeling it</b> redraws it (add a note to steer)</span>`+
+    `<span class=ab-hint><b>I'm with you</b> locks this part and builds the next<br><b>Not feeling it</b> redraws it (add a note to steer)</span>`+
     `<button type=button class="ab-btn ab-back" onclick="openFeedbackModal('regen')" title="Redo this part \\u2014 you can add a note to steer the rewrite">\\u21bb Not feeling it</button>`+
     `<button type=button class="ab-btn ab-next" onclick="openFeedbackModal('next')" title="Lock this part in and build the next one">I'm with you \\u2192</button>`;
   if(show)maybeStepHint(); else dismissStepHint(true);
