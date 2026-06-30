@@ -1833,7 +1833,7 @@ body.hasbar .workspace{padding-bottom:74px}
 .actionbar .ab-hint{margin-right:auto;color:var(--muted);font-size:12.5px;max-width:50ch;line-height:1.35}
 @media(max-width:820px){.actionbar .ab-hint{display:none}}
 /* one-time coachmark explaining how to advance the build (shown once, dismissible) */
-.stephint{position:fixed;right:22px;bottom:80px;z-index:56;max-width:300px;background:var(--ink);color:#fff;padding:12px 14px;border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,.25);font-size:13px;line-height:1.45;display:none}
+.stephint{position:fixed;left:22px;bottom:80px;z-index:56;max-width:300px;background:var(--ink);color:#fff;padding:12px 14px;border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,.25);font-size:13px;line-height:1.45;display:none}
 .stephint.show{display:block}
 .stephint b{color:#fff}
 .stephint .sh-got{margin-top:9px;background:#fff;color:var(--ink);border:none;font-weight:700;font-size:12px;padding:6px 12px;border-radius:7px;cursor:pointer}
