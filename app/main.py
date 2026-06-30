@@ -777,8 +777,8 @@ async def api_plans(request: Request):
             full = store.plan_get(p["id"]) or {}
             unlocked = _has_pdf_access(authed["email"], _plan_key(full), verified=True)
         plans.append({"id": p["id"], "idea": p["idea"], "status": p["status"], "step": p["step"],
-                      "created_at": p["created_at"], "done": done,
-                      "shared": bool(p.get("shared")), "pdf_unlocked": unlocked})
+                      "created_at": p["created_at"], "updated_at": p.get("updated_at") or p["created_at"],
+                      "done": done, "shared": bool(p.get("shared")), "pdf_unlocked": unlocked})
     return {"email": authed["email"], "total": planner.N, "plans": plans}
 
 
@@ -787,6 +787,8 @@ async def api_plan_get(sid: str, request: Request):
     s = store.plan_get(sid)
     if not s or not _owns(request, s):
         return JSONResponse({"error": "unknown session"}, status_code=404)
+    if request.query_params.get("touch"):   # explicit open (not a status poll) → bump recency for the profile sort
+        store.plan_touch(sid)
     return _plan_state(s)
 
 
@@ -1505,6 +1507,15 @@ async def index():
 async def plan_page(sid: str):
     """Serve the SPA shell for a deep-linked plan; the frontend reads the id from the path and loads
     it. (Distinct from `/p/{id}` — the server-rendered public share — and `/r/{id}` teardowns.)"""
+    return _render_page(deep=True)
+
+
+@app.get("/account", response_class=HTMLResponse)
+@app.get("/account/{tab}", response_class=HTMLResponse)
+async def account_page(tab: str = ""):
+    """Serve the SPA shell for the profile/account tabs (/account/plans, /account/api-config, …) so they
+    are directly visitable and survive a refresh. The frontend reads the tab from the path and opens it.
+    `deep=True` boots with the loader (no landing-page flash before the tab renders)."""
     return _render_page(deep=True)
 
 
@@ -3768,15 +3779,24 @@ function newPlan(){SIDEBAR_PHASE=null;ACT_RESEARCH=false;ACT_PROG_N=0;ACT_ID=nul
   if(location.pathname!=='/')history.pushState({},'','/');show('intake');renderBoardPick();gateIntake();}
 // One profile page: projects, API config, contact, delete account. Replaces the old My-plans /
 // Your-key / email / Sign-out header menu (a dropdown-in-a-dropdown on mobile).
-async function openProfile(){
+// Profile tabs have real, directly-visitable routes (/account/<slug>) so a refresh or a shared link
+// lands on the right tab instead of bouncing to the landing page.
+const ACCOUNT_TAB_SLUG={projects:'plans',files:'files',api:'api-config',account:'settings'};
+const ACCOUNT_SLUG_TAB={plans:'projects',files:'files','api-config':'api',settings:'account'};
+function accountUrl(tab){return '/account/'+(ACCOUNT_TAB_SLUG[tab]||'plans');}
+function syncAccountUrl(tab,replace){const url=accountUrl(tab);if(location.pathname===url)return;
+  const st={account:tab};if(replace)history.replaceState(st,'',url);else history.pushState(st,'',url);}
+async function openProfile(tab,replace){
   if(CFG.authEnabled&&!session){authModal();return;}
+  if(tab)PROFILE_TAB=tab;
+  syncAccountUrl(PROFILE_TAB,replace);   // reflect the open tab in the URL (refresh-safe, bookmarkable)
   let pd={plans:[],total:7,email:(session&&session.user&&session.user.email)||''};
   try{const r=await fetch('/api/plans',{headers:authHeaders()});if(r.ok)pd=await r.json();}catch(e){}
   let key=null;
   if(CFG.byokEnabled){try{const r=await fetch('/api/key',{headers:authHeaders()});if(r.ok)key=(await r.json()).key;}catch(e){}}
   show('profile');renderProfile(pd,key);
 }
-function showPlans(){openProfile();}   // back-compat: share/delete refreshers route to the profile
+function showPlans(){openProfile('projects');}   // back-compat: share/delete refreshers route to the profile
 function planCardHtml(p,total){
   const meta=p.done?`Finished · ${total} parts`:(p.status==='researching'?'Researching…':`In progress · part ${(p.step||0)+1} of ${total}`);
   const acts=`<button onclick="resume('${p.id}')">${p.done?'Open / iterate':'Resume'}</button>`+
@@ -3799,7 +3819,7 @@ function fileCardHtml(p){
 function resumeZip(id){SID=id;downloadZip();}                 // set the active plan, then reuse the existing exporters
 function openExportFor(id){SID=id;openExportModal();}
 let PROFILE_TAB='projects', PROFILE_PD=null, PROFILE_KEY=null;
-function selectProfileTab(t){PROFILE_TAB=t;renderProfile(PROFILE_PD,PROFILE_KEY);}
+function selectProfileTab(t){PROFILE_TAB=t;syncAccountUrl(t);renderProfile(PROFILE_PD,PROFILE_KEY);}
 function renderProfile(pd,key){
   PROFILE_PD=pd; PROFILE_KEY=key;
   const total=pd.total||7;
@@ -3848,7 +3868,7 @@ async function resume(id){
   show('workspace');SESSION_BOARD=null;SIDEBAR_PHASE=null;VET_OPEN=true;VET_STEPPED=false;
   const ab=document.getElementById('addons');if(ab)delete ab.dataset.done;
   closeDrawer();closeViewer();
-  try{const r=await fetch('/api/plan/'+SID,{headers:authHeaders()});const s=await r.json();render(s);if(s.status==='researching')poll();}catch(e){_bootDone();document.getElementById('err2').textContent='Could not load that plan.';}
+  try{const r=await fetch('/api/plan/'+SID+'?touch=1',{headers:authHeaders()});const s=await r.json();render(s);if(s.status==='researching')poll();}catch(e){_bootDone();document.getElementById('err2').textContent='Could not load that plan.';}
 }
 function resumeDownload(id){SID=id;download();}
 async function deletePlan(id){
@@ -3900,10 +3920,18 @@ async function initAuth(){
   sb.auth.onAuthStateChange(async (_e,s)=>{session=s;await loadMe();renderAuth();});
   const {data}=await sb.auth.getSession();session=data.session;await loadMe();renderAuth();routeFromPath();
 }
-function routeFromPath(){   // a finished plan lives at /plan/{id} — deep-link / bookmark / revisit / back-fwd
-  const m=(location.pathname||'').match(/^\\/plan\\/([a-z0-9]+)/i);
+function routeFromPath(){   // deep-link / bookmark / revisit / back-fwd for /plan/{id} and /account/<tab>
+  const path=location.pathname||'';
+  let m=path.match(/^\\/plan\\/([a-z0-9]+)/i);
   if(m&&m[1]){resume(m[1]);return;}
-  _bootDone();   // not a plan path → drop the boot loader and show home
+  m=path.match(/^\\/account(?:\\/([a-z-]+))?\\/?$/i);
+  if(m){
+    if(CFG.authEnabled&&!session){_bootDone();show('intake');renderBoardPick();gateIntake();authModal();return;}
+    // render the profile first, THEN clear the boot overlay (no landing flash); replace: URL already set
+    openProfile(ACCOUNT_SLUG_TAB[(m[1]||'').toLowerCase()]||'projects',true).finally(_bootDone);
+    return;
+  }
+  _bootDone();   // not a known route → drop the boot loader and show home
   if(SID){SID=null;show('intake');renderBoardPick();gateIntake();}
 }
 window.addEventListener('popstate',routeFromPath);   // browser back/forward drives the SPA
