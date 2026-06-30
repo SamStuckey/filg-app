@@ -8,6 +8,9 @@ test-mode into production code. Point the app AND this CLI at the same DB via FI
 then drive states from here.
 
   python scripts/dev.py serve                 # run the app locally (mock, local DB)
+  python scripts/dev.py serve --real          # run the app for REAL (BYOK key in the UI drives the engine)
+  python scripts/dev.py engine "<idea>"       # REAL engine smoke test (key from env), prints the spine
+                                              #   phase log + graded rows; --full for the artifact synth
   python scripts/dev.py reset                 # wipe the local DB → fresh everything
   python scripts/dev.py state <sid>           # inspect a plan's gating-relevant state
   python scripts/dev.py kill <sid>            # force verdict=kill → exercise the coaching ladder
@@ -45,11 +48,47 @@ def _norm(email):
 
 
 def cmd_serve(args):
-    os.environ.setdefault("FILG_MOCK", "1")
+    # Default to mock (no spend). `serve --real` runs the actual engine — then the UI's BYOK key drives
+    # real model calls (set FILG_KEY_SECRET so the key modal/wall is active; see TESTING.md).
+    if not getattr(args, "real", False):
+        os.environ.setdefault("FILG_MOCK", "1")
+    else:
+        os.environ["FILG_MOCK"] = "0"
     Path(os.environ["FILG_DB"]).parent.mkdir(parents=True, exist_ok=True)
-    print(f"FILG_DB={os.environ['FILG_DB']}  FILG_MOCK={os.environ['FILG_MOCK']}")
+    print(f"FILG_DB={os.environ['FILG_DB']}  FILG_MOCK={os.environ.get('FILG_MOCK', '0')}")
     print("→ http://localhost:8000  (set FILG_KEY_SECRET to exercise the BYOK wall; see TESTING.md)")
     os.execvp("uvicorn", ["uvicorn", "app.main:app", "--reload", "--app-dir", str(ROOT), "--port", "8000"])
+
+
+def cmd_engine(args):
+    """Run the REAL engine (no mock) against YOUR OWN key, printing the live phase log + graded rows.
+    The single end-to-end smoke test of the deterministic spine: conductor, research validator, voted
+    moat gate, staleness, and the ⚙ activity feed, with no server and no DB. Key comes from the env
+    (never the CLI): ANTHROPIC_API_KEY (sk-ant-...) or OPENROUTER_API_KEY (sk-or-...)."""
+    import provider
+    import pipeline
+    import teardown
+    key = os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("OPENROUTER_API_KEY")
+    if not key:
+        print("set ANTHROPIC_API_KEY (sk-ant-...) or OPENROUTER_API_KEY (sk-or-...) in your env first "
+              "(e.g. `export ANTHROPIC_API_KEY=...` — do NOT pass it as an argument)")
+        return
+    prov = provider.openrouter_provider(key) if key.startswith("sk-or") \
+        else provider.anthropic_provider(key, bills_filg=False)
+    stack = provider.clamp_stack(args.stack, byok=True) if args.stack else provider.DEFAULT_STACK
+    print(f"engine: REAL mode · provider={prov.kind} · stack={stack}\n")
+    with provider.use(prov), provider.use_stack(stack), pipeline.run_ledger():
+        if args.full:
+            res = teardown.generate_full(args.idea, mock=False)
+            print("\n=== ARTIFACTS ===\n" + res["artifacts_md"])
+        else:
+            res = teardown.generate(args.idea, mock=False, on_progress=lambda ln: print("  " + ln))
+            print("\n=== GRADED ROWS ===")
+            for r in res["rows"]:
+                tag = " [STALE]" if r.get("stale") else ""
+                print(f"  [{r['mark']}]{tag} {r['text']}  <{r['url']}>\n      ({r['note']})")
+            print(f"\n  stats={res['stats']}")
+        print(f"  cost=${res['cost']:.4f}")
 
 
 def cmd_reset(args):
@@ -132,9 +171,16 @@ def main():
     import argparse
     p = argparse.ArgumentParser(description="FILG local dev/test harness")
     sub = p.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("serve").set_defaults(fn=cmd_serve)
+    sp = sub.add_parser("serve")
+    sp.add_argument("--real", action="store_true", help="run the actual engine (BYOK key in the UI), not mock")
+    sp.set_defaults(fn=cmd_serve)
     sub.add_parser("reset").set_defaults(fn=cmd_reset)
     sub.add_parser("usage").set_defaults(fn=cmd_usage)
+    a = sub.add_parser("engine", help="run the REAL engine on an idea against your own env key")
+    a.add_argument("idea")
+    a.add_argument("--full", action="store_true", help="run the full artifact synth (generate_full)")
+    a.add_argument("--stack", default=None, help="model stack key (default the-work-horse)")
+    a.set_defaults(fn=cmd_engine)
     for name in ("state", "kill", "unkill"):
         a = sub.add_parser(name)
         a.add_argument("sid")
