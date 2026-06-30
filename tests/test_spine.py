@@ -72,6 +72,23 @@ def test_run_engine_golden_rows(monkeypatch):
     assert "corroborated" not in rows[2]   # warn rows aren't triangulation-labeled
 
 
+def test_cost_cap_skips_research_and_labels(monkeypatch):
+    # When the run blows past the cap before re-search, the fan-out is skipped and every flagged claim
+    # is labeled (invariant #2, code-enforced) — research_primary must NOT be called.
+    _install(monkeypatch)
+    monkeypatch.setattr(spine, "_run_cost", lambda: 999.0)   # pretend the run already overspent
+
+    def boom(c):
+        raise AssertionError("research_primary called despite the cost cap")
+
+    monkeypatch.setattr(pipeline, "research_primary", boom)
+    events = []
+    rows, stats, _ = spine.run_engine("an idea", headlines=1, on_phase=events.append, cost_cap=2.0)
+    assert stats == {"checked": 3, "cleared": 1, "flagged": 2}      # both flagged labeled, none rescued
+    assert any(e.id == "re-search" and e.verdict == spine.PAUSE for e in events)
+    assert all("primary.gov" not in r["url"] for r in rows)         # nothing was re-sourced
+
+
 def test_run_engine_phase_log(monkeypatch):
     _install(monkeypatch)
     events = []
@@ -89,6 +106,18 @@ def test_build_evidence_delegates_to_spine(monkeypatch):
     rows, stats, lanes = teardown.build_evidence("an idea", 1)
     assert lanes == LANES and stats == {"checked": 3, "cleared": 2, "flagged": 1}
     assert rows[1]["url"] == "https://primary.gov/p"
+
+
+def test_build_evidence_streams_phase_lines(monkeypatch):
+    # When a progress stream is wired, the conductor's phase log surfaces as readable ⚙ lines (the
+    # showcase activity feed) alongside the leaf sentinels — one per engine phase.
+    _install(monkeypatch)
+    import teardown
+    seen = []
+    teardown.build_evidence("an idea", 1, on_progress=seen.append)
+    phase_lines = [s for s in seen if s.startswith("⚙ ")]
+    ids = [s.split("·")[0].strip().removeprefix("⚙ ").strip() for s in phase_lines]
+    assert ids == ["plan", "research", "grade", "re-search", "assemble"]
 
 
 def test_leaf_sentinels_unchanged(monkeypatch):

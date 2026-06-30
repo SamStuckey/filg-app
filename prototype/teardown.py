@@ -123,6 +123,16 @@ from spine import _label_triangulation, _row_host  # noqa: E402,F401 — engine 
 
 def build_evidence(idea: str, headlines: int, on_progress=None, on_phase=None):
     from spine import run_engine  # lazy: --rebuild needs no API and no pipeline import
+    # Surface the conductor's typed phase log as the live activity feed: when the caller wired a
+    # progress stream but no explicit phase sink, forward each phase as a readable "⚙ <phase> · …" line
+    # so the runner panel shows the real control flow (grade verdicts, reprompts, stale flags), not just
+    # the leaf fan-out. This is the agentic-showcase payoff: the machinery is visible, not a debug view.
+    if on_phase is None and on_progress is not None:
+        def on_phase(ev):
+            line = f"⚙ {ev.id} · {ev.detail}"
+            if ev.cost:
+                line += f" · ${ev.cost:.3f}"
+            on_progress(line)
     return run_engine(idea, headlines, on_progress=on_progress, on_phase=on_phase)
 
 

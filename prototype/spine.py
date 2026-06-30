@@ -40,6 +40,20 @@ PAUSE = "PAUSE"   # uncertain / exhausted / human decides
 ERROR = "ERROR"   # infra — never proceed
 
 
+# Per-run cost guard (invariant #2/#3): if a run's cost passes this before the OPTIONAL re-search
+# fan-out, skip re-search and label the remaining flagged claims instead of chasing them. Set well
+# above a normal run (~$0.4–1) so only a runaway trips it; None disables the guard.
+RUN_COST_CAP = 2.0
+
+
+def _run_cost() -> float:
+    from pipeline import LEDGER  # noqa: PLC0415
+    try:
+        return LEDGER.cost()
+    except Exception:  # noqa: BLE001
+        return 0.0
+
+
 @dataclass
 class Phase:
     id: str
@@ -175,7 +189,7 @@ def run_author(generate, validate, feedback_fn=None, max_fix: int = 3):
 
 
 # ── the conductor ────────────────────────────────────────────────────────────
-def run_engine(idea: str, headlines: int, on_progress=None, on_phase=None):
+def run_engine(idea: str, headlines: int, on_progress=None, on_phase=None, cost_cap: float | None = -1.0):
     """Walk the engine phase DAG, delegating to the pipeline at each seam, and return
     `(rows, stats, lanes)` — byte-identical to the legacy build_evidence chain. `on_progress(line)`
     streams the `§LANES§`/`§LANEDONE§` leaf sentinels for the live UI; `on_phase(PhaseEvent)`
@@ -243,16 +257,23 @@ def run_engine(idea: str, headlines: int, on_progress=None, on_phase=None):
     flagged = [v for v in verdicts if v.flagged]
     log("grade", JUDGE, PASS, f"{len(cleared)} cleared / {len(flagged)} flagged", s)
 
-    # P4 · re-search (research) — re-source the top flagged claims; label the rest (invariant #2)
+    # P4 · re-search (research) — re-source the top flagged claims; label the rest (invariant #2).
+    # Cost guard: if the run already blew past the cap, skip the optional fan-out and label everything.
     s = _start()
-    to_chase, to_label = flagged[:headlines], flagged[headlines:]
+    cap = RUN_COST_CAP if cost_cap == -1.0 else cost_cap
     rescues: list = []
-    if to_chase:
-        with ThreadPoolExecutor(max_workers=3) as ex:
-            rescues = list(ex.map(bound(lambda v: research_primary(v.claim)), to_chase))
-        for v, r in zip(to_chase, rescues):
-            r.original = v
-    log("re-search", RESEARCH, PASS, f"{len(to_chase)} re-sourced / {len(to_label)} labeled", s)
+    if cap is not None and _run_cost() > cap:
+        to_chase, to_label = [], list(flagged)
+        log("re-search", RESEARCH, PAUSE,
+            f"cost cap ${cap:g} hit → labeled {len(flagged)} flagged, skipped re-search", s)
+    else:
+        to_chase, to_label = flagged[:headlines], flagged[headlines:]
+        if to_chase:
+            with ThreadPoolExecutor(max_workers=3) as ex:
+                rescues = list(ex.map(bound(lambda v: research_primary(v.claim)), to_chase))
+            for v, r in zip(to_chase, rescues):
+                r.original = v
+        log("re-search", RESEARCH, PASS, f"{len(to_chase)} re-sourced / {len(to_label)} labeled", s)
 
     # P5 · assemble (deterministic) — graded rows + triangulation labels
     rows = _assemble_rows(cleared, rescues, to_label, claim_lane)
@@ -262,3 +283,20 @@ def run_engine(idea: str, headlines: int, on_progress=None, on_phase=None):
     log("assemble", DETERMINISTIC, PASS, f"{len(rows)} graded rows", _start())
 
     return rows, stats, lanes
+
+
+if __name__ == "__main__":  # dev shakedown: run the engine and print the typed phase log
+    import sys
+    idea = " ".join(a for a in sys.argv[1:] if not a.startswith("--")) or \
+        "a done-for-you AI receptionist for home-service contractors"
+    print(f"\nengine spine · {len(PHASES)} phases · idea: {idea}\n")
+    for p in PHASES:
+        print(f"  · {p.id:10s} [{p.kind}]  {p.desc}")
+    print("\n--- run (needs a bound provider / ANTHROPIC key for a real run) ---")
+    try:
+        rows, stats, lanes = run_engine(idea, headlines=3,
+                                        on_phase=lambda e: print(f"  ⚙ {e.id:10s} {e.verdict:5s} {e.detail}"
+                                                                 + (f"  ${e.cost:.3f}" if e.cost else "")))
+        print(f"\n  {stats}")
+    except Exception as e:  # noqa: BLE001 — dev tool: surface why it couldn't run, don't traceback-spam
+        print(f"  (no live run: {type(e).__name__}: {e})")
