@@ -2223,9 +2223,11 @@ async function loadKey(){            // refresh whether this user has a saved ke
   try{const r=await fetch('/api/key',{headers:authHeaders()});const d=await r.json();HAS_KEY=!!(d&&d.key);KEY_PROVIDER=(d&&d.key)?d.key.provider:null;if(typeof paintMeter==='function')paintMeter();}
   catch(e){HAS_KEY=false;KEY_PROVIDER=null;}
 }
-function requireKey(){               // gate any API-calling button: no key → open the key modal
-  if(CFG.byokEnabled&&!HAS_KEY){keyModal();return false;}
-  return true;
+async function requireKey(){         // gate any API-calling button: only block when there's truly no key
+  if(!CFG.byokEnabled)return true;
+  if(!HAS_KEY)await loadKey();        // HAS_KEY can be stale — re-verify against the server before walling,
+  if(HAS_KEY)return true;             // so a keyed-up user is never interrupted by the key modal
+  keyForm();return false;            // genuinely no key → the add-key form (not the manage-key modal)
 }
 // The bail-out button: send the procrastinator to a random snarky Google search.
 const GOOFS=["is a hotdog a sandwich", "are birds real", "how many golf balls fit in a school bus", "why do cats knock things off tables", "goat screaming like a human", "is cereal a soup", "do fish get thirsty", "how long can a snail nap", "world's largest ball of twine", "can you outrun a goose", "how to fold a fitted sheet", "why do we say um", "who invented the wheel and why", "how many licks to the center of a tootsie pop", "do penguins have knees", "why is yawning contagious", "capybara compilation", "competitive cup stacking finals", "extreme ironing world championship", "octopus solving a puzzle", "why do feet smell like corn chips", "is water wet", "do trees talk to each other", "how to win a staring contest against a pigeon", "longest recorded sneeze", "how do they get the caramel in the candy bar", "what does a quokka sound like", "why do dogs tilt their heads", "the history of the high five", "can a duck climb a ladder", "videos of cats being unimpressed", "how to sell pogs in 2026", "ways to waste time on the internet", "what is the speed of dark", "do cows have best friends", "cheese rolling gloucester injuries", "competitive wife carrying championship", "why do we get goosebumps", "how to skip a rock 50 times", "is a tomato a fruit lawsuit", "man vs raccoon who would win", "bigfoot caught on ring camera", "how to whistle with two fingers", "why do escalators feel weird when stopped", "how do they paint the lines on the road", "why does the alphabet song end so suddenly", "competitive thumb wrestling rules", "what would happen if everyone jumped at once", "how to look busy at work", "why do we park in driveways and drive on parkways", "medieval people reacting to a zipper", "how long could you survive in a ball pit", "world record for most t-shirts worn at once", "do ants have rush hour", "how to convincingly fake a sneeze", "why is it called a building if it is already built", "can you hear a hug", "how to win an argument with a cat", "is it weird to name your roomba", "why do snacks taste better when stolen", "do penguins get cold feet", "how to moonwalk badly", "why is the loch ness monster still missing", "quokka selfie compilation", "how to yodel quietly"];
@@ -2238,7 +2240,7 @@ async function start(){
   const go=document.getElementById('go'), err=document.getElementById('err');
   err.textContent='';document.getElementById('joke').innerHTML='';
   if(CFG.authEnabled&&!session){authModal();return;}   // signed-out → prompt them with the sign-in modal
-  if(!requireKey())return;                              // no key → open the key modal; we cover no runs now
+  if(!await requireKey())return;                              // no key → open the key modal; we cover no runs now
   const body={idea, stack:STACK_CUR}; if(!session) body.email=email;   // signed in → identity from the token
   if(BOARD.length) body.directors=BOARD;               // optional Board of Directors → vets each step
   go.disabled=true; go.textContent='Researching…'; ACT_RESEARCH=false;
@@ -2458,7 +2460,7 @@ function chatStart(btn){const t=document.getElementById('chatinput');if(t){t.val
 async function sendChat(){
   if(CHAT_BUSY)return;
   const t=document.getElementById('chatinput'),msg=(t.value||'').trim(); if(!msg)return;
-  if(!requireKey())return;
+  if(!await requireKey())return;
   const log=document.getElementById('chatlog'),btn=document.getElementById('chatsend'),st=document.getElementById('chatstart');
   CHAT_BUSY=true;btn.disabled=true;t.value='';if(st)st.innerHTML='';
   log.insertAdjacentHTML('beforeend',`<div class="cmsg user">${esc(msg)}</div><div class="cmsg bot md" id=chatthinking><span class=think>Thinking…</span></div>`);
@@ -2532,7 +2534,7 @@ function renderResearch(s){
 // Query your research: 'quick' reads the gathered research (ok to be unsure); 'deep' spawns fresh research.
 let RQ_BUSY=false;
 async function runResearchQuery(mode){
-  if(!requireKey())return;
+  if(!await requireKey())return;
   if(RQ_BUSY)return;
   const q=((document.getElementById('rqinput')||{}).value||'').trim();
   if(q.length<3){toast('Ask a question about your research.','err');const t=document.getElementById('rqinput');if(t)t.focus();return;}
@@ -2699,7 +2701,7 @@ function killGateHtml(s){
     `<div class=ferr id=ferr></div></div>`;
 }
 async function forceNext(){   // operator pushes past the gate with no substance → comedic waste-of-time mode
-  if(!requireKey())return;
+  if(!await requireKey())return;
   if(WOD_PUSHES===0){  // first forced push → one encouraging chance to reconsider (Coach voice)
     const ok=await uiConfirm('Want to give it a real shot?',"Giving some feedback might make this a viable idea. Sure you want to just keep going?",'Keep going anyway');
     if(!ok){const t=document.getElementById('substance');if(t)t.focus();return;}
@@ -2825,7 +2827,7 @@ let PENDING_FB=null;
 function _fbRead(){ if(PENDING_FB!=null){const v=PENDING_FB;PENDING_FB=null;return v;}
   return ((document.getElementById('feedback')||{}).value||'').trim(); }
 async function nextStep(){
-  if(!requireKey())return;
+  if(!await requireKey())return;
   const fb=_fbRead();
   const full=(fb+commentsSteer()).trim();   // #7 fold inline comments into the roll-forward
   _navBusy();
@@ -2842,7 +2844,7 @@ async function nextStep(){
   }catch(e){Activity.stop(aid);fbErr('Network error.');_navFree();}
 }
 async function reCheck(){       // kill-gate rescue: re-vet with the substance the operator just added
-  if(!requireKey())return;
+  if(!await requireKey())return;
   const more=((document.getElementById('substance')||{}).value||'').trim();
   if(more.length<8){fbErr('Add a real skill or asset, and who would pay for it.');const t=document.getElementById('substance');if(t)t.focus();return;}
   _navBusy();
@@ -2858,7 +2860,7 @@ async function reCheck(){       // kill-gate rescue: re-vet with the substance t
 }
 function startOver(){try{localStorage.removeItem('filg_idea');}catch(e){}location.href='/';}   // clean intake
 async function backStep(){
-  if(!requireKey())return;
+  if(!await requireKey())return;
   const fb=_fbRead();
   if(!fb){fbErr('Add a quick note on what to change, a note is required to go back a step.');return;}
   _navBusy();
@@ -2872,7 +2874,7 @@ async function backStep(){
 }
 let REDRAFTS=0;   // consecutive regenerations of the CURRENT part → escalate to a snark nudge toward the tree
 async function regenStep(){
-  if(!requireKey())return;
+  if(!await requireKey())return;
   const fb=_fbRead();
   const steer=(fb+commentsSteer()).trim();   // #7 a note OR inline comments can steer the rework
   if(!steer){fbErr("Tell me what's not landing — add a note or a comment to steer the rework.");return;}
@@ -2893,8 +2895,8 @@ async function regenStep(){
 // ── Feedback modal: opened by the bottom action bar. Holds the suggested questions, the per-step
 // nudge chips, and the note box; "Go" commits to roll-forward (next) or rework (regen). ──
 let FB_MODE='next', NUDGE_CACHE={};
-function openFeedbackModal(mode){
-  if(!requireKey())return;
+async function openFeedbackModal(mode){
+  if(!await requireKey())return;
   FB_MODE=mode; const s=LAST_S||{};
   const qs=suggestedFb(s);
   const sfb=qs.length?(`<div class=mfb-sg><div class=mfb-h>The engine's open questions</div>`+
@@ -3039,8 +3041,8 @@ function toggleSessionBoard(key,el){
 // main content collapses), then the drafted director renders in place to approve / retry / cancel. ──
 let FORGE_DRAFT=null, FORGE_DESC='', FORGE_TIMER=null, FORGE_BUSY=false;
 const FORGE_STEPS=[{k:'distill',l:'Distilling the archetype'},{k:'draft',l:'Drafting the director'},{k:'qa',l:"QA: checking they're distinct + useful"}];
-function openForge(){
-  if(!requireKey())return;
+async function openForge(){
+  if(!await requireKey())return;
   const desc=((document.getElementById('forgeinput')||{}).value||'').trim();
   if(desc.length<4){toast('Describe the director you want first.','err');const t=document.getElementById('forgeinput');if(t)t.focus();return;}
   FORGE_DESC=desc;
@@ -3122,8 +3124,8 @@ function cancelForge(){ FORGE_DRAFT=null; FORGE_BUSY=false; _forgeClose(); }
 function ask(key){openDrawer('expert',key);}
 // Convene the board INLINE in the tools drawer: open the convene sub-section with a question box, run
 // it with terminal spew, then render the board's take (skeptic + directors + takeaway) in place.
-function convene(){
-  if(!requireKey())return;
+async function convene(){
+  if(!await requireKey())return;
   const dd=document.getElementById('ds-directors'); if(dd)dd.classList.add('open');   // keep the directors section open; the input renders inline below the button
   const body=document.getElementById('convenebody'); if(!body)return;
   body.innerHTML=`<p class=forge-sub>Convene your board on the plan so far. Leave it blank for a general read, or aim them at one thing.</p>`+
@@ -3135,7 +3137,7 @@ function convene(){
 }
 let CONVENE_BUSY=false;
 async function runConvene(){
-  if(!requireKey())return; if(CONVENE_BUSY)return;
+  if(!await requireKey())return; if(CONVENE_BUSY)return;
   const q=((document.getElementById('conveneq')||{}).value||'').trim();
   const panel=document.getElementById('convenepanel'); if(!panel)return;
   const ds=document.getElementById('ds-convene'); if(ds){ds.classList.remove('done');ds.classList.add('running');}
@@ -3316,7 +3318,7 @@ function uiPrompt(title,label,type,placeholder){
 }
 function _submitPrompt(){const i=document.getElementById('modalinput');_closeModal(i?i.value:null);}
 async function submitDrawer(){
-  if(!requireKey())return;
+  if(!await requireKey())return;
   const q=document.getElementById('drawerq').value, go=document.getElementById('drawer-go'),
         out=document.getElementById('drawer-out');
   out.style.display='block';
@@ -3672,7 +3674,7 @@ async function keyModal(){
   if(d&&d.key){
     document.getElementById('modal-title').textContent='Your API key';
     document.getElementById('modal-body').innerHTML=
-      `<p class=or style="margin:0 0 12px">You\\u2019re running on your own <b>${esc(d.key.provider)}</b> key (\\u2022\\u2022\\u2022\\u2022${esc(d.key.last4)}). Plans use your key, not ours.</p>`+
+      `<p class=or style="margin:0 0 12px">You\\u2019re running on your own <b>${esc(d.key.provider)}</b> key (\\u2022\\u2022\\u2022\\u2022${esc(d.key.last4)}). Swap or remove it any time.</p>`+
       `<div class=authgate><button class=gbtn onclick="keyForm()">Replace key</button>`+
       `<button class=gbtn onclick="removeKey()">Remove key</button></div>`;
     document.getElementById('modal-actions').innerHTML=`<button type=button onclick="_closeModal()">Done</button>`;
@@ -3813,7 +3815,7 @@ function renderProfile(pd,key){
   }else if(PROFILE_TAB==='api'){
     body=!CFG.byokEnabled
       ? `<p class=pnote>Bring-your-own-key isn\\u2019t enabled here.</p>`
-      : (key?`<p class=pnote>Running on your own <b>${esc(key.provider)}</b> key (\\u2022\\u2022\\u2022\\u2022${esc(key.last4)}). Plans use your key, not ours.</p><div class=prow><button class=gbtn onclick=keyForm()>Replace key</button><button class=gbtn onclick=removeKey()>Remove key</button></div>`
+      : (key?`<p class=pnote>Running on your own <b>${esc(key.provider)}</b> key (\\u2022\\u2022\\u2022\\u2022${esc(key.last4)}).</p><div class=prow><button class=gbtn onclick=keyForm()>Replace key</button><button class=gbtn onclick=removeKey()>Remove key</button></div>`
             :`<p class=pnote>No key yet. Add your own OpenRouter or Anthropic key to build plans and use every tool.</p><div class=prow><button onclick=keyForm()>Add a key</button></div>`);
   }else{
     body=`<div class=acct-block><div class=acct-lbl>Contact</div><p class=pcontact>${esc(pd.email||'')}</p></div>`+
