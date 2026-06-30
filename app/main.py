@@ -2101,8 +2101,8 @@ html.route-plan #bootload{display:flex;align-items:center;justify-content:center
   .pcard .act button{flex:1;min-width:88px}
 }
 .empty{color:var(--muted);text-align:center;margin:30px 0}
-.intro{color:var(--muted);max-width:62ch;margin:0 0 12px;line-height:1.55}
-.intro-how{color:var(--muted);max-width:62ch;margin:0 0 18px;line-height:1.55;font-size:14px}
+.intro{color:var(--muted);max-width:62ch;margin:0 auto 12px;line-height:1.55}
+.intro-how{color:var(--muted);max-width:62ch;margin:0 auto 18px;line-height:1.55;font-size:14px}
 @media(max-width:820px){.workspace{grid-template-columns:1fr}}
 a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--link);outline-offset:2px}
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
