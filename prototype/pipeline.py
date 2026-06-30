@@ -362,6 +362,40 @@ def judge_batch(claims: list["Claim"]) -> list[str]:
     return [judge(c) for c in claims]  # fallback: never silently mis-grade
 
 
+# The gate's one model judgment — "is this source self-interested about this number?" — is the moat's
+# load-bearing call, so we VOTE it. Default-to-flag framing: ambiguity (a non-TRUST vote) routes to the
+# safe side. Three batch calls (not 3× per claim) keep the cost bounded on the cheap grade model, and
+# the grade model outranks the research model on every stack but the cheapest, giving writer≠critic.
+JUDGE_VOTES = 3
+
+
+def judge_batch_voted(claims: list["Claim"], votes: int = JUDGE_VOTES) -> list[str]:
+    """Run judge_batch `votes` times (fresh calls) and resolve each claim by majority, with
+    default-to-flag on a tie or any unresolved ('?') majority. Returns verdicts aligned to `claims`.
+    One sample is not reproducible; a small vote is close enough and is the moat's reliability win."""
+    if not claims:
+        return []
+    if votes <= 1:
+        return judge_batch(claims)
+    rounds = [judge_batch(claims) for _ in range(votes)]
+    out: list[str] = []
+    for i in range(len(claims)):
+        tally: dict[str, int] = {}
+        for r in rounds:
+            tally[r[i]] = tally.get(r[i], 0) + 1
+        top = max(tally.values())
+        winners = {v for v, n in tally.items() if n == top}
+        if len(winners) == 1 and "?" not in winners:
+            out.append(next(iter(winners)))
+        elif "FLAG_SELF_INTERESTED" in tally:   # tie/uncertain → take the safe (flag) side if any voter flagged
+            out.append("FLAG_SELF_INTERESTED")
+        elif "CROSS_CHECK" in tally:            # else prefer the cautious non-trust verdict
+            out.append("CROSS_CHECK")
+        else:
+            out.append(_normalize_verdict(next(iter(winners))))
+    return out
+
+
 def extract_json(text: str):
     """Pull the first JSON object/array out of a model response (handles fences). Picks whichever
     delimiter OPENS FIRST, so an object that contains an array ({"a":[...]}) parses as the object —
@@ -470,37 +504,70 @@ class Verdict:
     judge: str
     flagged: bool
     reason: str
+    stale: bool = False                       # quant stat older than the staleness window
+    checks: dict = field(default_factory=dict)  # the atomic gate booleans (for receipts/surfacing)
 
 
-def gate_claim(c: Claim, jv: str | None = None) -> Verdict:
-    """Heuristic tier + Haiku judge. Flag self-interested / non-primary quant claims.
-    Pass `jv` to reuse a verdict from a batched `judge_batch` instead of judging here."""
+# Staleness gate (deterministic, no model call). A quantitative claim whose stat year (`as_of`) is more
+# than this many months before the run year is flagged as stale — the engine had no staleness concept
+# before. 36 months chosen 2026-06-30 (Sam); a per-category override table is a later knob.
+STALE_WINDOW_MONTHS = 36
+
+
+def _now_year() -> int:
+    return time.gmtime().tm_year
+
+
+def _is_stale(c: Claim, now_year: int | None = None, months: int = STALE_WINDOW_MONTHS) -> bool:
+    """A quant claim with a known stat-year older than the window is stale. Unknown year (as_of None)
+    is NOT stale — we don't flag what we can't date."""
+    if not c.quantitative or not c.as_of:
+        return False
+    return ((now_year or _now_year()) - int(c.as_of)) * 12 > months
+
+
+def gate_claim(c: Claim, jv: str | None = None, now_year: int | None = None) -> Verdict:
+    """Decompose the source-credibility verdict into atomic booleans the SCRIPT routes from, instead of
+    one holistic token. Pass `jv` to reuse a voted/batched verdict instead of judging here.
+      - self_interested : the moat's model judgment (voted upstream) + the registry COI rule
+      - stale           : deterministic, the stat is past the staleness window
+      - tier            : registry/heuristic classification (a label)
+    `flagged` is pure boolean algebra over these (default-to-flag). The model picks no route."""
     tier, sells = classify_domain(c.source_url)
     if jv is None:
         jv = judge(c)
-    flagged = (
+    self_interested = (
         jv == "FLAG_SELF_INTERESTED"
         or (tier == TIER_VENDOR and c.quantitative and sells is not None
             and sells == c.promotes_category)
         or (c.quantitative and tier in (TIER_VENDOR, TIER_UNKNOWN, TIER_FORUM)
             and jv != "TRUST")
     )
-    if tier == TIER_PRIMARY:
+    stale = _is_stale(c, now_year)
+    checks = {"self_interested": self_interested, "stale": stale, "tier": tier}
+    flagged = self_interested or stale
+    if self_interested:
+        if tier == TIER_PRIMARY:
+            reason = "primary source but the judge flagged it self-interested → cross-check"
+        else:
+            reason = f"{tier.lower()} source + judge={jv} → needs a primary cite"
+    elif stale:
+        reason = f"{tier.lower()} source, but the stat is from {c.as_of} (past the {STALE_WINDOW_MONTHS}-month window) → stale, re-verify"
+    elif tier == TIER_PRIMARY:
         reason = "primary/authoritative source"
     elif tier == TIER_RESEARCH:
         reason = "third-party research firm"
-    elif flagged:
-        reason = f"{tier.lower()} source + judge={jv} → needs a primary cite"
     else:
         reason = f"{tier.lower()} source, judge={jv}"
-    return Verdict(c, tier, jv, flagged, reason)
+    return Verdict(c, tier, jv, flagged, reason, stale=stale, checks=checks)
 
 
-def gate_claims(claims: list[Claim]) -> list[Verdict]:
-    """Batched gate: one judge call for all claims, then assemble verdicts. Use this over a
+def gate_claims(claims: list[Claim], votes: int = JUDGE_VOTES, now_year: int | None = None) -> list[Verdict]:
+    """Batched + VOTED gate: vote the self-interested judge across the full claim set, then assemble a
+    verdict per claim from the atomic checks (judge vote + deterministic staleness). Use this over a
     per-claim `gate_claim` loop whenever you have the full claim set up front (teardown + pipeline)."""
-    jvs = judge_batch(claims)
-    return [gate_claim(c, jv) for c, jv in zip(claims, jvs)]
+    jvs = judge_batch_voted(claims, votes=votes)
+    return [gate_claim(c, jv, now_year=now_year) for c, jv in zip(claims, jvs)]
 
 
 def self_interested(tier: str, jv: str) -> bool:

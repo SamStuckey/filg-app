@@ -160,13 +160,13 @@ MOCK_RESULT = {
     "rows": [
         {"mark": "ok", "text": "~2.5M home-service businesses operate in the US", "url":
             "https://www.census.gov/", "note": "primary source, passed the gate",
-            "tier": "PRIMARY", "judge": "TRUST", "as_of": 2022,
+            "tier": "PRIMARY", "judge": "TRUST", "as_of": 2022, "stale": False,
             "sources": 1, "corroborated": False,
             "lane": "What is the market size and number of target buyers?"},
         {"mark": "warn", "text": "62% of calls to small businesses go unanswered", "url":
             "https://www.getaira.io/blog/missed-business-calls-statistics", "note":
             "flagged self-interested/vendor source, unverified",
-            "tier": "VENDOR", "judge": "FLAG_SELF_INTERESTED", "as_of": None,
+            "tier": "VENDOR", "judge": "FLAG_SELF_INTERESTED", "as_of": None, "stale": False,
             "lane": "What is the buyer's most acute, expensive pain point?"},
     ],
     "stats": {"checked": 2, "cleared": 1, "flagged": 1},
