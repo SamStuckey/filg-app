@@ -36,6 +36,7 @@ from rag import embed, ingest, search, store   # noqa: E402
 METHOD_COLLECTION = "method"
 DEFAULT_METHOD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "corpus", "method")
 DEFAULT_K = 3
+SKELETON_MARKER = "METHOD SKELETON"   # a file still carrying this banner is a template, never ingested
 
 
 def has_method_corpus(collection: str = METHOD_COLLECTION) -> bool:
@@ -87,6 +88,10 @@ def ingest_method_dir(path: str = DEFAULT_METHOD_DIR, *, collection: str = METHO
     files = sorted(str(p) for p in Path(path).glob("*")
                    if p.is_file() and not p.name.lower().startswith("readme"))
     docs = ingest.read_text_files(files)
+    # Safety: never ingest an un-filled skeleton. A template still carrying the SKELETON marker is
+    # scaffolding, not method — loading it would put "▶ write X here" prompts into the corpus. Authors
+    # remove the marker banner when the doc holds real method.
+    docs = [(t, x) for t, x in docs if SKELETON_MARKER not in x]
     for title, text in docs:
         store.add_document(title, ingest.chunk_text(text, target_chars, overlap_chars),
                            source=title, collection=collection)

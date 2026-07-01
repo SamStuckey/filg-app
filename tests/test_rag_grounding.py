@@ -34,12 +34,23 @@ def test_grounding_returns_cited_method_block():
     assert sources and sources[0]["title"] == "Pricing a Productized Service" and cost == 0.0
 
 
-def test_ingest_method_dir_loads_seed_and_skips_readme():
+def test_ingest_method_dir_loads_real_and_skips_readme_and_skeletons(tmp_path):
     store.clear()
-    stats = grounding.ingest_method_dir(mock=True)          # the app/rag/corpus/method seed files
-    assert stats["documents"] >= 2 and stats["chunks"] > 0 and stats["embedded"] == stats["chunks"]
-    titles = [d["title"] for d in store.list_documents()]
-    assert not any(t.lower().startswith("readme") for t in titles)   # README excluded from ingest
+    (tmp_path / "README.md").write_text("# readme\nnot method")
+    (tmp_path / "real.md").write_text(
+        "# Pricing\n\nPrice on the outcome, not the hour.\n\nAnchor three tiers around the middle.")
+    (tmp_path / "draft.md").write_text(
+        "<!-- METHOD SKELETON -->\n# Draft\n\n▶ write the durable pricing method here")
+    stats = grounding.ingest_method_dir(path=str(tmp_path), mock=True)
+    assert stats["documents"] == 1 and stats["chunks"] >= 1 and stats["embedded"] == stats["chunks"]
+    assert [d["title"] for d in store.list_documents()] == ["real"]   # README + un-filled skeleton skipped
+
+
+def test_shipped_method_corpus_is_all_skeletons(tmp_path):
+    # The committed corpus should ship as skeletons only — nothing ingests until an author fills one.
+    store.clear()
+    stats = grounding.ingest_method_dir(mock=True)          # the real app/rag/corpus/method dir
+    assert stats["chunks"] == 0 and not grounding.has_method_corpus()
 
 
 # ── the planner hook (real path, LLM mocked via patch_call) ──────────────────
