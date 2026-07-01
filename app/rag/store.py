@@ -75,6 +75,14 @@ def init() -> None:
                     con.execute("ALTER TABLE rag_chunks ADD COLUMN embedding BLOB")
                 if "dim" not in have:                       # vector length (validates query↔chunk match)
                     con.execute("ALTER TABLE rag_chunks ADD COLUMN dim INTEGER")
+                # Integration: a `collection` tag so multiple corpora share the tables without
+                # colliding (e.g. the cited METHOD playbook vs a future per-user doc set). Retrieval
+                # scopes to one collection; default keeps every existing row in "default".
+                if "collection" not in have:
+                    con.execute("ALTER TABLE rag_chunks ADD COLUMN collection TEXT NOT NULL DEFAULT 'default'")
+                doc_cols = {r["name"] for r in con.execute("PRAGMA table_info(rag_documents)")}
+                if "collection" not in doc_cols:
+                    con.execute("ALTER TABLE rag_documents ADD COLUMN collection TEXT NOT NULL DEFAULT 'default'")
                 # Stage 3: a full-text index for keyword/BM25 search. FTS5 is a compile-time SQLite
                 # option; if this build lacks it we degrade to a term-frequency scan (still functional,
                 # just not true BM25). A contentless-ish standalone table keyed by chunk_id, backfilled
@@ -93,9 +101,11 @@ def init() -> None:
         _initialized = True
 
 
-def add_document(title: str, chunks: list[str], source: str | None = None) -> str:
+def add_document(title: str, chunks: list[str], source: str | None = None,
+                 collection: str = "default") -> str:
     """Persist a document and its already-computed chunks in one transaction. Returns the doc id.
-    Chunk ids are deterministic ('{doc_id}:{ord}') so citations and re-ingestion stay stable."""
+    Chunk ids are deterministic ('{doc_id}:{ord}') so citations and re-ingestion stay stable.
+    `collection` tags the corpus this doc belongs to (retrieval can scope to it)."""
     init()
     doc_id = uuid.uuid4().hex[:12]
     now = _now()
@@ -103,11 +113,12 @@ def add_document(title: str, chunks: list[str], source: str | None = None) -> st
     try:
         with con:
             con.execute(
-                "INSERT INTO rag_documents (id, title, source, n_chunks, created_at) VALUES (?,?,?,?,?)",
-                (doc_id, title, source, len(chunks), now))
+                "INSERT INTO rag_documents (id, title, source, n_chunks, collection, created_at) "
+                "VALUES (?,?,?,?,?,?)",
+                (doc_id, title, source, len(chunks), collection, now))
             con.executemany(
-                "INSERT INTO rag_chunks (id, doc_id, ord, text, created_at) VALUES (?,?,?,?,?)",
-                [(f"{doc_id}:{i}", doc_id, i, c, now) for i, c in enumerate(chunks)])
+                "INSERT INTO rag_chunks (id, doc_id, ord, text, collection, created_at) VALUES (?,?,?,?,?,?)",
+                [(f"{doc_id}:{i}", doc_id, i, c, collection, now) for i, c in enumerate(chunks)])
             if _FTS_OK:                              # mirror into the keyword index
                 con.executemany("INSERT INTO rag_chunks_fts(chunk_id, text) VALUES (?,?)",
                                 [(f"{doc_id}:{i}", c) for i, c in enumerate(chunks)])
@@ -161,13 +172,16 @@ def list_documents() -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def counts() -> dict:
-    """{documents, chunks} — handy for the demo, tests, and the eval harness."""
+def counts(collection: str | None = None) -> dict:
+    """{documents, chunks} — handy for the demo, tests, the eval harness, and the grounding hook's
+    'is this corpus non-empty?' guard. Optionally scoped to one collection."""
     init()
+    where = " WHERE collection=?" if collection else ""
+    params = (collection,) if collection else ()
     con = _connect()
     try:
-        d = con.execute("SELECT COUNT(*) AS n FROM rag_documents").fetchone()["n"]
-        c = con.execute("SELECT COUNT(*) AS n FROM rag_chunks").fetchone()["n"]
+        d = con.execute(f"SELECT COUNT(*) AS n FROM rag_documents{where}", params).fetchone()["n"]
+        c = con.execute(f"SELECT COUNT(*) AS n FROM rag_chunks{where}", params).fetchone()["n"]
     finally:
         con.close()
     return {"documents": d, "chunks": c}
@@ -218,37 +232,42 @@ def _decode_rows(rows) -> list[dict]:
     return out
 
 
-def embedded_chunks(doc_id: str | None = None) -> list[dict]:
+def _scope(doc_id: str | None, collection: str | None) -> tuple[str, list]:
+    """Build the shared 'AND doc_id=? / AND collection=?' filter + params for the scan queries."""
+    clause, params = "", []
+    if doc_id:
+        clause += " AND doc_id=?"
+        params.append(doc_id)
+    if collection:
+        clause += " AND collection=?"
+        params.append(collection)
+    return clause, params
+
+
+def embedded_chunks(doc_id: str | None = None, collection: str | None = None) -> list[dict]:
     """Chunks that HAVE an embedding, each with its `vector` decoded to a numpy array. The candidate
-    set semantic_search scores against. Optionally scoped to one document."""
+    set semantic_search scores against. Optionally scoped to one document and/or collection."""
     init()
+    scope, params = _scope(doc_id, collection)
     con = _connect()
     try:
-        if doc_id:
-            rows = con.execute(
-                "SELECT * FROM rag_chunks WHERE embedding IS NOT NULL AND doc_id=? ORDER BY doc_id, ord",
-                (doc_id,)).fetchall()
-        else:
-            rows = con.execute(
-                "SELECT * FROM rag_chunks WHERE embedding IS NOT NULL ORDER BY doc_id, ord").fetchall()
+        rows = con.execute(
+            f"SELECT * FROM rag_chunks WHERE embedding IS NOT NULL{scope} ORDER BY doc_id, ord",
+            params).fetchall()
     finally:
         con.close()
     return _decode_rows(rows)
 
 
-def chunks_missing_embeddings(doc_id: str | None = None) -> list[dict]:
+def chunks_missing_embeddings(doc_id: str | None = None, collection: str | None = None) -> list[dict]:
     """Chunks with no embedding yet (for incremental indexing). Text included; no vector."""
     init()
+    scope, params = _scope(doc_id, collection)
     con = _connect()
     try:
-        if doc_id:
-            rows = con.execute(
-                "SELECT id, doc_id, ord, text FROM rag_chunks WHERE embedding IS NULL AND doc_id=? "
-                "ORDER BY ord", (doc_id,)).fetchall()
-        else:
-            rows = con.execute(
-                "SELECT id, doc_id, ord, text FROM rag_chunks WHERE embedding IS NULL "
-                "ORDER BY doc_id, ord").fetchall()
+        rows = con.execute(
+            f"SELECT id, doc_id, ord, text FROM rag_chunks WHERE embedding IS NULL{scope} "
+            "ORDER BY doc_id, ord", params).fetchall()
     finally:
         con.close()
     return [dict(r) for r in rows]
@@ -261,7 +280,8 @@ def fts_enabled() -> bool:
     return bool(_FTS_OK)
 
 
-def keyword_match(query: str, k: int = 5, doc_id: str | None = None) -> list[dict]:
+def keyword_match(query: str, k: int = 5, doc_id: str | None = None,
+                  collection: str | None = None) -> list[dict]:
     """Top-k chunks by KEYWORD relevance. Uses SQLite FTS5's bm25() when available, else a
     term-frequency fallback. Returns hit dicts {chunk_id, doc_id, ord, text, score} with score
     normalized to higher=better (so it lines up with semantic_search's cosine score)."""
@@ -278,8 +298,11 @@ def keyword_match(query: str, k: int = 5, doc_id: str | None = None) -> list[dic
             params: list = [expr]
             scope = ""
             if doc_id:
-                scope = " AND c.doc_id=?"
+                scope += " AND c.doc_id=?"
                 params.append(doc_id)
+            if collection:
+                scope += " AND c.collection=?"
+                params.append(collection)
             params.append(k)
             rows = con.execute(
                 "SELECT c.id AS chunk_id, c.doc_id, c.ord, c.text, bm25(rag_chunks_fts) AS b "
@@ -287,17 +310,18 @@ def keyword_match(query: str, k: int = 5, doc_id: str | None = None) -> list[dic
                 f"WHERE rag_chunks_fts MATCH ?{scope} ORDER BY b LIMIT ?", params).fetchall()
             return [{"chunk_id": r["chunk_id"], "doc_id": r["doc_id"], "ord": r["ord"],
                      "text": r["text"], "score": -float(r["b"])} for r in rows]
-        return _keyword_fallback(con, [t.lower() for t in toks], k, doc_id)
+        return _keyword_fallback(con, [t.lower() for t in toks], k, doc_id, collection)
     finally:
         con.close()
 
 
-def _keyword_fallback(con, toks: list[str], k: int, doc_id: str | None) -> list[dict]:
+def _keyword_fallback(con, toks: list[str], k: int, doc_id: str | None,
+                      collection: str | None = None) -> list[dict]:
     """No-FTS5 fallback: score each chunk by how many query terms it contains, with a light length
     normalization (long chunks shouldn't win just by being long). Crude vs BM25 but keeps keyword
     search working anywhere; hybrid merge is rank-based (RRF) so the score scale doesn't matter."""
-    sql = "SELECT id, doc_id, ord, text FROM rag_chunks" + (" WHERE doc_id=?" if doc_id else "")
-    rows = con.execute(sql, (doc_id,) if doc_id else ()).fetchall()
+    scope, params = _scope(doc_id, collection)
+    rows = con.execute(f"SELECT id, doc_id, ord, text FROM rag_chunks WHERE 1=1{scope}", params).fetchall()
     scored = []
     wanted = set(toks)
     for r in rows:

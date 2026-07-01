@@ -244,6 +244,16 @@ def propose(idea: str, section_key: str, research_data: dict, history: list,
     start = len(LEDGER.rows)
     section = next(s for s in SECTIONS if s["key"] == section_key)
     cited, flagged = _cited_flagged(research_data["rows"])
+    # Optional METHOD grounding (app/rag): when a curated method corpus is ingested, inject the cited
+    # passages relevant to this section. Self-disabling — no corpus → empty block → prompt unchanged.
+    # Wrapped so grounding can NEVER break plan building (a bad key / missing dep just skips it).
+    method_block = ""
+    try:
+        from rag import grounding  # noqa: PLC0415 — additive integration, lazy so it's optional
+        method_block, _msrc, _mcost = grounding.method_grounding(
+            f"{section['title']}: {section.get('guide', '')}\nBUSINESS: {idea}", mock=mock)
+    except Exception:
+        method_block = ""
     prior = "\n".join(f"- {h['section']}: {h['choice']}" + (f" — “{h['note']}”" if h.get("note") else "")
                       for h in history) or "- (none yet)"
     guide_block = f"\n\nWHAT THIS SECTION MUST DO: {section['guide']}" if section.get("guide") else ""
@@ -261,7 +271,8 @@ def propose(idea: str, section_key: str, research_data: dict, history: list,
     draft = call(f"plan_{section_key}", SONNET, max_tokens=800,
                  system=skills.system("synth_section"), cache=True, prompt=(
         f"SECTION TO WRITE: **{section['title']}** ({section['sub']}).{guide_block}\n\n"
-        f"IDEA:\n{idea}\n\nDECISIONS SO FAR:\n{prior}{plan_block}{founder_block}{steer_block}{board_block}\n\n"
+        f"IDEA:\n{idea}\n\nDECISIONS SO FAR:\n{prior}{plan_block}{founder_block}{steer_block}{board_block}"
+        f"{method_block}\n\n"
         f"CITED RESEARCH:\n{cited}\n\nFLAGGED (vendor) CLAIMS:\n{flagged}"))
     return draft, round(LEDGER.cost_slice(start), 4)
 

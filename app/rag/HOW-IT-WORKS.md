@@ -85,9 +85,42 @@ pure-Python stand-ins (a hashing embedder, a lexical-overlap reranker/judge) so 
 reproducible — the mock matches *shared words*, not synonyms, so mock eval numbers read artificially
 high; real embeddings are what deliver the synonym-matching the design is for.
 
+## Integration: grounding the planner (`grounding.py`)
+
+The first real use is grounding the plan builder in a cited **method corpus**. The planner's synth
+(`planner.propose`) already runs on the `synth_section` skill + gate-graded research; grounding adds a
+third input — the method passages most relevant to the section being written, injected as a cited
+`METHOD PLAYBOOK` block the synth can draw on and attribute.
+
+- **Collections.** The store now tags every doc/chunk with a `collection` (default `"default"`), and
+  retrieval scopes to one. The method corpus lives in the `method` collection, isolated from any future
+  corpus (user docs, plan/research). One set of tables, many corpora.
+- **Self-disabling.** `grounding.method_grounding()` returns an empty block when the `method` collection
+  is empty, and `planner.propose` concatenates it unconditionally. So with no corpus ingested, the synth
+  prompt is byte-for-byte unchanged — the integration is inert in production until someone loads method.
+  The hook is also wrapped so grounding can never break plan building.
+- **The corpus is the IP, and it's separate.** `app/rag/corpus/method/` holds a **labeled placeholder
+  seed** only. Grounding the planner in shallow, generic notes just launders genericness as citations —
+  the exact failure the credibility gate exists to prevent — so replace the seed with genuinely
+  differentiated, credible method before treating grounded output as real IP.
+
+Load a corpus and measure the lift:
+
+```python
+from rag import grounding
+grounding.ingest_method_dir(mock=False)     # embeds app/rag/corpus/method/*.md (needs OPENAI_API_KEY)
+```
+
+To measure whether grounding actually helps: draft a section twice on a real key — once with the method
+collection populated, once empty — and judge which draft is better and whether it cites `[method: …]`.
+(Mock mode can't show the quality delta: `propose` returns canned drafts in mock, so the lift only
+appears on a real run.)
+
 ## Status and next step
 
-Standalone and fully tested; **not yet wired to a route or the BYOK key store.** Integration is
-plumbing, not redesign: add FastAPI endpoints in `main.py` (ingest / ask) guarded by the existing
-`_key_wall` + `_run_slot`, and resolve the embeddings key through `keys.py` the same way chat keys are
-resolved (the `embed.py`/`answer.py`/`search.py` seams already accept a `key` argument).
+Grounding is wired into the planner (additive, self-disabling) and fully tested. Still **not wired to a
+route or the BYOK key store.** Remaining plumbing: FastAPI endpoints in `main.py` (ingest / ask) guarded
+by the existing `_key_wall` + `_run_slot`, and resolving the embeddings key through `keys.py` the same
+way chat keys are (the `embed.py`/`answer.py`/`search.py`/`grounding.py` seams already accept a `key`
+argument). The embeddings key is a distinct provider from the chat key, so it's a new BYOK slot, not a
+reuse of the OpenRouter/Anthropic key.

@@ -50,12 +50,12 @@ def _cosine_topk(qvec: np.ndarray, mat: np.ndarray, k: int) -> list[tuple[int, f
 
 
 def semantic_search(query: str, k: int = DEFAULT_K, *, doc_id: str | None = None,
-                    mock: bool = False, key: str | None = None,
+                    collection: str | None = None, mock: bool = False, key: str | None = None,
                     model: str = embed.DEFAULT_MODEL) -> list[dict]:
     """Top-k chunks most similar in MEANING to `query`. Returns hit dicts:
         {chunk_id, doc_id, ord, text, score}   (score = cosine similarity, higher = closer)
     Embeds the query in the SAME mode/model as the chunks (mock-vs-real and dims must match)."""
-    rows = store.embedded_chunks(doc_id)
+    rows = store.embedded_chunks(doc_id, collection)
     if not rows:
         return []
     qvec = np.asarray(embed.embed_query(query, mock=mock, key=key, model=model), dtype=np.float32)
@@ -67,7 +67,8 @@ def semantic_search(query: str, k: int = DEFAULT_K, *, doc_id: str | None = None
              "text": rows[i]["text"], "score": score} for i, score in _cosine_topk(qvec, mat, k)]
 
 
-def keyword_search(query: str, k: int = DEFAULT_K, *, doc_id: str | None = None) -> list[dict]:
+def keyword_search(query: str, k: int = DEFAULT_K, *, doc_id: str | None = None,
+                   collection: str | None = None) -> list[dict]:
     """Top-k chunks by KEYWORD relevance (BM25 via SQLite FTS5; a term-frequency fallback where FTS5
     isn't compiled in). Same hit shape as semantic_search; score is higher=better.
 
@@ -82,12 +83,12 @@ def keyword_search(query: str, k: int = DEFAULT_K, *, doc_id: str | None = None)
     diminishing returns), weighting RARE terms more than common ones (inverse document frequency), and
     discounting long chunks so they don't win just by being long. SQLite's bm25() does all of this.
     """
-    return store.keyword_match(query, k, doc_id=doc_id)
+    return store.keyword_match(query, k, doc_id=doc_id, collection=collection)
 
 
 # ── Hybrid merge (stage 4) ───────────────────────────────────────────────────
 def hybrid_search(query: str, k: int = CANDIDATE_K, *, doc_id: str | None = None,
-                  mock: bool = False, key: str | None = None,
+                  collection: str | None = None, mock: bool = False, key: str | None = None,
                   model: str = embed.DEFAULT_MODEL) -> list[dict]:
     """Run BOTH retrievers and merge their ranked lists into one with Reciprocal Rank Fusion (RRF).
 
@@ -103,8 +104,8 @@ def hybrid_search(query: str, k: int = CANDIDATE_K, *, doc_id: str | None = None
 
     Returns hit dicts: {chunk_id, doc_id, ord, text, score (=rrf), found_by:[...], ranks:{...}}.
     """
-    sem = semantic_search(query, k, doc_id=doc_id, mock=mock, key=key, model=model)
-    kw = keyword_search(query, k, doc_id=doc_id)
+    sem = semantic_search(query, k, doc_id=doc_id, collection=collection, mock=mock, key=key, model=model)
+    kw = keyword_search(query, k, doc_id=doc_id, collection=collection)
     pool: dict[str, dict] = {}
     for source, hits in (("semantic", sem), ("keyword", kw)):
         for rank0, h in enumerate(hits):
@@ -180,19 +181,20 @@ def _overlap(query: str, text: str) -> int:
 
 
 def retrieve(query: str, k: int = DEFAULT_K, *, candidate_k: int = CANDIDATE_K,
-             doc_id: str | None = None, mock: bool = False, key: str | None = None,
-             model: str = embed.DEFAULT_MODEL) -> list[dict]:
+             doc_id: str | None = None, collection: str | None = None, mock: bool = False,
+             key: str | None = None, model: str = embed.DEFAULT_MODEL) -> list[dict]:
     """The full retrieval entrypoint: hybrid-merge a candidate pool, then rerank down to the top k.
     This is what stage 5 (answer generation) calls."""
-    cands = hybrid_search(query, candidate_k, doc_id=doc_id, mock=mock, key=key, model=model)
+    cands = hybrid_search(query, candidate_k, doc_id=doc_id, collection=collection,
+                          mock=mock, key=key, model=model)
     return rerank(query, cands, top_n=k, mock=mock, key=key, model=model)
 
 
-def index_pending(*, doc_id: str | None = None, mock: bool = False, key: str | None = None,
-                  model: str = embed.DEFAULT_MODEL) -> int:
+def index_pending(*, doc_id: str | None = None, collection: str | None = None, mock: bool = False,
+                  key: str | None = None, model: str = embed.DEFAULT_MODEL) -> int:
     """Embed every chunk that doesn't have a vector yet and persist it. Returns how many were embedded.
     Idempotent: ingest documents, call this, and they become searchable; re-running is a no-op."""
-    pending = store.chunks_missing_embeddings(doc_id)
+    pending = store.chunks_missing_embeddings(doc_id, collection)
     if not pending:
         return 0
     vectors = embed.embed_texts([c["text"] for c in pending], mock=mock, key=key, model=model)

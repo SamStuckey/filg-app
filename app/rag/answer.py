@@ -58,11 +58,12 @@ def _cited(text: str, n_sources: int) -> list[int]:
     return sorted(n for n in nums if 1 <= n <= n_sources)
 
 
-def answer(query: str, k: int = DEFAULT_K, *, doc_id: str | None = None, mock: bool = False,
-           key: str | None = None, model: str = embed.DEFAULT_MODEL) -> tuple[dict, float]:
+def answer(query: str, k: int = DEFAULT_K, *, doc_id: str | None = None, collection: str | None = None,
+           mock: bool = False, key: str | None = None,
+           model: str = embed.DEFAULT_MODEL) -> tuple[dict, float]:
     """Answer `query` over the ingested documents, grounded in the top-k retrieved chunks, with
     [n] citations pointing at the numbered sources. Returns (result, cost)."""
-    hits = search.retrieve(query, k, doc_id=doc_id, mock=mock, key=key, model=model)
+    hits = search.retrieve(query, k, doc_id=doc_id, collection=collection, mock=mock, key=key, model=model)
     sources = _sources(hits)
     if not sources:
         return {"answer": _NO_ANSWER, "sources": [], "cited": [], "used_chunks": 0}, 0.0
