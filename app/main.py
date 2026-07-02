@@ -159,26 +159,55 @@ def _build_provider(kind: str, key: str):
     return provider.openrouter_provider(key)
 
 
-def _provider_for(user: str):
-    """The provider a session should run on: the user's saved key (OpenRouter or Anthropic, bills_filg
-    False), else FILG's hosted key for the free taste (bills_filg True, metered), else None. Keyless
-    users are walled (`_key_wall`) on every route EXCEPT the free-taste ones (start, help), so the
-    hosted fallback only ever runs there."""
+def _hosted():
+    """FILG's hosted provider (the 'account key'), or None if no hosted key is configured (BYOK-only)."""
+    return provider.anthropic_provider() if HOSTED_FREE else None
+
+
+def _byok_provider(user: str):
+    """The user's own saved key as a provider (bills_filg=False), or None if they have none."""
     if user and keys.enabled():
         key = keys.get_key(user)
         if key:
             kind = (keys.key_meta(user) or {}).get("provider") or "openrouter"
             return _build_provider(kind, key)
-    if HOSTED_FREE:
-        return provider.anthropic_provider()   # FILG's hosted key (bills_filg=True → metered + clamped)
     return None
 
 
+def _on_filg_key(user: str) -> bool:
+    """Whether the user's next run bills FILG's key (vs their own). This is the SINGLE precedence rule —
+    `_provider_for` picks the key from it, and metering follows the same decision so they never diverge:
+
+      - SUBSCRIBER: spend the paid monthly allowance on OUR key FIRST; only once it's exhausted fall back
+        to their own key (if they've added one) — never charge for credits and then quietly bill their
+        key. Over the allowance with no key → still ours (the fair-use gate then prompts add-key/wait).
+      - FREE / BYOK-only: their own key if they've saved one (they pay), else FILG's hosted free taste.
+
+    Read pre-op — i.e. against the allowance state the provider was chosen under — so it's stable for the
+    op's own metering (the op's spend isn't recorded until _meter runs)."""
+    tier = _tier(user)
+    if tier:
+        b = _budget(user, tier)
+        if not (b and b["over"]):
+            return True                 # under the paid allowance → our key
+        return not _is_byok(user)       # allowance spent → their key if they have one, else still ours
+    return not _is_byok(user)           # free/BYOK: their own key if saved, else the hosted taste
+
+
+def _provider_for(user: str):
+    """The provider a run uses, per `_on_filg_key`. Falls back across sides when one is unavailable (a
+    subscriber under allowance but no hosted key → their key; a free user with no key → the hosted
+    taste, or None → they get walled)."""
+    if _on_filg_key(user):
+        return _hosted() or _byok_provider(user)
+    return _byok_provider(user) or _hosted()
+
+
 def _meter(user: str, cost: float) -> None:
-    """Record a hosted op's spend. BYOK → the user's own spend, untracked (≈$0 on FILG's ledger). A
-    SUBSCRIBER's run goes on FILG's key → count it against their monthly fair-use cap (record_monthly
-    also bumps the daily kill switch). A free-taste run → the daily kill switch only."""
-    if _is_byok(user):
+    """Record a run's spend IFF it went on FILG's key (per `_on_filg_key`). A run on the user's own key
+    is their spend, untracked here. A subscriber's hosted run counts against their monthly allowance
+    (record_monthly also bumps the daily kill switch); a free-taste hosted run → the daily kill switch."""
+    if not cost or not _on_filg_key(user):
         return
     if _is_subscriber(user):
         usage.record_monthly(_acct(user), _period(user), cost, 0)
@@ -188,8 +217,8 @@ def _meter(user: str, cost: float) -> None:
 
 def _meter_tokens(user: str, toks: int) -> None:
     """Fold an op's token count into a subscriber's monthly usage (tokens only — cost is metered by
-    `_meter`; tracked here so the fair-use meter can show real token totals). No-op for BYOK/free."""
-    if toks and user and not _is_byok(user) and _is_subscriber(user):
+    `_meter`) when the run went on FILG's key. No-op for runs on the user's own key."""
+    if toks and user and _on_filg_key(user) and _is_subscriber(user):
         usage.record_monthly(_acct(user), _period(user), 0.0, int(toks))
 
 
@@ -272,7 +301,7 @@ def _run_slot(user: str, stack: str | None = None):
     The premium stack is clamped off FILG's free key so a free run can't spend Opus on FILG's dime."""
     cap = _concurrency_cap(user)
     tier = _tier(user)
-    if tier:   # subscriber over their monthly fair-use cap → block before spending more on FILG's key
+    if tier and not _is_byok(user):   # allowance spent AND no own key to fall back to → block (fair-use)
         b = _budget(user, tier)
         if b and b["over"]:
             raise BudgetError(b)
@@ -1032,8 +1061,7 @@ async def api_help(request: Request):
             reply = pipeline.call("help", pipeline.SONNET, max_tokens=400, system=HELP_SYSTEM, cache=True,
                                   prompt=f"Conversation so far:{convo or ' (none)'}\n\nUser: {message}\n\n"
                                          "Reply as the FILG help assistant.")
-            if prov.bills_filg:                    # FILG-key help → count it against the daily budget
-                usage.record_spend(round(pipeline.LEDGER.cost(), 4))
+            _meter(user, round(pipeline.LEDGER.cost(), 4))   # FILG-key help → daily + a subscriber's monthly cap
     except Exception as e:  # noqa: BLE001
         return _engine_error(e)
     return {"reply": (reply or "").strip() or "Sorry, I couldn't generate a reply, try rephrasing."}
@@ -3980,10 +4008,12 @@ function isSub(){ return !!curTier(); }
 // Stack keys this account may run ON OUR KEY: BYOK → any (they pay); subscriber → their tier's ceiling;
 // otherwise the Opus-free default (the server clamps to match, so this is just UI truth-in-advertising).
 function allowedStackKeys(){
+  // Subscriber → their tier's stacks (runs on our key are tier-clamped while under the allowance, which
+  // is the normal case; overflow onto their own key lifts it server-side). BYOK-only → any stack.
+  const t=curTier();
+  if(t){const tier=subTiers().find(x=>x.id===t);return tier?tier.stacks.map(s=>s.key):['the-work-horse'];}
   if(HAS_KEY) return STACKS_UI.map(u=>u.k);
-  const t=curTier(); if(!t) return ['the-work-horse'];
-  const tier=subTiers().find(x=>x.id===t);
-  return tier?tier.stacks.map(s=>s.key):['the-work-horse'];
+  return ['the-work-horse'];
 }
 function stackLocked(key){ return allowedStackKeys().indexOf(key)<0; }
 function tierForStack(key){ for(const t of subTiers()){ if((t.stacks||[]).some(s=>s.key===key)) return t; } return null; }

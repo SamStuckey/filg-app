@@ -84,3 +84,37 @@ def test_subscribe_route_validates(client, monkeypatch):
     monkeypatch.setattr(billing, "PDF_BILLING_ENABLED", True)
     # unauthenticated (no token, auth disabled in tests) → 401 before any Stripe call
     assert client.post("/api/subscribe", json={"tier": "pro"}).status_code == 401
+
+
+def test_key_precedence_paid_allowance_first(monkeypatch):
+    """A subscriber spends their paid allowance on OUR key first, THEN falls back to their own key —
+    we never charge for credits and then quietly bill their key. Free/BYOK users run on their key."""
+    import usage
+    email = "prec@x.com"
+    # free user: no key → hosted taste; with a key → their key
+    monkeypatch.setattr(main, "_is_byok", lambda u: False)
+    assert main._on_filg_key(email) is True
+    monkeypatch.setattr(main, "_is_byok", lambda u: True)
+    assert main._on_filg_key(email) is False
+    # subscriber UNDER allowance → OUR key even though they have a key (spend paid credits first)
+    _sub(email, "pro")
+    assert main._on_filg_key(email) is True
+    # exhaust the $16 allowance → fall back to their own key (the overflow)
+    usage.record_monthly(main._acct(email), main._period(email), 100.0, 0)
+    assert main._on_filg_key(email) is False
+    # over allowance but NO key → still ours (the fair-use gate then prompts add-key/wait)
+    monkeypatch.setattr(main, "_is_byok", lambda u: False)
+    assert main._on_filg_key(email) is True
+
+
+def test_meter_follows_actual_key(monkeypatch):
+    """Metering follows the key the run ACTUALLY used: a subscriber under allowance (on our key) is
+    metered monthly even though they have a key saved — the bug was skipping it because they had a key."""
+    import usage
+    email = "mfollow@x.com"
+    _sub(email, "pro")
+    monkeypatch.setattr(main, "_is_byok", lambda u: True)   # has a key, but under allowance → our key
+    rec = []
+    monkeypatch.setattr(usage, "record_monthly", lambda e, p, c, t: rec.append((c, t)))
+    main._meter(email, 0.5)
+    assert rec == [(0.5, 0)]                                 # metered against the monthly allowance
