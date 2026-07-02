@@ -471,6 +471,23 @@ async def api_subscribe(request: Request):
     return {"url": url}
 
 
+@app.post("/api/subscription/portal")
+async def api_subscription_portal(request: Request):
+    """Open a Stripe billing-portal session (update card / cancel). Signed-in subscriber only."""
+    authed = auth.user_from_request(request)
+    if not authed or not authed["email"]:
+        return JSONResponse({"error": "Sign in first."}, status_code=401)
+    acct = store.account_get(_acct(authed["email"])) or {}
+    cid = acct.get("stripe_customer_id")
+    if not cid:
+        return JSONResponse({"error": "No subscription to manage."}, status_code=400)
+    try:
+        url = billing.create_portal_url(cid)
+    except billing.StripeError as e:
+        return JSONResponse({"error": str(e)}, status_code=502)
+    return {"url": url}
+
+
 @app.post("/api/coupon")
 async def api_coupon(request: Request):
     """Redeem a coupon code to unlock the polished PDF for free (account-wide). Signed-in only. The
@@ -2613,7 +2630,7 @@ async function start(){
     const r=await fetch('/api/plan/start',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify(body)});
     const d=await r.json();
     if(d.gibberish){showJoke(d);go.disabled=false;go.textContent='Build my plan →';return;}  // nonsense → roast, no run
-    if(!r.ok){err.textContent=d.error||'Something went wrong.';go.disabled=false;go.textContent='Build my plan →';if(d.needKey)keyForm();return;}
+    if(!r.ok){err.textContent=d.error||'Something went wrong.';go.disabled=false;go.textContent='Build my plan →';gate(d);return;}
     SID=d.id;meterBaseline(d.id);   // baseline at 0 so this run's tokens fully count as research streams in
     clearWorkspace();   // new idea → never flash the previous plan's PURSUE block / tabs / research
     history.replaceState({plan:SID},'','/plan/'+SID);   // put the plan in the URL NOW so a mid-build refresh restores it
@@ -2733,8 +2750,9 @@ function renderStackTiles(){
   const cur=_stackIdx(STACK_CUR);
   pop.innerHTML='<div class=stackpop-h>Pick your crew. Sets the models behind research, the credibility gate, and the writing you read.</div>'+
     STACKS_UI.map((u,i)=>{
-      const badges=(u.rec?'<span class="st-badge rec">Recommended</span>':'');
-      return '<button type=button role=menuitemradio aria-checked='+(i===cur)+' class="stacktile'+(i===cur?' sel':'')+'" onclick="pickStack('+i+')">'+
+      const locked=stackLocked(u.k);
+      const badges=(u.rec?'<span class="st-badge rec">Recommended</span>':'')+(locked?'<span class="st-badge" style="opacity:.7">\\uD83D\\uDD12 upgrade</span>':'');
+      return '<button type=button role=menuitemradio aria-checked='+(i===cur)+' class="stacktile'+(i===cur?' sel':'')+'"'+(locked?' style="opacity:.6"':'')+' onclick="pickStack('+i+')">'+
         '<span class=st-top><span class=st-name>'+esc(u.n)+'</span><span class=st-badges>'+badges+'</span>'+
         '<span class=stack-cost aria-hidden=true>'+_stackCost(i)+'</span></span>'+
         '<span class=st-desc>'+esc(u.b)+'</span></button>';
@@ -2748,7 +2766,9 @@ function toggleStackPop(){
 }
 function closeStackPop(){const pop=document.getElementById('stackpop'),btn=document.getElementById('stackbtn');
   if(pop&&!pop.hidden){pop.hidden=true;btn.setAttribute('aria-expanded','false');}}
-function pickStack(i){const u=STACKS_UI[i];closeStackPop();if(u&&u.k!==STACK_CUR)commitStack(i);}
+function pickStack(i){const u=STACKS_UI[i];closeStackPop();if(!u)return;
+  if(stackLocked(u.k)){const t=tierForStack(u.k);pricingModal(t?('\\u201c'+u.n+'\\u201d is on the '+t.label+' plan and up. Upgrade to run it on our key, or bring your own key.'):null);return;}
+  if(u.k!==STACK_CUR)commitStack(i);}
 async function commitStack(i){
   const u=STACKS_UI[i]; if(!u)return;
   STACK_CUR=u.k; try{localStorage.setItem('filg_stack',u.k);}catch(e){}
@@ -3933,6 +3953,96 @@ async function buyPdf(){
     toast(d.error||'Could not start checkout.','err');
   }catch(e){toast('Network error starting checkout.','err');}
 }
+// ── Subscriptions: monthly tiers that run on FILG's key (Starter/Pro/Studio) ──
+function subTiers(){ return (me&&me.tiers)||CFG.tiers||[]; }
+function curTier(){ return (me&&me.tier)||null; }
+function isSub(){ return !!curTier(); }
+// Stack keys this account may run ON OUR KEY: BYOK → any (they pay); subscriber → their tier's ceiling;
+// otherwise the Opus-free default (the server clamps to match, so this is just UI truth-in-advertising).
+function allowedStackKeys(){
+  if(HAS_KEY) return STACKS_UI.map(u=>u.k);
+  const t=curTier(); if(!t) return ['the-work-horse'];
+  const tier=subTiers().find(x=>x.id===t);
+  return tier?tier.stacks.map(s=>s.key):['the-work-horse'];
+}
+function stackLocked(key){ return allowedStackKeys().indexOf(key)<0; }
+function tierForStack(key){ for(const t of subTiers()){ if((t.stacks||[]).some(s=>s.key===key)) return t; } return null; }
+const FEAT_LABEL={director_forge:'Forge custom directors',custom_directors:'Custom board',skeptic:'Adversarial stress-test'};
+
+async function subscribe(tier){
+  if(CFG.authEnabled&&!session){toast('Sign in to subscribe.');signinEmail();return;}
+  if(!CFG.subEnabled){toast('Billing isn\\u2019t set up yet.','err');return;}
+  try{
+    const r=await fetch('/api/subscribe',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({tier})});
+    const d=await r.json();
+    if(d.url){location.href=d.url;return;}          // → Stripe Checkout
+    if(d.current){toast('You\\u2019re already on that plan.');return;}
+    toast(d.error||'Could not start checkout.','err');
+  }catch(e){toast('Network error starting checkout.','err');}
+}
+function _tierCard(t){
+  const cur=curTier()===t.id;
+  const names=(t.stacks||[]).map(s=>{const u=STACKS_UI.find(x=>x.k===s.key);return u?u.n:s.key;});
+  const top=names[names.length-1]||'';
+  const feats=(t.features||[]).map(f=>FEAT_LABEL[f]||f);
+  return '<div class=tiercard style="border:1px solid '+(cur?'#2a7':'#ccc')+';border-radius:8px;padding:14px;flex:1;min-width:150px">'+
+    '<div style="font-weight:700">'+esc(t.label)+(cur?' <span style="color:#2a7">\\u2713 current</span>':'')+'</div>'+
+    '<div style="font-size:1.5em;font-weight:700;margin:4px 0">$'+t.price+'<span style="font-size:.5em;opacity:.6">/mo</span></div>'+
+    '<div style="font-size:.85em;opacity:.8;margin-bottom:8px">Models up to <b>'+esc(top)+'</b></div>'+
+    (feats.length?'<ul style="font-size:.85em;margin:0 0 10px;padding-left:18px">'+feats.map(f=>'<li>'+esc(f)+'</li>').join('')+'</ul>':'<div style="font-size:.85em;opacity:.6;margin:0 0 10px">Core plan builder + PDF</div>')+
+    '<div style="font-size:.8em;opacity:.7;margin-bottom:10px">Polished PDF included \\u00b7 runs on our key</div>'+
+    (cur?'<button type=button disabled>Your plan</button>':'<button type=button onclick="subscribe(\\''+t.id+'\\')">Choose '+esc(t.label)+'</button>');
+}
+function subMeterHtml(){
+  const s=me&&me.subscription; if(!s||!s.cap_cents)return '';
+  const pct=Math.min(100,Math.round(100*s.spent_cents/s.cap_cents));
+  const reset=s.reset_at?(' \\u00b7 resets '+new Date(s.reset_at).toLocaleDateString()):'';
+  return '<div style="margin:0 0 14px;font-size:.85em">This month\\u2019s allowance: <b>'+pct+'% used</b>'+reset+
+    '<div style="height:6px;background:#eee;border-radius:3px;margin-top:4px;overflow:hidden"><div style="height:100%;width:'+pct+'%;background:'+(pct>=100?'#c33':'#2a7')+'"></div></div></div>';
+}
+function pricingModal(note){
+  if(!subTiers().length){keyForm();return;}          // no tiers configured → fall back to BYOK
+  document.getElementById('modal-title').textContent=isSub()?'Change your plan':'Keep building';
+  const cards=subTiers().map(_tierCard).join('');
+  const byok=CFG.byokEnabled?'<div style="margin-top:14px;font-size:.9em">Prefer your own API key? <a href=# onclick="_closeModal();keyForm();return false">Bring your own key</a> \\u2014 free and unlimited, you pay your provider (pennies a plan). The polished PDF is '+pdfPriceStr()+' for 3 plans on that path.</div>':'';
+  document.getElementById('modal-body').innerHTML=
+    (note?'<p class=or style="margin:0 0 10px">'+esc(note)+'</p>':'')+(isSub()?subMeterHtml():'')+
+    '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px">'+cards+'</div>'+byok;
+  document.getElementById('modal-actions').innerHTML='<button type=button class=ghost onclick="_closeModal()">Maybe later</button>';
+  _openModal('.tiercard button:not([disabled])');
+}
+function fairUseModal(d){
+  const reset=d&&d.resetAt?(' It resets '+new Date(d.resetAt).toLocaleDateString()+'.'):'';
+  document.getElementById('modal-title').textContent='Monthly allowance used';
+  document.getElementById('modal-body').innerHTML='<p class=or style="margin:0 0 12px">You\\u2019ve used this month\\u2019s plan allowance on our key.'+esc(reset)+' Add your own API key to keep building for free, or wait for the reset.</p>';
+  document.getElementById('modal-actions').innerHTML='<button type=button class=ghost onclick="_closeModal()">OK</button>'+(CFG.byokEnabled?'<button type=button onclick="_closeModal();keyForm()">Add my key</button>':'');
+  _openModal('#modal-actions button');
+}
+function subPlanBlock(){   // the Account tab's subscription section
+  if(!CFG.subEnabled)return '<p class=pnote>Subscriptions aren\\u2019t enabled here.'+(CFG.byokEnabled?' Bring your own key to build for free.':'')+'</p>';
+  if(isSub()){
+    const lbl=(me&&me.tier_label)||'your plan';
+    return '<p class=pnote>You\\u2019re on <b>'+esc(lbl)+'</b> \\u2014 runs on our key, polished PDF included.</p>'+subMeterHtml()+
+      '<div class=prow><button class=gbtn onclick=pricingModal()>Change plan</button><button class=gbtn onclick=manageBilling()>Manage / cancel</button></div>';
+  }
+  return '<p class=pnote>Free on your own API key. Or subscribe monthly to run on our key (no key needed), polished PDF included.</p><div class=prow><button onclick=pricingModal()>See plans</button></div>';
+}
+async function manageBilling(){   // → Stripe billing portal (update card / cancel)
+  try{
+    const r=await fetch('/api/subscription/portal',{method:'POST',headers:authHeaders()});
+    const d=await r.json();
+    if(d.url){location.href=d.url;return;}
+    toast(d.error||'Could not open billing.','err');
+  }catch(e){toast('Network error.','err');}
+}
+// Central handler for a gated API error payload. Returns true if it opened a prompt.
+function gate(d){
+  if(!d)return false;
+  if(d.fairUse){fairUseModal(d);return true;}
+  if(d.upgrade){pricingModal('That\\u2019s a Pro feature (forge a custom director, adversarial stress-test). Upgrade, or add your own key.');return true;}
+  if(d.needKey){ if(CFG.subEnabled&&!HAS_KEY){pricingModal();} else {keyForm();} return true; }
+  return false;
+}
 async function redeemCoupon(){
   const inp=document.getElementById('coupon'); if(!inp)return;
   const code=(inp.value||'').trim(); if(!code){toast('Enter a code.','err');return;}
@@ -4238,6 +4348,7 @@ function renderProfile(pd,key){
             :`<p class=pnote>No key yet. Add your own OpenRouter or Anthropic key to build plans and use every tool.</p><div class=prow><button onclick=keyForm()>Add a key</button></div>`);
   }else{
     body=`<div class=acct-block><div class=acct-lbl>Contact</div><p class=pcontact>${esc(pd.email||'')}</p></div>`+
+      `<div class=acct-block><div class=acct-lbl>Plan</div>${subPlanBlock()}</div>`+
       `<div class=acct-block><div class=acct-lbl>Session</div><div class=prow><button class=gbtn onclick=signout()>Sign out</button></div></div>`+
       `<div class=acct-block><div class=acct-lbl>Danger zone</div><p class=pnote>Permanently delete your account, all projects, your key, and purchase history.</p><div class=prow><button class=danger onclick=deleteAccount()>Delete account</button></div></div>`;
   }
@@ -4379,7 +4490,7 @@ async function sendHelp(){
   try{
     const r=await fetch('/api/help',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({message:msg,history:HELP_MSGS.slice(-8)})});
     const d=await r.json(); wait.remove();
-    if(!r.ok){HELP_MSGS.push({role:'assistant',content:d.error||'Something went wrong.'}); renderHelp(); if(d.needKey)keyForm(); return;}
+    if(!r.ok){HELP_MSGS.push({role:'assistant',content:d.error||'Something went wrong.'}); renderHelp(); gate(d); return;}
     HELP_MSGS.push({role:'assistant',content:d.reply||'(no reply)'}); renderHelp();
   }catch(e){wait.remove(); HELP_MSGS.push({role:'assistant',content:'Network error, try again.'}); renderHelp();}
 }

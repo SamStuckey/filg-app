@@ -124,6 +124,15 @@ def create_subscription_checkout_url(email: str, *, tier: str, price_cents: int,
     return _post("/checkout/sessions", fields)["url"]
 
 
+def create_portal_url(customer_id: str) -> str:
+    """A Stripe billing-portal session URL so a subscriber can update their card or cancel. Cancellation
+    fires `customer.subscription.deleted` → handle_event drops the account back to free."""
+    if not PDF_BILLING_ENABLED:
+        raise StripeError("billing not configured")
+    return _post("/billing_portal/sessions",
+                 {"customer": customer_id, "return_url": f"{PUBLIC_URL}/account"})["url"]
+
+
 def account_tier(email: str) -> str | None:
     """The active paid tier for an account (normalized), or None. Thin pass-through so main.py reads
     subscription state through the billing module like the rest of the money surface."""
