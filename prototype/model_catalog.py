@@ -127,7 +127,10 @@ def available_ids(*, force: bool = False, client=None) -> set[str]:
     try:
         if client is None:
             import anthropic
-            client = anthropic.Anthropic()
+            # FILG's hosted key (FILG_ANTHROPIC_API_KEY preferred so it doesn't collide with a dev's
+            # ANTHROPIC_API_KEY / Claude Code login), else ANTHROPIC_API_KEY.
+            key = os.environ.get("FILG_ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")
+            client = anthropic.Anthropic(api_key=key) if key else anthropic.Anthropic()
         ids = {m.id for m in client.models.list()}
         _avail_cache.update(ids=ids, ts=now, error=None)
         return ids

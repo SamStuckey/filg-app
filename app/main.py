@@ -61,10 +61,11 @@ import model_catalog  # noqa: E402 — model ids/prices/slugs + cached Models AP
 from . import auth, billing, keys, planner, store, tiers  # noqa: E402 — persistence, auth, billing, keys, tiers
 
 MOCK = os.environ.get("FILG_MOCK") == "1"
-# "First query on us": when FILG has its own hosted Anthropic key (ANTHROPIC_API_KEY on Render), a
-# keyless user gets a free welcome run on it — metered by usage.py (per-user free cap + daily kill
-# switch). No hosted key → fully BYOK (the user must bring their own key from the first submit).
-HOSTED_FREE = bool(os.environ.get("ANTHROPIC_API_KEY"))
+# "First query on us" + subscriptions: when FILG has its own hosted Anthropic key, a keyless user gets a
+# free welcome run (metered by usage.py) and subscribers run on it. The key is FILG_ANTHROPIC_API_KEY
+# (preferred, so it doesn't collide with a dev's own ANTHROPIC_API_KEY / Claude Code login), else
+# ANTHROPIC_API_KEY. No hosted key → fully BYOK (the user must bring their own key from the first submit).
+HOSTED_FREE = bool(provider.hosted_key())
 
 
 def _has_pdf_access(email: str, plan_key: str | None = None, verified: bool = False) -> bool:

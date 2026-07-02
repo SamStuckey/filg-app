@@ -33,6 +33,7 @@ from __future__ import annotations
 import contextlib
 import contextvars
 import functools
+import os
 from dataclasses import dataclass, field
 
 import model_catalog  # noqa: E402 — id/price/slug source of truth (one-directional: provider → catalog)
@@ -143,12 +144,20 @@ class Provider:
         return self.models.get(logical, logical)
 
 
+def hosted_key() -> str | None:
+    """FILG's OWN hosted Anthropic key. Read from FILG_ANTHROPIC_API_KEY first so it doesn't collide with
+    a developer's ANTHROPIC_API_KEY (which their Claude Code / other tools use); falls back to
+    ANTHROPIC_API_KEY for Render/prod where only that is set. None → no hosted key (BYOK-only)."""
+    return os.environ.get("FILG_ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_API_KEY") or None
+
+
 def anthropic_provider(api_key: str | None = None, bills_filg: bool = True) -> Provider:
-    """Anthropic direct. No key → FILG's hosted ANTHROPIC_API_KEY (bills_filg=True, the free path).
-    A user's OWN Anthropic key → pass bills_filg=False (they pay; all Claude tiers incl. Opus). The
-    logical ids ARE the Anthropic ids, so the model map is identity."""
+    """Anthropic direct. No key + bills_filg → FILG's hosted key (FILG_ANTHROPIC_API_KEY, else
+    ANTHROPIC_API_KEY), the free/subscription path. A user's OWN Anthropic key → pass it with
+    bills_filg=False (they pay; all Claude tiers incl. Opus). Logical ids ARE the Anthropic ids (identity map)."""
     import anthropic
-    cl = anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic()
+    key = api_key or (hosted_key() if bills_filg else None)
+    cl = anthropic.Anthropic(api_key=key) if key else anthropic.Anthropic()
     return Provider("anthropic", "anthropic", cl, {HAIKU: HAIKU, SONNET: SONNET, OPUS: OPUS},
                     bills_filg=bills_filg)
 
