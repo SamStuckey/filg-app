@@ -268,12 +268,19 @@ def propose(idea: str, section_key: str, research_data: dict, history: list,
                   f"do NOT repeat them):\n{plan_so_far}") if plan_so_far else ""
     # Durable instruction (the IP) lives in the synth_section skill → cached system block; only the
     # runtime data (which section, the idea, decisions, graded research, board) goes in the user message.
-    draft = call(f"plan_{section_key}", SONNET, max_tokens=800,
-                 system=skills.system("synth_section"), cache=True, prompt=(
+    base_prompt = (
         f"SECTION TO WRITE: **{section['title']}** ({section['sub']}).{guide_block}\n\n"
         f"IDEA:\n{idea}\n\nDECISIONS SO FAR:\n{prior}{plan_block}{founder_block}{steer_block}{board_block}"
         f"{method_block}\n\n"
-        f"CITED RESEARCH:\n{cited}\n\nFLAGGED (vendor) CLAIMS:\n{flagged}"))
+        f"CITED RESEARCH:\n{cited}\n\nFLAGGED (vendor) CLAIMS:\n{flagged}")
+    # VOICE author seam (spine): generate → voice-lint → reprompt until clean (bounded, accumulating).
+    # The system block stays cached (the IP); only the appended lint feedback varies per attempt.
+    import spine, voice_lint  # noqa: PLC0415 — engine modules, real mode only
+    def _gen(fb: str) -> str:
+        return call(f"plan_{section_key}", SONNET, max_tokens=800,
+                    system=skills.system("synth_section"), cache=True,
+                    prompt=base_prompt + (f"\n\n{fb}" if fb else ""))
+    draft, _residual = spine.run_author(_gen, voice_lint.lint, max_fix=3)
     return draft, round(LEDGER.cost_slice(start), 4)
 
 
@@ -300,14 +307,57 @@ _MOCK_QA = {"notes": ["Read all seven sections as one plan — same buyer, offer
                       "Confirmed every cited link is a real source, no placeholders."],
             "fixed": []}
 
+# The plan-QA verdict, decomposed into atomic yes/no checks the SCRIPT routes from (instead of one
+# holistic "is this good?"). Each is voted; the failures (with reasons) are fed to the editor pass.
+QA_CHECKS = [
+    ("CONSISTENT", "Do ALL sections describe the SAME buyer, the SAME core offer, the SAME price, and "
+                   "the SAME primary channel, with no drift between sections?"),
+    ("NO_CONTRADICTION", "Is the plan free of statements that directly contradict each other across "
+                         "sections?"),
+    ("NO_INVENTED_STAT", "Does the plan avoid presenting any NEW statistic or hard number that is not "
+                         "already supported by the cited research (i.e. nothing fabricated)?"),
+]
+
+
+def _qa_judge(idea: str, plan_md: str, votes: int = 3) -> list[tuple[str, str]]:
+    """Voted boolean checklist over the assembled plan. Runs the atomic checks ×votes and resolves each
+    by majority with DEFAULT-TO-FAIL on a tie/uncertain. Returns the FAILED checks as (id, why) so the
+    editor can fix exactly those. The script owns the route; the model only answers yes/no + why."""
+    from pipeline import call, extract_json, SONNET
+    listing = "\n".join(f"{i + 1}. [{cid}] {q}" for i, (cid, q) in enumerate(QA_CHECKS))
+    prompt = (
+        "You are auditing a finished business plan against a fixed checklist. For EACH numbered check, "
+        "answer pass or fail for THIS plan, and give a one-line why. Answer fail only if you can point "
+        "to a concrete problem; if unsure, answer fail (we default to the safe side).\n\n"
+        f"CHECKLIST:\n{listing}\n\n"
+        'Reply ONLY with a JSON array, same order: [{"i": 1, "verdict": "pass", "why": "..."}, ...].\n\n'
+        f"IDEA:\n{idea}\n\nTHE PLAN:\n{plan_md}")
+    rounds = []
+    for _ in range(max(1, votes)):
+        data = extract_json(call("plan_qa_check", SONNET, max_tokens=400, prompt=prompt))
+        verds = {}
+        for item in (data if isinstance(data, list) else []):
+            if isinstance(item, dict) and "i" in item:
+                verds[int(item["i"])] = (str(item.get("verdict", "")).lower().strip(),
+                                         str(item.get("why", "")).strip())
+        rounds.append(verds)
+    failed: list[tuple[str, str]] = []
+    for i, (cid, _q) in enumerate(QA_CHECKS, start=1):
+        votes_for = [r.get(i, ("fail", "")) for r in rounds]          # missing answer → fail (safe side)
+        fails = [(v, why) for v, why in votes_for if v != "pass"]
+        if len(fails) * 2 >= len(votes_for):                          # majority (ties) fail → fail
+            why = next((w for _v, w in fails if w), "failed the check")
+            failed.append((cid, why))
+    return failed
+
 
 def qa_plan(idea: str, files: dict, mock: bool = False) -> tuple[dict, dict, float]:
     """Final QA pass over the WHOLE assembled plan, run once right before it's marked complete. The
-    facts/numbers were graded earlier and are assumed settled — this never touches a statistic. It
-    checks the PLAN reads as ONE coherent piece: consistent buyer/offer/price/channel across sections,
-    no contradictions, tight on-voice prose, no broken/placeholder links. Returns (files, report, cost)
-    where report = {notes:[...], fixed:[file,...]}. Only sections the editor actually rewrote (keyed by
-    exact file path) are applied; everything else is left byte-for-byte unchanged."""
+    facts/numbers were graded earlier and are assumed settled — this never touches a statistic. A VOTED
+    boolean checklist (`_qa_judge`) decides what's wrong (consistency / contradictions / invented stats);
+    its failures are fed to an editor pass that rewrites only the sections that need it. Returns
+    (files, report, cost) where report = {notes:[...], fixed:[file,...]}. Only sections the editor
+    actually rewrote (keyed by exact file path) are applied; everything else is left byte-for-byte."""
     if not files:
         return files, {"notes": [], "fixed": []}, 0.0
     if mock:
@@ -315,6 +365,13 @@ def qa_plan(idea: str, files: dict, mock: bool = False) -> tuple[dict, dict, flo
     from pipeline import LEDGER, call, extract_json, SONNET  # heavy; real mode only
     start = len(LEDGER.rows)
     paths = list(files.keys())
+    plan_md = bundle_markdown(idea, files)
+    # Gate first: the voted checklist names the concrete problems; the editor then fixes exactly those.
+    failed = _qa_judge(idea, plan_md)
+    fail_block = ("\n\nThe QA checklist FAILED these checks — fix each one specifically:\n"
+                  + "\n".join(f"- [{cid}] {why}" for cid, why in failed)) if failed else ""
+    check_notes = ([f"Checklist: all {len(QA_CHECKS)} checks passed."] if not failed
+                   else [f"Checklist flagged [{cid}]: {why}" for cid, why in failed])
     out = call("plan_qa", SONNET, max_tokens=1800, system=skills.VOICE, prompt=(
         "You are the final editor of a finished business plan, doing ONE last QA pass before it ships. "
         "The FACTS and numbers are already graded and settled — do NOT add, remove, or change any "
@@ -327,19 +384,22 @@ def qa_plan(idea: str, files: dict, mock: bool = False) -> tuple[dict, dict, flo
         "Only rewrite a section if it genuinely needs it. Output STRICTLY this JSON, no preamble:\n"
         '{"notes": ["short bullet on what you checked or fixed", ...], '
         '"fixes": {"<exact file path>": "<full corrected markdown for that one section>"}}\n'
-        "Leave \"fixes\" empty for any section you did not change; file-path keys must match exactly.\n\n"
+        "Leave \"fixes\" empty for any section you did not change; file-path keys must match exactly."
+        f"{fail_block}\n\n"
         f"IDEA:\n{idea}\n\nVALID FILE PATHS (use these exact strings as fixes keys):\n{paths}\n\n"
-        f"THE PLAN:\n{bundle_markdown(idea, files)}"))
+        f"THE PLAN:\n{plan_md}"))
     data = extract_json(out)
     data = data if isinstance(data, dict) else {}
-    notes = [str(n).strip() for n in (data.get("notes") or []) if str(n).strip()][:6]
+    notes = check_notes + [str(n).strip() for n in (data.get("notes") or []) if str(n).strip()]
+    notes = notes[:6]
     fixes = data.get("fixes") if isinstance(data.get("fixes"), dict) else {}
     revised, fixed = dict(files), []
     for path, body in (fixes or {}).items():
         if path in revised and isinstance(body, str) and len(body.strip()) > 40:
             revised[path] = body.strip()
             fixed.append(path)
-    return revised, {"notes": notes, "fixed": fixed}, round(LEDGER.cost_slice(start), 4)
+    return revised, {"notes": notes, "fixed": fixed, "checks_failed": [cid for cid, _ in failed]}, \
+        round(LEDGER.cost_slice(start), 4)
 
 
 def _plan_so_far(files: dict) -> str | None:

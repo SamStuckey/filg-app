@@ -143,6 +143,9 @@ def init() -> None:
                     con.execute("ALTER TABLE plan_sessions ADD COLUMN tokens INTEGER NOT NULL DEFAULT 0")
                 if "stack" not in have:
                     con.execute("ALTER TABLE plan_sessions ADD COLUMN stack TEXT NOT NULL DEFAULT 'the-work-horse'")
+                if "updated_at" not in have:   # recency for the profile sort (most recently viewed/edited first)
+                    con.execute("ALTER TABLE plan_sessions ADD COLUMN updated_at TEXT")
+                    con.execute("UPDATE plan_sessions SET updated_at=created_at WHERE updated_at IS NULL")
         finally:
             con.close()
         _initialized = True
@@ -397,12 +400,13 @@ def plan_create(session_id: str, user: str, idea: str, directors: list | None = 
     con = _connect()
     try:
         with con:
+            now = datetime.now(timezone.utc).isoformat()
             con.execute(
                 "INSERT INTO plan_sessions "
-                "(id, user, idea, status, files, history, directors, board, created_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?)",
+                "(id, user, idea, status, files, history, directors, board, created_at, updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?)",
                 (session_id, user, idea, "researching", "{}", "[]",
-                 json.dumps(directors or []), "[]", datetime.now(timezone.utc).isoformat()))
+                 json.dumps(directors or []), "[]", now, now))
     finally:
         con.close()
 
@@ -424,13 +428,16 @@ def plan_get(session_id: str) -> dict | None:
 
 
 def plan_save(session_id: str, **fields) -> None:
-    """Update the given columns; JSON-encode the dict/list ones."""
+    """Update the given columns; JSON-encode the dict/list ones. Every write bumps updated_at so the
+    profile can sort plans by most-recently-edited."""
     if not fields:
         return
     sets, vals = [], []
     for k, v in fields.items():
         sets.append(f"{k}=?")
         vals.append(json.dumps(v) if k in _PLAN_JSON else v)
+    sets.append("updated_at=?")
+    vals.append(datetime.now(timezone.utc).isoformat())
     vals.append(session_id)
     con = _connect()
     try:
@@ -440,16 +447,29 @@ def plan_save(session_id: str, **fields) -> None:
         con.close()
 
 
+def plan_touch(session_id: str) -> None:
+    """Bump updated_at without changing anything else — called when a plan is opened/viewed, so the
+    profile sort treats a recent view as recent activity."""
+    con = _connect()
+    try:
+        with con:
+            con.execute("UPDATE plan_sessions SET updated_at=? WHERE id=?",
+                        (datetime.now(timezone.utc).isoformat(), session_id))
+    finally:
+        con.close()
+
+
 def plan_list(user: str, limit: int = 50) -> list[dict]:
-    """Recent plan sessions for a user (newest first) — for the profile / 'My plans' view."""
+    """Recent plan sessions for a user — for the profile / 'My plans' view. Ordered by most recently
+    viewed/edited first (updated_at), falling back to created_at for any pre-migration row."""
     if not user:
         return []
     init()
     con = _connect()
     try:
         rows = con.execute(
-            "SELECT id, idea, status, step, shared, created_at FROM plan_sessions "
-            "WHERE user=? ORDER BY created_at DESC LIMIT ?",
+            "SELECT id, idea, status, step, shared, created_at, updated_at FROM plan_sessions "
+            "WHERE user=? ORDER BY COALESCE(updated_at, created_at) DESC LIMIT ?",
             (user.strip().lower(), limit)).fetchall()
     finally:
         con.close()

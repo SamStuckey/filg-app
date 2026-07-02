@@ -120,6 +120,66 @@ def test_as_year_coerces_and_bounds():
     assert pipeline._as_year(1500) is None   # implausible year rejected
 
 
+# ── voted moat gate + staleness ───────────────────────────────────────────────
+def test_judge_batch_voted_resolves_by_majority(monkeypatch):
+    rounds = iter([
+        '[{"i": 1, "verdict": "TRUST"}, {"i": 2, "verdict": "TRUST"}]',
+        '[{"i": 1, "verdict": "TRUST"}, {"i": 2, "verdict": "FLAG_SELF_INTERESTED"}]',
+        '[{"i": 1, "verdict": "TRUST"}, {"i": 2, "verdict": "FLAG_SELF_INTERESTED"}]',
+    ])
+    monkeypatch.setattr(pipeline, "call", lambda *a, **k: next(rounds))
+    out = pipeline.judge_batch_voted([_claim("https://census.gov"), _claim("https://v.com")], votes=3)
+    assert out == ["TRUST", "FLAG_SELF_INTERESTED"]   # claim2: 2 flags beat 1 trust
+
+
+def test_judge_batch_voted_defaults_to_flag_on_tie(monkeypatch):
+    rounds = iter(['[{"i": 1, "verdict": "TRUST"}]', '[{"i": 1, "verdict": "FLAG_SELF_INTERESTED"}]'])
+    monkeypatch.setattr(pipeline, "call", lambda *a, **k: next(rounds))
+    # a 1-1 tie must route to the safe (flag) side — the moat defaults to flag on ambiguity.
+    assert pipeline.judge_batch_voted([_claim("https://v.com")], votes=2) == ["FLAG_SELF_INTERESTED"]
+
+
+def test_is_stale_window():
+    assert pipeline._is_stale(Claim("x", "u", True, None, as_of=2020), now_year=2026)       # 6y > 36mo
+    assert not pipeline._is_stale(Claim("x", "u", True, None, as_of=2024), now_year=2026)   # 2y < 36mo
+    assert not pipeline._is_stale(Claim("x", "u", True, None, as_of=None), now_year=2026)   # unknown year
+    assert not pipeline._is_stale(Claim("x", "u", False, None, as_of=2000), now_year=2026)  # not quantitative
+
+
+def test_gate_flags_stale_even_when_primary():
+    c = Claim("X grew 10%", "https://census.gov/x", True, None, as_of=2018)
+    v = gate_claim(c, jv="TRUST", now_year=2026)
+    assert v.flagged is True and v.stale is True and "stale" in v.reason
+
+
+def test_gate_keeps_fresh_primary():
+    c = Claim("X grew 10%", "https://census.gov/x", True, None, as_of=2025)
+    v = gate_claim(c, jv="TRUST", now_year=2026)
+    assert v.flagged is False and v.stale is False
+
+
+def test_gate_claim_records_atomic_checks():
+    v = gate_claim(_claim("https://vendor.io/x", promotes="cat"), jv="FLAG_SELF_INTERESTED", now_year=2026)
+    assert v.checks["self_interested"] is True and v.checks["stale"] is False and v.checks["tier"]
+
+
+# ── research seam: schema validator + reprompt ────────────────────────────────
+def test_parse_claims_requires_real_http_url():
+    cs = pipeline._parse_claims([
+        {"text": "2.5M shops", "source_url": "https://census.gov/x", "quantitative": True},
+        {"text": "no url", "source_url": "not-a-url"},          # dropped: not gradeable
+        {"text": "", "source_url": "https://x.com"},            # dropped: no text
+    ])
+    assert len(cs) == 1 and cs[0].source_url == "https://census.gov/x"
+
+
+def test_research_lane_reprompts_on_unparseable(monkeypatch):
+    replies = iter(["sorry, no json", '[{"text": "2M shops", "source_url": "https://census.gov/x"}]'])
+    monkeypatch.setattr(pipeline, "call", lambda *a, **k: next(replies))
+    out = pipeline.research_lane("idea", "how big is the market?")
+    assert len(out) == 1 and out[0].text == "2M shops"   # recovered on the second (reprompted) attempt
+
+
 def test_build_evidence_emits_leaf_events(monkeypatch):
     # The runner's leaf viz is driven by two sentinel progress lines: §LANES§<json> up front, then a
     # §LANEDONE§<index> as each lane future completes. Guard that build_evidence emits both, with one

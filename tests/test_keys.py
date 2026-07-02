@@ -58,12 +58,33 @@ from app import main  # noqa: E402
 _IDEA = {"idea": "a real idea about coaching small dental practices", "email": "x@y.com"}
 
 
-def test_start_walls_without_key_on_first_submit(client, monkeypatch):
-    # No free welcome plan anymore: BYOK on + no key → the very first submit needs a key.
+def test_start_walls_without_hosted_key(client, monkeypatch):
+    # BYOK on, no user key, and NO hosted FILG key → must bring a key from the very first submit.
     monkeypatch.setattr(main.keys, "enabled", lambda: True)
     monkeypatch.setattr(main.keys, "has_key", lambda u: False)
+    monkeypatch.setattr(main, "HOSTED_FREE", False)
     r = client.post("/api/plan/start", json=_IDEA)
-    assert r.status_code == 402 and r.json()["needKey"] is True          # must BYOK from the start
+    assert r.status_code == 402 and r.json()["needKey"] is True
+
+
+def test_first_query_free_on_hosted_key(client, monkeypatch):
+    # BYOK on, no user key, hosted FILG key present, free taste available → the first query is on us.
+    monkeypatch.setattr(main.keys, "enabled", lambda: True)
+    monkeypatch.setattr(main.keys, "has_key", lambda u: False)
+    monkeypatch.setattr(main, "HOSTED_FREE", True)
+    monkeypatch.setattr(main.usage, "can_run", lambda *a, **k: (True, "ok"))
+    r = client.post("/api/plan/start", json=_IDEA)
+    assert r.status_code == 200 and "id" in r.json()
+
+
+def test_free_taste_used_degrades_to_needkey(client, monkeypatch):
+    # Free taste used up (or the daily pool tapped) → degrade to a key prompt, not a dead end.
+    monkeypatch.setattr(main.keys, "enabled", lambda: True)
+    monkeypatch.setattr(main.keys, "has_key", lambda u: False)
+    monkeypatch.setattr(main, "HOSTED_FREE", True)
+    monkeypatch.setattr(main.usage, "can_run", lambda *a, **k: (False, "free limit reached"))
+    r = client.post("/api/plan/start", json=_IDEA)
+    assert r.status_code == 402 and r.json()["needKey"] is True
 
 
 def test_byok_user_has_no_cap(client, monkeypatch):

@@ -47,7 +47,7 @@ def test_run_slot_caps_at_flat_limit():
     with pytest.raises(main.BusyError):
         with main._run_slot(user):
             pass
-    for cm in held:
+    for cm in reversed(held):   # exit LIFO — context managers (the bound provider/ledger) must unwind in reverse
         cm.__exit__(None, None, None)
     with main._run_slot(user):             # slots freed → works again
         pass

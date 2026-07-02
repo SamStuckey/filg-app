@@ -59,6 +59,10 @@ import pipeline   # noqa: E402 — engine: per-run cost ledger (run_ledger) for 
 from . import auth, billing, keys, planner, store  # noqa: E402 — persistence, auth, billing, BYOK keys
 
 MOCK = os.environ.get("FILG_MOCK") == "1"
+# "First query on us": when FILG has its own hosted Anthropic key (ANTHROPIC_API_KEY on Render), a
+# keyless user gets a free welcome run on it — metered by usage.py (per-user free cap + daily kill
+# switch). No hosted key → fully BYOK (the user must bring their own key from the first submit).
+HOSTED_FREE = bool(os.environ.get("ANTHROPIC_API_KEY"))
 
 
 def _has_pdf_access(email: str, plan_key: str | None = None, verified: bool = False) -> bool:
@@ -102,15 +106,18 @@ def _build_provider(kind: str, key: str):
 
 
 def _provider_for(user: str):
-    """The provider a session should run on: the user's saved key (OpenRouter or Anthropic), else None
-    (FILG's key). provider.use(None) is a no-op, so callers can wrap unconditionally."""
-    if not (user and keys.enabled()):
-        return None
-    key = keys.get_key(user)
-    if not key:
-        return None
-    kind = (keys.key_meta(user) or {}).get("provider") or "openrouter"
-    return _build_provider(kind, key)
+    """The provider a session should run on: the user's saved key (OpenRouter or Anthropic, bills_filg
+    False), else FILG's hosted key for the free taste (bills_filg True, metered), else None. Keyless
+    users are walled (`_key_wall`) on every route EXCEPT the free-taste ones (start, help), so the
+    hosted fallback only ever runs there."""
+    if user and keys.enabled():
+        key = keys.get_key(user)
+        if key:
+            kind = (keys.key_meta(user) or {}).get("provider") or "openrouter"
+            return _build_provider(kind, key)
+    if HOSTED_FREE:
+        return provider.anthropic_provider()   # FILG's hosted key (bills_filg=True → metered + clamped)
+    return None
 
 
 def _meter(user: str, cost: float) -> None:
@@ -194,7 +201,8 @@ def _run_slot(user: str, stack: str | None = None):
         _inflight[user] = _inflight.get(user, 0) + 1
     try:
         prov = _provider_for(user)
-        stk = provider.clamp_stack(stack, byok=prov is not None)
+        # Only a user-PAID provider unlocks the premium (Opus) tiers; FILG's hosted free key stays clamped.
+        stk = provider.clamp_stack(stack, byok=bool(prov and not prov.bills_filg))
         with provider.use(prov), provider.use_stack(stk), pipeline.run_ledger():
             yield
     finally:
@@ -707,13 +715,14 @@ def _plan_research(session_id: str, idea: str, user: str) -> None:
             progress.append(line)            # the UI spews it live AND the session meter ticks during research
             store.plan_save(session_id, progress=list(progress),
                             tokens=pipeline.LEDGER.tokens(), cost=round(pipeline.LEDGER.cost(), 4))
-        prov = _provider_for(user)   # BYOK: run the whole pre-build pass on the user's key if they have one
+        prov = _provider_for(user)   # user's own key if they have one, else FILG's hosted free key
         sess0 = store.plan_get(session_id) or {}
-        stk = provider.clamp_stack(sess0.get("stack"), byok=prov is not None)  # premium clamped off FILG's key
+        # premium (Opus) only on a user-paid key; FILG's hosted free key is clamped to the default tier
+        stk = provider.clamp_stack(sess0.get("stack"), byok=bool(prov and not prov.bills_filg))
         with provider.use(prov), provider.use_stack(stk), pipeline.run_ledger():
             prep = planner.prepare(idea, mock=MOCK, on_progress=on_progress)  # intake → research → vet → draft
             toks = pipeline.LEDGER.tokens()   # the welcome run's token usage → seeds the session meter
-        if prov is None:   # FILG's key → meter the free run; BYOK is the user's spend, not metered
+        if prov is not None and prov.bills_filg:   # FILG's hosted key → meter the free run (invariant #3)
             # the per-user free-taste counter dedupes on the normalized email (alias anti-abuse)
             usage.record_run(auth.normalize_email(user), prep["research_cost"])  # free run + daily total
             usage.record_spend(prep["cost"] - prep["research_cost"])  # intake + vet + first draft → daily
@@ -742,13 +751,20 @@ async def api_plan_start(request: Request):
     if _is_byok(user):
         pass   # has a key → unlimited plans on their own spend
     elif keys.enabled():
-        # BYOK on, no key: require a key from the very first submit. FILG covers no runs now —
-        # the free "welcome" plan is gone (Sam 2026-06-25); even the first query is on the user's key.
-        return JSONResponse(
-            {"error": "Add your API key to build your plan — an OpenRouter key (any model) or your "
-                      "own Anthropic key (Claude direct). You pay the provider directly, usually "
-                      "pennies a plan.",
-             "needKey": True}, status_code=402)
+        # BYOK on, no key: the FIRST query is on us when FILG has a hosted key (metered + kill-switch).
+        # Once the free taste is used (or the daily budget is hit), degrade to a key prompt, not a wall.
+        if not HOSTED_FREE:
+            return JSONResponse(
+                {"error": "Add your API key to build your plan — an OpenRouter key (any model) or your "
+                          "own Anthropic key (Claude direct), usually pennies a plan.",
+                 "needKey": True}, status_code=402)
+        allowed, _reason = usage.can_run(taste_id, is_paid=False)   # per-user free cap + daily kill switch
+        if not allowed:
+            return JSONResponse(
+                {"error": "Your free plan is used up (or today's free pool is tapped). Add your own "
+                          "API key to keep building — usually pennies a plan.",
+                 "needKey": True}, status_code=402)
+        # else: first query on the house → runs on FILG's hosted key; _plan_research meters it
     else:
         # BYOK off (no FILG_KEY_SECRET — dev/local): keep the legacy free-cap behavior so dev works.
         allowed, reason = usage.can_run(taste_id, is_paid=False)
@@ -778,9 +794,77 @@ async def api_plans(request: Request):
             full = store.plan_get(p["id"]) or {}
             unlocked = _has_pdf_access(authed["email"], _plan_key(full), verified=True)
         plans.append({"id": p["id"], "idea": p["idea"], "status": p["status"], "step": p["step"],
-                      "created_at": p["created_at"], "done": done,
-                      "shared": bool(p.get("shared")), "pdf_unlocked": unlocked})
+                      "created_at": p["created_at"], "updated_at": p.get("updated_at") or p["created_at"],
+                      "done": done, "shared": bool(p.get("shared")), "pdf_unlocked": unlocked})
     return {"email": authed["email"], "total": planner.N, "plans": plans}
+
+
+# ── In-app product help (a standard website help chat; runs on the user's key) ──
+HELP_SYSTEM = (
+    "You are the in-app help assistant for FILG (a tool that turns a rough business idea, or just "
+    "someone's skills and interests, into a vetted, buildable business plan). Help the user USE the "
+    "product. Be brief and concrete (2 to 5 sentences), friendly and plain.\n\n"
+    "How FILG works:\n"
+    "- Start on the home page: type your idea (or just what you're good at) and submit. FILG researches "
+    "the market and grades every stat through a source-credibility gate, so vendor marketing is labeled, "
+    "not repeated as fact. Then it vets the idea (pursue / pivot / kill).\n"
+    "- Then you build the plan one part at a time (7 parts: the setup, what you sell, why you win, "
+    "pricing, go-to-market, delivery, and a 30-day plan).\n"
+    "- To move through the build, use the buttons at the bottom: 'I'm with you' locks the current part in "
+    "and builds the next one; 'Not feeling it' redraws the current part, and you can add a note to steer "
+    "the rewrite. You can branch back to an earlier part anytime from the plan tree.\n"
+    "- Board of Directors: optional AI advisors that review your sections; you can convene them or forge a "
+    "custom one. 'Chat with your plan' is an advisor grounded in your actual plan and research.\n"
+    "- Export: the raw files (.zip) and the LLM hand-off prompt are free; the polished investor-grade PDF "
+    "is a one-time $13 unlock.\n"
+    "- Your key: FILG runs on your own API key (OpenRouter or Anthropic). Add or change it in the key "
+    "modal or the API config tab of your profile. Everything uses your key, usually pennies per plan.\n"
+    "- Your profile (/account) has tabs for your plans, files, API config, and account settings.\n\n"
+    "Only answer questions about USING FILG. If they ask for strategy on their specific business, point "
+    "them to 'Chat with your plan' or the Board. Do not invent features you're unsure about. Write "
+    "plainly: no em-dashes, no AI-tell words."
+)
+
+_HELP_MOCK = ("This is mock help (no key bound). In the real app: type your idea on the home page, then "
+              "use 'I'm with you' to lock each part and build the next, or 'Not feeling it' to redo a part. "
+              "It runs on your own API key.")
+
+
+@app.post("/api/help")
+async def api_help(request: Request):
+    """A standard website-style help chat for using the product. Runs on the user's own key (BYOK),
+    same as every other engine call; no plan/session required."""
+    if MOCK:
+        return {"reply": _HELP_MOCK}
+    authed = auth.user_from_request(request)
+    user = authed["email"] if authed else None
+    prov = _provider_for(user)   # the user's own key, else FILG's hosted free key (if configured)
+    if prov is None:
+        return JSONResponse({"error": "Add your API key to use help (it runs on your own key).",
+                             "needKey": True}, status_code=402)
+    if prov.bills_filg and usage.kill_switch_tripped():   # help on FILG's key respects the daily budget
+        return JSONResponse({"error": "Today's free pool is tapped. Add your own API key to keep going.",
+                             "needKey": True}, status_code=402)
+    body = await request.json()
+    message = (body.get("message") or "").strip()
+    if not message:
+        return JSONResponse({"error": "Ask a question."}, status_code=400)
+    if len(message) > 1000:
+        return JSONResponse({"error": "Keep it under 1000 characters."}, status_code=400)
+    convo = ""
+    for m in (body.get("history") or [])[-6:]:
+        who = "User" if m.get("role") == "user" else "Help"
+        convo += f"\n{who}: {str(m.get('content', ''))[:600]}"
+    try:
+        with provider.use(prov), provider.use_stack(provider.DEFAULT_STACK), pipeline.run_ledger():
+            reply = pipeline.call("help", pipeline.SONNET, max_tokens=400, system=HELP_SYSTEM, cache=True,
+                                  prompt=f"Conversation so far:{convo or ' (none)'}\n\nUser: {message}\n\n"
+                                         "Reply as the FILG help assistant.")
+            if prov.bills_filg:                    # FILG-key help → count it against the daily budget
+                usage.record_spend(round(pipeline.LEDGER.cost(), 4))
+    except Exception as e:  # noqa: BLE001
+        return _engine_error(e)
+    return {"reply": (reply or "").strip() or "Sorry, I couldn't generate a reply, try rephrasing."}
 
 
 @app.get("/api/plan/{sid}")
@@ -788,6 +872,8 @@ async def api_plan_get(sid: str, request: Request):
     s = store.plan_get(sid)
     if not s or not _owns(request, s):
         return JSONResponse({"error": "unknown session"}, status_code=404)
+    if request.query_params.get("touch"):   # explicit open (not a status poll) → bump recency for the profile sort
+        store.plan_touch(sid)
     return _plan_state(s)
 
 
@@ -1544,6 +1630,7 @@ def _render_page(deep: bool = False) -> str:
     cfg = json.dumps({"authEnabled": auth.AUTH_ENABLED,
                       "pdfBilling": billing.PDF_BILLING_ENABLED, "pdfPrice": billing.PDF_PRICE_CENTS,
                       "byokEnabled": keys.enabled(),
+                      "freeTaste": bool(HOSTED_FREE and keys.enabled()),   # first query on FILG's key
                       "supabaseUrl": os.environ.get("SUPABASE_URL", ""),
                       "supabaseAnon": (os.environ.get("SUPABASE_PUBLISHABLE_KEY")
                                        or os.environ.get("SUPABASE_ANON_KEY", "")),
@@ -1566,6 +1653,15 @@ async def index():
 async def plan_page(sid: str):
     """Serve the SPA shell for a deep-linked plan; the frontend reads the id from the path and loads
     it. (Distinct from `/p/{id}` — the server-rendered public share — and `/r/{id}` teardowns.)"""
+    return _render_page(deep=True)
+
+
+@app.get("/account", response_class=HTMLResponse)
+@app.get("/account/{tab}", response_class=HTMLResponse)
+async def account_page(tab: str = ""):
+    """Serve the SPA shell for the profile/account tabs (/account/plans, /account/api-config, …) so they
+    are directly visitable and survive a refresh. The frontend reads the tab from the path and opens it.
+    `deep=True` boots with the loader (no landing-page flash before the tab renders)."""
     return _render_page(deep=True)
 
 
@@ -1689,13 +1785,6 @@ button:hover{background:#e8e8e8}button:disabled{opacity:.5;cursor:default}
 .golane .go{width:100%}
 .bail{background:none;border:0;color:var(--muted);font-size:13px;font-weight:400;padding:2px 4px;text-decoration:underline;cursor:pointer}
 .bail:hover{color:var(--ink)}
-/* unbound scrolling vibe footer — ugly on purpose, craigslist forever */
-.vibestrip{position:fixed;bottom:0;left:0;right:0;z-index:40;overflow:hidden;white-space:nowrap;background:transparent;border-top:1px solid var(--line);padding:3px 0;pointer-events:none}
-.vibetrack{display:inline-block;white-space:nowrap;will-change:transform;animation:vibescroll 900s linear infinite}
-.vibe{font-size:11px;color:var(--muted);opacity:.6;padding:0 2.5em}
-@keyframes vibescroll{from{transform:translateX(0)}to{transform:translateX(-50%)}}
-@media(prefers-reduced-motion:reduce){.vibetrack{animation:none}}
-body.hasbar .vibestrip{display:none}   /* don't fight the fixed action bar mid-build */
 .err{color:var(--kill);margin-top:10px;font-weight:700}
 .authbar{display:flex;align-items:center;gap:12px;font-size:13px}
 .authbar .who{color:var(--muted)}.authbar b{color:var(--ink)}
@@ -1825,6 +1914,39 @@ body.hasbar .workspace{padding-bottom:74px}
 .ab-back:hover:not([disabled]){background:#f4f4f4}
 .ab-next{background:var(--ink);color:#fff;border-color:var(--ink)}
 .ab-next:hover:not([disabled]){opacity:.9}
+.actionbar .ab-hint{margin-right:auto;color:var(--muted);font-size:12.5px;max-width:50ch;line-height:1.35}
+@media(max-width:820px){.actionbar .ab-hint{display:none}}
+/* one-time coachmark explaining how to advance the build (shown once, dismissible) */
+.stephint{position:fixed;left:22px;bottom:80px;z-index:56;max-width:300px;background:var(--ink);color:#fff;padding:12px 14px;border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,.25);font-size:13px;line-height:1.45;display:none}
+.stephint.show{display:block}
+.stephint b{color:#fff}
+.stephint .sh-got{margin-top:9px;background:#fff;color:var(--ink);border:none;font-weight:700;font-size:12px;padding:6px 12px;border-radius:7px;cursor:pointer}
+@media(max-width:820px){.stephint{right:12px;left:12px;max-width:none;bottom:86px}}
+/* in-app product help chat (standard website help bubble; runs on the user's key) */
+.helpfab{position:fixed;right:18px;bottom:18px;z-index:60;width:48px;height:48px;border-radius:50%;background:var(--ink);color:#fff;border:none;cursor:pointer;font-size:22px;font-weight:700;box-shadow:0 2px 12px rgba(0,0,0,.22);display:flex;align-items:center;justify-content:center}
+.helpfab:hover{opacity:.92}
+body.hasbar .helpfab{bottom:78px}   /* lift above the action bar during a build */
+.helppanel{position:fixed;right:18px;bottom:78px;z-index:61;width:340px;max-width:calc(100vw - 36px);height:440px;max-height:calc(100vh - 130px);background:#fff;border:1px solid #888;border-radius:10px;overflow:hidden;flex-direction:column;display:none;box-shadow:0 6px 24px rgba(0,0,0,.2)}
+.helppanel.open{display:flex}
+body.hasbar .helppanel{bottom:138px}
+@media(max-width:820px){.helppanel{right:10px;left:10px;width:auto;bottom:84px}}
+.help-head{padding:10px 12px;border-bottom:1px solid var(--line);font-weight:700;display:flex;justify-content:space-between;align-items:center}
+.help-x{background:none;border:none;font-size:20px;line-height:1;cursor:pointer;color:var(--muted)}
+.help-body{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:8px;font-size:14px}
+.help-msg{padding:8px 10px;border-radius:9px;max-width:88%;line-height:1.45;white-space:normal}
+.help-msg.u{align-self:flex-end;background:var(--ink);color:#fff}
+.help-msg.a{align-self:flex-start;background:#f1f1f1;color:var(--ink)}
+.help-foot{border-top:1px solid var(--line);padding:8px;display:flex;gap:6px}
+.help-foot input{flex:1;min-width:0;border:1px solid var(--line);padding:8px;font:inherit;font-size:14px;border-radius:7px}
+.help-foot button{background:var(--ink);color:#fff;border:none;padding:0 14px;font-weight:700;cursor:pointer;border-radius:7px}
+/* welcome popup: "your first plan is on us" (shown once when a free taste is offered) */
+.wpop-back{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:70;display:none;align-items:center;justify-content:center;padding:20px}
+.wpop-back.show{display:flex}
+.wpop{background:#fff;border:1px solid #888;border-radius:12px;max-width:440px;width:100%;padding:22px 24px;box-shadow:0 10px 40px rgba(0,0,0,.3)}
+.wpop h2{margin:0 0 10px;font-size:22px;line-height:1.2}
+.wpop p{margin:0 0 12px;color:var(--muted);line-height:1.5;font-size:15px}
+.wpop .wpop-acts{display:flex;justify-content:flex-end;margin-top:4px}
+.wpop button{font:inherit;font-weight:700;border:1px solid var(--ink);background:var(--ink);color:#fff;padding:9px 18px;border-radius:8px;cursor:pointer}
 /* Feedback modal: the engine's open questions, the per-step nudge chips, and the note box. */
 .mfb-hint{margin:0 0 12px;color:var(--muted);font-size:13.5px}
 .mfb-sg{margin:0 0 12px}
@@ -2162,6 +2284,8 @@ html.route-plan #bootload{display:flex;align-items:center;justify-content:center
   .pcard .act button{flex:1;min-width:88px}
 }
 .empty{color:var(--muted);text-align:center;margin:30px 0}
+.intro{color:var(--muted);max-width:62ch;margin:0 auto 12px;line-height:1.55}
+.intro-how{color:var(--muted);max-width:62ch;margin:0 auto 18px;line-height:1.55;font-size:14px}
 @media(max-width:820px){.workspace{grid-template-columns:1fr}}
 a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--link);outline-offset:2px}
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
@@ -2173,6 +2297,8 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <div class=note-banner id=banner></div>
 <div class=intake id=intake>
 <h2>You've got a business in you. Let's find it. 🚀</h2>
+<p class=intro>FILG turns a rough idea, or just your skills and interests, into a sellable plan: the offer, the pricing, the go-to-market, and a delivery playbook. It researches your market live and runs every stat through a source-credibility gate, so vendor marketing gets labeled instead of repeated back to you as fact.</p>
+<p class=intro-how>How to use it: type what you've got below (a real idea, or just what you're good at), then watch it research, grade the numbers, and build the plan with you. Free to run on your own API key.</p>
 <label for=idea class=sr-only>Your business idea</label>
 <textarea id=idea placeholder="e.g. I know automation and feel like I could help scale small dental businesses… OR I like doggies, the color purple, and live in a bunker with my 12 brothers, either way, let's find the business."></textarea>
 <div class=boardpick id=boardpick></div>
@@ -2278,6 +2404,19 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <div class=err id=err2></div>
 </main>
 <div class=actionbar id=actionbar aria-label="Plan step actions"></div>
+<div class=stephint id=stephint></div>
+<button type=button class=helpfab id=helpfab onclick=toggleHelp() aria-label="Help with using FILG" title="Help">?</button>
+<div class=helppanel id=helppanel role=dialog aria-label="FILG help">
+<div class=help-head><span>Help</span><button type=button class=help-x onclick=toggleHelp() aria-label="Close help">×</button></div>
+<div class=help-body id=help-body></div>
+<div class=help-foot><label for=help-input class=sr-only>Ask for help using FILG</label><input id=help-input type=text placeholder="How do I…?" onkeydown="if(event.key==='Enter')sendHelp()"><button type=button onclick=sendHelp()>Send</button></div>
+</div>
+<div class=wpop-back id=welcomepop><div class=wpop role=dialog aria-modal=true aria-labelledby=wpop-title>
+<h2 id=wpop-title>Your first prompt is on the house 🎁</h2>
+<p>The opening run, market research, the source-credibility grading, and your first draft, is free and on our key. No card, no setup.</p>
+<p>After that, add your own API key (OpenRouter or Anthropic) to keep building. It runs entirely on your key, usually pennies a plan.</p>
+<div class=wpop-acts><button type=button onclick=dismissWelcome()>Let's go</button></div>
+</div></div>
 </div>
 <script>
 const CFG=window.FILG||{authEnabled:false};
@@ -2291,9 +2430,11 @@ async function loadKey(){            // refresh whether this user has a saved ke
   try{const r=await fetch('/api/key',{headers:authHeaders()});const d=await r.json();HAS_KEY=!!(d&&d.key);KEY_PROVIDER=(d&&d.key)?d.key.provider:null;if(typeof paintMeter==='function')paintMeter();}
   catch(e){HAS_KEY=false;KEY_PROVIDER=null;}
 }
-function requireKey(){               // gate any API-calling button: no key → open the key modal
-  if(CFG.byokEnabled&&!HAS_KEY){keyModal();return false;}
-  return true;
+async function requireKey(){         // gate any API-calling button: only block when there's truly no key
+  if(!CFG.byokEnabled)return true;
+  if(!HAS_KEY)await loadKey();        // HAS_KEY can be stale — re-verify against the server before walling,
+  if(HAS_KEY)return true;             // so a keyed-up user is never interrupted by the key modal
+  keyForm();return false;            // genuinely no key → the add-key form (not the manage-key modal)
 }
 // The bail-out button: send the procrastinator to a random snarky Google search.
 const GOOFS=["is a hotdog a sandwich", "are birds real", "how many golf balls fit in a school bus", "why do cats knock things off tables", "goat screaming like a human", "is cereal a soup", "do fish get thirsty", "how long can a snail nap", "world's largest ball of twine", "can you outrun a goose", "how to fold a fitted sheet", "why do we say um", "who invented the wheel and why", "how many licks to the center of a tootsie pop", "do penguins have knees", "why is yawning contagious", "capybara compilation", "competitive cup stacking finals", "extreme ironing world championship", "octopus solving a puzzle", "why do feet smell like corn chips", "is water wet", "do trees talk to each other", "how to win a staring contest against a pigeon", "longest recorded sneeze", "how do they get the caramel in the candy bar", "what does a quokka sound like", "why do dogs tilt their heads", "the history of the high five", "can a duck climb a ladder", "videos of cats being unimpressed", "how to sell pogs in 2026", "ways to waste time on the internet", "what is the speed of dark", "do cows have best friends", "cheese rolling gloucester injuries", "competitive wife carrying championship", "why do we get goosebumps", "how to skip a rock 50 times", "is a tomato a fruit lawsuit", "man vs raccoon who would win", "bigfoot caught on ring camera", "how to whistle with two fingers", "why do escalators feel weird when stopped", "how do they paint the lines on the road", "why does the alphabet song end so suddenly", "competitive thumb wrestling rules", "what would happen if everyone jumped at once", "how to look busy at work", "why do we park in driveways and drive on parkways", "medieval people reacting to a zipper", "how long could you survive in a ball pit", "world record for most t-shirts worn at once", "do ants have rush hour", "how to convincingly fake a sneeze", "why is it called a building if it is already built", "can you hear a hug", "how to win an argument with a cat", "is it weird to name your roomba", "why do snacks taste better when stolen", "do penguins get cold feet", "how to moonwalk badly", "why is the loch ness monster still missing", "quokka selfie compilation", "how to yodel quietly"];
@@ -2306,7 +2447,9 @@ async function start(){
   const go=document.getElementById('go'), err=document.getElementById('err');
   err.textContent='';document.getElementById('joke').innerHTML='';
   if(CFG.authEnabled&&!session){authModal();return;}   // signed-out → prompt them with the sign-in modal
-  if(!requireKey())return;                              // no key → open the key modal; we cover no runs now
+  // First query is on us when a free taste is offered → let the server gate (it 402s needKey once the
+  // taste is used). Otherwise (no hosted key) require a key up front.
+  if(!CFG.freeTaste){if(!await requireKey())return;}
   const body={idea, stack:STACK_CUR}; if(!session) body.email=email;   // signed in → identity from the token
   if(BOARD.length) body.directors=BOARD;               // optional Board of Directors → vets each step
   go.disabled=true; go.textContent='Researching…'; ACT_RESEARCH=false;
@@ -2314,7 +2457,7 @@ async function start(){
     const r=await fetch('/api/plan/start',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify(body)});
     const d=await r.json();
     if(d.gibberish){showJoke(d);go.disabled=false;go.textContent='Build my plan →';return;}  // nonsense → roast, no run
-    if(!r.ok){err.textContent=d.error||'Something went wrong.';if(d.needKey)err.innerHTML+=' <a href=# onclick="keyModal();return false">Add your key →</a>';go.disabled=false;go.textContent='Build my plan →';return;}
+    if(!r.ok){err.textContent=d.error||'Something went wrong.';go.disabled=false;go.textContent='Build my plan →';if(d.needKey)keyForm();return;}
     SID=d.id;meterBaseline(d.id);   // baseline at 0 so this run's tokens fully count as research streams in
     clearWorkspace();   // new idea → never flash the previous plan's PURSUE block / tabs / research
     history.replaceState({plan:SID},'','/plan/'+SID);   // put the plan in the URL NOW so a mid-build refresh restores it
@@ -2569,7 +2712,7 @@ function chatStart(btn){const t=document.getElementById('chatinput');if(t){t.val
 async function sendChat(){
   if(CHAT_BUSY)return;
   const t=document.getElementById('chatinput'),msg=(t.value||'').trim(); if(!msg)return;
-  if(!requireKey())return;
+  if(!await requireKey())return;
   const log=document.getElementById('chatlog'),btn=document.getElementById('chatsend'),st=document.getElementById('chatstart');
   CHAT_BUSY=true;btn.disabled=true;t.value='';if(st)st.innerHTML='';
   log.insertAdjacentHTML('beforeend',`<div class="cmsg user">${esc(msg)}</div><div class="cmsg bot md" id=chatthinking><span class=think>Thinking…</span></div>`);
@@ -2643,7 +2786,7 @@ function renderResearch(s){
 // Query your research: 'quick' reads the gathered research (ok to be unsure); 'deep' spawns fresh research.
 let RQ_BUSY=false;
 async function runResearchQuery(mode){
-  if(!requireKey())return;
+  if(!await requireKey())return;
   if(RQ_BUSY)return;
   const q=((document.getElementById('rqinput')||{}).value||'').trim();
   if(q.length<3){toast('Ask a question about your research.','err');const t=document.getElementById('rqinput');if(t)t.focus();return;}
@@ -2778,8 +2921,10 @@ function renderActionBar(s){
   bar.classList.toggle('show',show);
   document.body.classList.toggle('hasbar',show);
   if(show)bar.innerHTML=
-    `<button type=button class="ab-btn ab-back" onclick="openFeedbackModal('regen')" title="Rework this part with a note">\\u21bb Not feeling it</button>`+
-    `<button type=button class="ab-btn ab-next" onclick="openFeedbackModal('next')">I'm with you \\u2192</button>`;
+    `<span class=ab-hint><b>I'm with you</b> locks this part and builds the next<br><b>Not feeling it</b> redraws it (add a note to steer)</span>`+
+    `<button type=button class="ab-btn ab-back" onclick="openFeedbackModal('regen')" title="Redo this part \\u2014 you can add a note to steer the rewrite">\\u21bb Not feeling it</button>`+
+    `<button type=button class="ab-btn ab-next" onclick="openFeedbackModal('next')" title="Lock this part in and build the next one">I'm with you \\u2192</button>`;
+  if(show)maybeStepHint(); else dismissStepHint(true);
 }
 // The kill gate is now a COACHING LADDER, not a hard wall. First hit = genuine advisement (Coach voice
 // + the off-ramps: add substance / re-check, or talk it through). Forcing past it with no substance rolls
@@ -2810,7 +2955,7 @@ function killGateHtml(s){
     `<div class=ferr id=ferr></div></div>`;
 }
 async function forceNext(){   // operator pushes past the gate with no substance → comedic waste-of-time mode
-  if(!requireKey())return;
+  if(!await requireKey())return;
   if(WOD_PUSHES===0){  // first forced push → one encouraging chance to reconsider (Coach voice)
     const ok=await uiConfirm('Want to give it a real shot?',"Giving some feedback might make this a viable idea. Sure you want to just keep going?",'Keep going anyway');
     if(!ok){const t=document.getElementById('substance');if(t)t.focus();return;}
@@ -2936,7 +3081,7 @@ let PENDING_FB=null;
 function _fbRead(){ if(PENDING_FB!=null){const v=PENDING_FB;PENDING_FB=null;return v;}
   return ((document.getElementById('feedback')||{}).value||'').trim(); }
 async function nextStep(){
-  if(!requireKey())return;
+  if(!await requireKey())return;
   const fb=_fbRead();
   const full=(fb+commentsSteer()).trim();   // #7 fold inline comments into the roll-forward
   _navBusy();
@@ -2953,7 +3098,7 @@ async function nextStep(){
   }catch(e){Activity.stop(aid);fbErr('Network error.');_navFree();}
 }
 async function reCheck(){       // kill-gate rescue: re-vet with the substance the operator just added
-  if(!requireKey())return;
+  if(!await requireKey())return;
   const more=((document.getElementById('substance')||{}).value||'').trim();
   if(more.length<8){fbErr('Add a real skill or asset, and who would pay for it.');const t=document.getElementById('substance');if(t)t.focus();return;}
   _navBusy();
@@ -2969,7 +3114,7 @@ async function reCheck(){       // kill-gate rescue: re-vet with the substance t
 }
 function startOver(){try{localStorage.removeItem('filg_idea');}catch(e){}location.href='/';}   // clean intake
 async function backStep(){
-  if(!requireKey())return;
+  if(!await requireKey())return;
   const fb=_fbRead();
   if(!fb){fbErr('Add a quick note on what to change, a note is required to go back a step.');return;}
   _navBusy();
@@ -2983,7 +3128,7 @@ async function backStep(){
 }
 let REDRAFTS=0;   // consecutive regenerations of the CURRENT part → escalate to a snark nudge toward the tree
 async function regenStep(){
-  if(!requireKey())return;
+  if(!await requireKey())return;
   const fb=_fbRead();
   const steer=(fb+commentsSteer()).trim();   // #7 a note OR inline comments can steer the rework
   if(!steer){fbErr("Tell me what's not landing — add a note or a comment to steer the rework.");return;}
@@ -3004,8 +3149,8 @@ async function regenStep(){
 // ── Feedback modal: opened by the bottom action bar. Holds the suggested questions, the per-step
 // nudge chips, and the note box; "Go" commits to roll-forward (next) or rework (regen). ──
 let FB_MODE='next', NUDGE_CACHE={};
-function openFeedbackModal(mode){
-  if(!requireKey())return;
+async function openFeedbackModal(mode){
+  if(!await requireKey())return;
   FB_MODE=mode; const s=LAST_S||{};
   const qs=suggestedFb(s);
   const sfb=qs.length?(`<div class=mfb-sg><div class=mfb-h>The engine's open questions</div>`+
@@ -3150,8 +3295,8 @@ function toggleSessionBoard(key,el){
 // main content collapses), then the drafted director renders in place to approve / retry / cancel. ──
 let FORGE_DRAFT=null, FORGE_DESC='', FORGE_TIMER=null, FORGE_BUSY=false;
 const FORGE_STEPS=[{k:'distill',l:'Distilling the archetype'},{k:'draft',l:'Drafting the director'},{k:'qa',l:"QA: checking they're distinct + useful"}];
-function openForge(){
-  if(!requireKey())return;
+async function openForge(){
+  if(!await requireKey())return;
   const desc=((document.getElementById('forgeinput')||{}).value||'').trim();
   if(desc.length<4){toast('Describe the director you want first.','err');const t=document.getElementById('forgeinput');if(t)t.focus();return;}
   FORGE_DESC=desc;
@@ -3233,8 +3378,8 @@ function cancelForge(){ FORGE_DRAFT=null; FORGE_BUSY=false; _forgeClose(); }
 function ask(key){openDrawer('expert',key);}
 // Convene the board INLINE in the tools drawer: open the convene sub-section with a question box, run
 // it with terminal spew, then render the board's take (skeptic + directors + takeaway) in place.
-function convene(){
-  if(!requireKey())return;
+async function convene(){
+  if(!await requireKey())return;
   const dd=document.getElementById('ds-directors'); if(dd)dd.classList.add('open');   // keep the directors section open; the input renders inline below the button
   const body=document.getElementById('convenebody'); if(!body)return;
   body.innerHTML=`<p class=forge-sub>Convene your board on the plan so far. Leave it blank for a general read, or aim them at one thing.</p>`+
@@ -3246,7 +3391,7 @@ function convene(){
 }
 let CONVENE_BUSY=false;
 async function runConvene(){
-  if(!requireKey())return; if(CONVENE_BUSY)return;
+  if(!await requireKey())return; if(CONVENE_BUSY)return;
   const q=((document.getElementById('conveneq')||{}).value||'').trim();
   const panel=document.getElementById('convenepanel'); if(!panel)return;
   const ds=document.getElementById('ds-convene'); if(ds){ds.classList.remove('done');ds.classList.add('running');}
@@ -3427,7 +3572,7 @@ function uiPrompt(title,label,type,placeholder){
 }
 function _submitPrompt(){const i=document.getElementById('modalinput');_closeModal(i?i.value:null);}
 async function submitDrawer(){
-  if(!requireKey())return;
+  if(!await requireKey())return;
   const q=document.getElementById('drawerq').value, go=document.getElementById('drawer-go'),
         out=document.getElementById('drawer-out');
   out.style.display='block';
@@ -3783,7 +3928,7 @@ async function keyModal(){
   if(d&&d.key){
     document.getElementById('modal-title').textContent='Your API key';
     document.getElementById('modal-body').innerHTML=
-      `<p class=or style="margin:0 0 12px">You\\u2019re running on your own <b>${esc(d.key.provider)}</b> key (\\u2022\\u2022\\u2022\\u2022${esc(d.key.last4)}). Plans use your key, not ours.</p>`+
+      `<p class=or style="margin:0 0 12px">You\\u2019re running on your own <b>${esc(d.key.provider)}</b> key (\\u2022\\u2022\\u2022\\u2022${esc(d.key.last4)}). Swap or remove it any time.</p>`+
       `<div class=authgate><button class=gbtn onclick="keyForm()">Replace key</button>`+
       `<button class=gbtn onclick="removeKey()">Remove key</button></div>`;
     document.getElementById('modal-actions').innerHTML=`<button type=button onclick="_closeModal()">Done</button>`;
@@ -3877,15 +4022,24 @@ function newPlan(){SIDEBAR_PHASE=null;ACT_RESEARCH=false;ACT_PROG_N=0;ACT_ID=nul
   if(location.pathname!=='/')history.pushState({},'','/');show('intake');renderBoardPick();gateIntake();}
 // One profile page: projects, API config, contact, delete account. Replaces the old My-plans /
 // Your-key / email / Sign-out header menu (a dropdown-in-a-dropdown on mobile).
-async function openProfile(){
+// Profile tabs have real, directly-visitable routes (/account/<slug>) so a refresh or a shared link
+// lands on the right tab instead of bouncing to the landing page.
+const ACCOUNT_TAB_SLUG={projects:'plans',files:'files',api:'api-config',account:'settings'};
+const ACCOUNT_SLUG_TAB={plans:'projects',files:'files','api-config':'api',settings:'account'};
+function accountUrl(tab){return '/account/'+(ACCOUNT_TAB_SLUG[tab]||'plans');}
+function syncAccountUrl(tab,replace){const url=accountUrl(tab);if(location.pathname===url)return;
+  const st={account:tab};if(replace)history.replaceState(st,'',url);else history.pushState(st,'',url);}
+async function openProfile(tab,replace){
   if(CFG.authEnabled&&!session){authModal();return;}
+  if(tab)PROFILE_TAB=tab;
+  syncAccountUrl(PROFILE_TAB,replace);   // reflect the open tab in the URL (refresh-safe, bookmarkable)
   let pd={plans:[],total:7,email:(session&&session.user&&session.user.email)||''};
   try{const r=await fetch('/api/plans',{headers:authHeaders()});if(r.ok)pd=await r.json();}catch(e){}
   let key=null;
   if(CFG.byokEnabled){try{const r=await fetch('/api/key',{headers:authHeaders()});if(r.ok)key=(await r.json()).key;}catch(e){}}
   show('profile');renderProfile(pd,key);
 }
-function showPlans(){openProfile();}   // back-compat: share/delete refreshers route to the profile
+function showPlans(){openProfile('projects');}   // back-compat: share/delete refreshers route to the profile
 function planCardHtml(p,total){
   const meta=p.done?`Finished · ${total} parts`:(p.status==='researching'?'Researching…':`In progress · part ${(p.step||0)+1} of ${total}`);
   const acts=`<button onclick="resume('${p.id}')">${p.done?'Open / iterate':'Resume'}</button>`+
@@ -3908,7 +4062,7 @@ function fileCardHtml(p){
 function resumeZip(id){SID=id;downloadZip();}                 // set the active plan, then reuse the existing exporters
 function openExportFor(id){SID=id;openExportModal();}
 let PROFILE_TAB='projects', PROFILE_PD=null, PROFILE_KEY=null;
-function selectProfileTab(t){PROFILE_TAB=t;renderProfile(PROFILE_PD,PROFILE_KEY);}
+function selectProfileTab(t){PROFILE_TAB=t;syncAccountUrl(t);renderProfile(PROFILE_PD,PROFILE_KEY);}
 function renderProfile(pd,key){
   PROFILE_PD=pd; PROFILE_KEY=key;
   const total=pd.total||7;
@@ -3924,7 +4078,7 @@ function renderProfile(pd,key){
   }else if(PROFILE_TAB==='api'){
     body=!CFG.byokEnabled
       ? `<p class=pnote>Bring-your-own-key isn\\u2019t enabled here.</p>`
-      : (key?`<p class=pnote>Running on your own <b>${esc(key.provider)}</b> key (\\u2022\\u2022\\u2022\\u2022${esc(key.last4)}). Plans use your key, not ours.</p><div class=prow><button class=gbtn onclick=keyForm()>Replace key</button><button class=gbtn onclick=removeKey()>Remove key</button></div>`
+      : (key?`<p class=pnote>Running on your own <b>${esc(key.provider)}</b> key (\\u2022\\u2022\\u2022\\u2022${esc(key.last4)}).</p><div class=prow><button class=gbtn onclick=keyForm()>Replace key</button><button class=gbtn onclick=removeKey()>Remove key</button></div>`
             :`<p class=pnote>No key yet. Add your own OpenRouter or Anthropic key to build plans and use every tool.</p><div class=prow><button onclick=keyForm()>Add a key</button></div>`);
   }else{
     body=`<div class=acct-block><div class=acct-lbl>Contact</div><p class=pcontact>${esc(pd.email||'')}</p></div>`+
@@ -3957,7 +4111,7 @@ async function resume(id){
   show('workspace');SESSION_BOARD=null;SIDEBAR_PHASE=null;VET_OPEN=true;VET_STEPPED=false;
   const ab=document.getElementById('addons');if(ab)delete ab.dataset.done;
   closeDrawer();closeViewer();
-  try{const r=await fetch('/api/plan/'+SID,{headers:authHeaders()});const s=await r.json();render(s);if(s.status==='researching')poll();}catch(e){_bootDone();document.getElementById('err2').textContent='Could not load that plan.';}
+  try{const r=await fetch('/api/plan/'+SID+'?touch=1',{headers:authHeaders()});const s=await r.json();render(s);if(s.status==='researching')poll();}catch(e){_bootDone();document.getElementById('err2').textContent='Could not load that plan.';}
 }
 function resumeDownload(id){SID=id;download();}
 async function deletePlan(id){
@@ -4009,13 +4163,70 @@ async function initAuth(){
   sb.auth.onAuthStateChange(async (_e,s)=>{session=s;await loadMe();renderAuth();});
   const {data}=await sb.auth.getSession();session=data.session;await loadMe();renderAuth();routeFromPath();
 }
-function routeFromPath(){   // a finished plan lives at /plan/{id} — deep-link / bookmark / revisit / back-fwd
-  const m=(location.pathname||'').match(/^\\/plan\\/([a-z0-9]+)/i);
+function routeFromPath(){   // deep-link / bookmark / revisit / back-fwd for /plan/{id} and /account/<tab>
+  const path=location.pathname||'';
+  let m=path.match(/^\\/plan\\/([a-z0-9]+)/i);
   if(m&&m[1]){resume(m[1]);return;}
-  _bootDone();   // not a plan path → drop the boot loader and show home
+  m=path.match(/^\\/account(?:\\/([a-z-]+))?\\/?$/i);
+  if(m){
+    if(CFG.authEnabled&&!session){_bootDone();show('intake');renderBoardPick();gateIntake();authModal();return;}
+    // render the profile first, THEN clear the boot overlay (no landing flash); replace: URL already set
+    openProfile(ACCOUNT_SLUG_TAB[(m[1]||'').toLowerCase()]||'projects',true).finally(_bootDone);
+    return;
+  }
+  _bootDone();   // not a known route → drop the boot loader and show home
   if(SID){SID=null;show('intake');renderBoardPick();gateIntake();}
+  maybeWelcome();   // first-time "your first plan is on us" popup (once, only when a free taste is offered)
 }
 window.addEventListener('popstate',routeFromPath);   // browser back/forward drives the SPA
+// ── First-run coachmark: explain how to advance the build (once, dismissible) ──
+function maybeStepHint(){
+  try{if(localStorage.getItem('filg_seen_stephint'))return;}catch(e){}
+  const el=document.getElementById('stephint'); if(!el||el.classList.contains('show'))return;
+  el.innerHTML=`<div>Two ways forward from here: <b>I'm with you \\u2192</b> locks this part in and builds the next one. `+
+    `<b>\\u21bb Not feeling it</b> redraws this part (add a note to steer it). You can branch back to any earlier part from the plan tree.</div>`+
+    `<button type=button class=sh-got onclick=dismissStepHint()>Got it</button>`;
+  el.classList.add('show');
+}
+function dismissStepHint(silent){
+  const el=document.getElementById('stephint'); if(el)el.classList.remove('show');
+  if(silent!==true){try{localStorage.setItem('filg_seen_stephint','1');}catch(e){}}
+}
+// ── Welcome popup: "your first plan is on us" (once, only when a free taste is offered) ──
+function maybeWelcome(){
+  if(!CFG.freeTaste)return;
+  try{if(localStorage.getItem('filg_seen_welcome'))return;}catch(e){}
+  const el=document.getElementById('welcomepop'); if(el)el.classList.add('show');
+}
+function dismissWelcome(){const el=document.getElementById('welcomepop');if(el)el.classList.remove('show');
+  try{localStorage.setItem('filg_seen_welcome','1');}catch(e){}
+  const i=document.getElementById('idea'); if(i)i.focus();}
+// ── In-app product help chat (standard website help bubble; runs on the user's key) ──
+let HELP_MSGS=[];
+function helpBubble(m){return `<div class="help-msg ${m.role==='user'?'u':'a'}">${esc(m.content).replace(/\\n/g,'<br>')}</div>`;}
+function renderHelp(){const b=document.getElementById('help-body'); if(!b)return; b.innerHTML=HELP_MSGS.map(helpBubble).join(''); b.scrollTop=b.scrollHeight;}
+function toggleHelp(){
+  const p=document.getElementById('helppanel'); if(!p)return;
+  const open=p.classList.toggle('open');
+  if(open){
+    if(!HELP_MSGS.length){HELP_MSGS.push({role:'assistant',content:"Hi! I can help you use FILG \\u2014 building a plan, the buttons, the board, exporting, or your key. What do you need?"});renderHelp();}
+    setTimeout(()=>{const i=document.getElementById('help-input'); if(i)i.focus();},30);
+  }
+}
+async function sendHelp(){
+  const i=document.getElementById('help-input'); const msg=(i.value||'').trim(); if(!msg)return;
+  if(CFG.authEnabled&&!session){authModal();return;}   // login-gated like the rest of the app
+  if(!CFG.freeTaste){if(!await requireKey())return;}    // no hosted free path → must use your own key
+  i.value=''; HELP_MSGS.push({role:'user',content:msg}); renderHelp();
+  const b=document.getElementById('help-body');
+  const wait=document.createElement('div'); wait.className='help-msg a'; wait.textContent='\\u2026'; if(b){b.appendChild(wait);b.scrollTop=b.scrollHeight;}
+  try{
+    const r=await fetch('/api/help',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({message:msg,history:HELP_MSGS.slice(-8)})});
+    const d=await r.json(); wait.remove();
+    if(!r.ok){HELP_MSGS.push({role:'assistant',content:d.error||'Something went wrong.'}); renderHelp(); if(d.needKey)keyForm(); return;}
+    HELP_MSGS.push({role:'assistant',content:d.reply||'(no reply)'}); renderHelp();
+  }catch(e){wait.remove(); HELP_MSGS.push({role:'assistant',content:'Network error, try again.'}); renderHelp();}
+}
 function toggleTopMenu(){const r=document.querySelector('.topright'),h=document.getElementById('topham');if(!r)return;const open=r.classList.toggle('open');if(h)h.setAttribute('aria-expanded',String(open));}
 document.addEventListener('click',function(e){   // click outside the crew picker closes it
   const sp=document.getElementById('stackpop');
@@ -4046,5 +4257,4 @@ document.addEventListener('keydown',function(e){
 initAuth();
 setupTabs();   // sidebar sections become tabs that slide out the tools drawer
 </script>
-<div class=vibestrip aria-hidden=true><div class=vibetrack><span class=vibe>This UI was vibe coded AF and I know it's butt-ugly but I will never update it, because I believe in my soul that Craigslist was the height of web design and since we started complicating it things have gotten steadily worse in the world and I can't prove that there's a correlation but also you can't prove there's not and anyways it's an app meant for automating planning and building your business so it would kinda be a bad look if I hadn't automated the building of it to some extent and honestly the algorithm stuff was hard and UI is easy so it just made sense to leave it, anyway I'm not a designer I want to get paid to drink coffee and push buttons with my dog curled up between my legs and then a little pillow on top of him to hold my laptop. Really I think if we could all just agree to collectively move on from design and style and good taste in general the world might be a better place, you know? It's just like we've so completely commoditized every aspect of self worth and beauty and it all kind of starts with the concept of aesthetic beauty, like the way one thing looks can really be better than another way, when really it's all just light, and even that's a pretty big maybe considering the light is just signals in our little meat brains that we can't definitively prove exist, and the fact that we even have the ability to conceive of the absurdity of that thought makes any sort of external aesthetic consideration seem silly. I mean everything is silly in the grand scheme of things, and what does it even mean to be silly? There I go placing 'aesthetic' value on the concept of value itself, like I know wtf I'm talking about (I don't). And as long as I'm yapping about aesthetics and absurdity... who the hell was in the room when they came up with 'professionalism'? Like really, of all the personalities in the universe we went with the most boring possible one, based on the human equivalent of a cardboard charcuterie sampler. Like is it really that weird that I wanted to name my app 'Fuck it, let's go'? We all say fuck. You say fuck. You are saying it in your head right now, who cares? Why do we all have to pretend we don't say fuck on LinkedIn? That's weird. I mean if you actually do NOT say fuck then that makes you weird. Not qualitatively bad, but empirically weird in the sense of deviation from the norm. And we all just agreed at some point to pretend to be people who don't say "fuck" for most of our waking social lives.. that seems nuts. I want to say fuck on LinkedIn. Do you want to say fuck on LinkedIn? I'll bet you do. If you are the type of person still reading this you absolutely want to say swears on LinkedIn, and that makes you my kind of person. I support you. I believe in you. I.. love you? I love the idea of you. I'm glad you're here, honestly. You are the person this was built for. Go build a business, seriously people do it every day. They have been doing it for millennia. Your ancestors survived war and famine and saber tooth tigers and shit (don't come after me science nerd, I don't care if they coexisted, I don't know, and I'm not gonna look it up.) They did all that and all got laid at least once over and over just to make you here now and that means you have it in your genes, in your BONES. Success is in you, you are the proof. You can start a fucking business. Go do it. Say fuck on LinkedIn. Make a million bucks. Buy a tuxedo and rip the sleeves off and keep it on for a month, don't even take it off to shower. Why would you? You are a winner. You are success incarnate. You do what you want. You are gonna make it. You are gonna prove your first crush that shot you down wrong. You are gonna make your dad proud. You are gonna be the best thing that ever happened to your friends and family and everyone that ever believed in you. I believe in you! You've got tenacity, if nothing else. Why are you still reading this anyway? THAT is weird. But like good weird. But there I go qualifying things as good and bad again. Go make some money. FUCK!</span><span class=vibe>This UI was vibe coded AF and I know it's butt-ugly but I will never update it, because I believe in my soul that Craigslist was the height of web design and since we started complicating it things have gotten steadily worse in the world and I can't prove that there's a correlation but also you can't prove there's not and anyways it's an app meant for automating planning and building your business so it would kinda be a bad look if I hadn't automated the building of it to some extent and honestly the algorithm stuff was hard and UI is easy so it just made sense to leave it, anyway I'm not a designer I want to get paid to drink coffee and push buttons with my dog curled up between my legs and then a little pillow on top of him to hold my laptop. Really I think if we could all just agree to collectively move on from design and style and good taste in general the world might be a better place, you know? It's just like we've so completely commoditized every aspect of self worth and beauty and it all kind of starts with the concept of aesthetic beauty, like the way one thing looks can really be better than another way, when really it's all just light, and even that's a pretty big maybe considering the light is just signals in our little meat brains that we can't definitively prove exist, and the fact that we even have the ability to conceive of the absurdity of that thought makes any sort of external aesthetic consideration seem silly. I mean everything is silly in the grand scheme of things, and what does it even mean to be silly? There I go placing 'aesthetic' value on the concept of value itself, like I know wtf I'm talking about (I don't). And as long as I'm yapping about aesthetics and absurdity... who the hell was in the room when they came up with 'professionalism'? Like really, of all the personalities in the universe we went with the most boring possible one, based on the human equivalent of a cardboard charcuterie sampler. Like is it really that weird that I wanted to name my app 'Fuck it, let's go'? We all say fuck. You say fuck. You are saying it in your head right now, who cares? Why do we all have to pretend we don't say fuck on LinkedIn? That's weird. I mean if you actually do NOT say fuck then that makes you weird. Not qualitatively bad, but empirically weird in the sense of deviation from the norm. And we all just agreed at some point to pretend to be people who don't say "fuck" for most of our waking social lives.. that seems nuts. I want to say fuck on LinkedIn. Do you want to say fuck on LinkedIn? I'll bet you do. If you are the type of person still reading this you absolutely want to say swears on LinkedIn, and that makes you my kind of person. I support you. I believe in you. I.. love you? I love the idea of you. I'm glad you're here, honestly. You are the person this was built for. Go build a business, seriously people do it every day. They have been doing it for millennia. Your ancestors survived war and famine and saber tooth tigers and shit (don't come after me science nerd, I don't care if they coexisted, I don't know, and I'm not gonna look it up.) They did all that and all got laid at least once over and over just to make you here now and that means you have it in your genes, in your BONES. Success is in you, you are the proof. You can start a fucking business. Go do it. Say fuck on LinkedIn. Make a million bucks. Buy a tuxedo and rip the sleeves off and keep it on for a month, don't even take it off to shower. Why would you? You are a winner. You are success incarnate. You do what you want. You are gonna make it. You are gonna prove your first crush that shot you down wrong. You are gonna make your dad proud. You are gonna be the best thing that ever happened to your friends and family and everyone that ever believed in you. I believe in you! You've got tenacity, if nothing else. Why are you still reading this anyway? THAT is weird. But like good weird. But there I go qualifying things as good and bad again. Go make some money. FUCK!</span></div></div>
 </div></body></html>"""
