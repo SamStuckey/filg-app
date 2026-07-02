@@ -2258,6 +2258,10 @@ a:focus-visible,button:focus-visible,input:focus-visible,textarea:focus-visible,
 <textarea id=rqinput rows=2 placeholder="e.g. how price-sensitive is this buyer, really?"></textarea>
 <div class=rqacts><button type=button class=ghost onclick="runResearchQuery('quick')">Quick check</button><button type=button class=rq-go onclick="runResearchQuery('deep')">🔎 Go deeper</button></div>
 <div class=rqout id=rqout></div></div></div>
+<div class="dsec open" id=ds-stress><button type=button class=dsec-h onclick="this.parentNode.classList.toggle('open')"><span>Stress-test the assumptions</span><span class=dsec-caret aria-hidden=true>▸</span></button>
+<div class=dsec-b><p class=bhelp>Adversarially attack the plan's load-bearing assumptions with fresh, gate-graded research: for each one, it hunts evidence you're <b>wrong</b>, grades that evidence, and rules it survives / weakened / broken. Real spend. Watch it run in <b>The machine</b>.</p>
+<button type=button class=rq-go onclick="runStressTest()">🩺 Stress-test the plan →</button>
+<div class=rqout id=stressout></div></div></div>
 <div class="dsec open" id=ds-graded><button type=button class=dsec-h onclick="this.parentNode.classList.toggle('open')"><span>The graded research</span><span class=dsec-caret aria-hidden=true>▸</span></button>
 <div class=dsec-b><div id=research></div></div></div>
 </div></div>
@@ -2360,6 +2364,49 @@ function _drainProgress(s){
   ACT_PROG_N=Math.max(ACT_PROG_N,prog.length);
   if(s.research&&s.research.owned_lanes)Activity.relabelLeaves(s.research.owned_lanes);  // Lane N → owner name
   if(s.research)Activity.leafDetails(s.research.owned_lanes,s.research.rows);             // fill each leaf's internals
+}
+// ── Stress-test: adversarial assumption-checking, streamed into the runner like the research fan-out ──
+let STRESS_BUSY=false;
+function runStressTest(){
+  if(STRESS_BUSY)return; STRESS_BUSY=true;
+  const out=document.getElementById('stressout');
+  if(out)out.innerHTML='<div class=think>Attacking your assumptions\\u2026</div>';
+  fetch('/api/plan/'+SID+'/stress-test',{method:'POST',headers:authHeaders()}).then(r=>r.json().then(d=>({ok:r.ok,d}))).then(({ok,d})=>{
+    if(!ok){ if(out)out.innerHTML='<div class=ferr>'+esc(d.error||'Could not start.')+'</div>'; STRESS_BUSY=false; return; }
+    const aid=Activity.open('Stress-testing your assumptions'); Activity.resetLeaves(); Activity.push(aid,'Naming the load-bearing assumptions');
+    let cur=0;
+    function tick(){
+      fetch('/api/plan/'+SID+'/stress-test',{headers:authHeaders()}).then(r=>r.json()).then(st=>{
+        const prog=st.progress||[];
+        for(let i=cur;i<prog.length;i++){ const ln=prog[i]||'';
+          if(ln.indexOf('\\u00A7LANES\\u00A7')===0){ try{Activity.leaves(aid,JSON.parse(ln.slice(7)));}catch(e){} }
+          else if(ln.indexOf('\\u00A7LANEDONE\\u00A7')===0){ Activity.leafDone(parseInt(ln.slice(10),10)); }
+          else Activity.push(aid,ln);
+        }
+        cur=Math.max(cur,prog.length);
+        if(st.status==='running'){ setTimeout(tick,1200); return; }
+        if(st.status==='error'){ Activity.done(aid,'Hit a snag.'); if(out)out.innerHTML='<div class=ferr>'+esc(st.error||'Stress-test failed.')+'</div>'; STRESS_BUSY=false; return; }
+        Activity.done(aid,'Assumptions stress-tested.'); meterTick({id:SID,cost:st.cost,tokens:st.tokens});
+        if(out)out.innerHTML=renderStress(st.result); STRESS_BUSY=false;
+      }).catch(e=>{ Activity.stop(aid); if(out)out.innerHTML='<div class=ferr>Network error.</div>'; STRESS_BUSY=false; });
+    }
+    tick();
+  }).catch(e=>{ if(out)out.innerHTML='<div class=ferr>Network error.</div>'; STRESS_BUSY=false; });
+}
+function renderStress(res){
+  if(!res||!res.assessments||!res.assessments.length)return '<div class=think>No load-bearing assumptions found to test.</div>';
+  const chip={survives:'\\u2705 survives',weakened:'\\u26A0\\uFE0F weakened',broken:'\\u274C broken'};
+  const col={survives:'#2e7d32',weakened:'#b8860b',broken:'#c62828'};
+  const sm=res.summary||{}; let h='<div class=stresssum>'+(sm.broken||0)+' broken \\u00B7 '+(sm.weakened||0)+' weakened \\u00B7 '+(sm.survives||0)+' survived</div>';
+  res.assessments.forEach(a=>{
+    h+='<div style="border-left:3px solid '+(col[a.verdict]||'#888')+';padding:4px 0 4px 10px;margin:10px 0">';
+    h+='<div><b>'+(chip[a.verdict]||esc(a.verdict))+'</b> &mdash; '+esc(a.assumption)+'</div>';
+    if(a.why)h+='<div class=stresswhy style="opacity:.8;margin:3px 0">'+esc(a.why)+'</div>';
+    if(a.evidence&&a.evidence.length){ h+='<ul style="margin:4px 0 0;padding-left:18px">'; a.evidence.forEach(e=>{ h+='<li>'+esc(e.text)+' <a href="'+esc(e.url||'')+'" target=_blank rel=noopener>['+esc((e.tier||'').toLowerCase())+'/'+esc((e.judge||'').toLowerCase())+']</a></li>'; }); h+='</ul>'; }
+    else h+='<div style="opacity:.6;font-size:.9em">no credible disconfirming evidence found</div>';
+    h+='</div>';
+  });
+  return h;
 }
 // ── Model crew: pick-a-tile popover; cheap → premium. n = display name, k = engine stack key
 // (keys are STABLE — the engine/tests/DB key on them; only the labels were renamed). ──────────
