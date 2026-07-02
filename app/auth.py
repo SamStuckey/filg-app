@@ -57,9 +57,17 @@ def verify_token(token: str) -> dict | None:
 
 
 def user_from_request(request) -> dict | None:
-    """Extract a verified {id, email} from an `Authorization: Bearer <jwt>` header, or None."""
+    """Extract a verified {id, email} from an `Authorization: Bearer <jwt>` header, or None.
+
+    Local dev only: if auth is OFF (no SUPABASE_URL) and FILG_DEV_EMAIL is set, act as that signed-in
+    account — so `/api/me`, subscriptions, and the PDF gate reflect a `dev.py plan`-granted tier without
+    standing up Supabase. Never active when auth is on (prod), so it can't be used to spoof identity."""
     header = request.headers.get("authorization", "")
     if not header.lower().startswith("bearer "):
+        dev = os.environ.get("FILG_DEV_EMAIL")
+        if dev and not AUTH_ENABLED:
+            e = dev.strip().lower()
+            return {"id": e, "email": e}
         return None
     claims = verify_token(header[7:].strip())
     if not claims:

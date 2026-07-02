@@ -1817,6 +1817,8 @@ def _render_page(deep: bool = False) -> str:
                       "freeTaste": bool(HOSTED_FREE and keys.enabled()),   # first query on FILG's key
                       "subEnabled": billing.PDF_BILLING_ENABLED,           # monthly tiers available (Stripe on)
                       "tiers": tiers.catalog(),                            # pricing table / fork UI
+                      # dev-only: with auth off, act as this account so the subscriber UX reflects locally
+                      "devEmail": (os.environ.get("FILG_DEV_EMAIL", "") if not auth.AUTH_ENABLED else ""),
                       "supabaseUrl": os.environ.get("SUPABASE_URL", ""),
                       "supabaseAnon": (os.environ.get("SUPABASE_PUBLISHABLE_KEY")
                                        or os.environ.get("SUPABASE_ANON_KEY", "")),
@@ -4032,12 +4034,12 @@ function fairUseModal(d){
   _openModal('#modal-actions button');
 }
 function subPlanBlock(){   // the Account tab's subscription section
-  if(!CFG.subEnabled)return '<p class=pnote>Subscriptions aren\\u2019t enabled here.'+(CFG.byokEnabled?' Bring your own key to build for free.':'')+'</p>';
-  if(isSub()){
+  if(isSub()){   // a live subscription shows regardless of whether Stripe is wired (dev grants via dev.py)
     const lbl=(me&&me.tier_label)||'your plan';
-    return '<p class=pnote>You\\u2019re on <b>'+esc(lbl)+'</b> \\u2014 runs on our key, polished PDF included.</p>'+subMeterHtml()+
-      '<div class=prow><button class=gbtn onclick=pricingModal()>Change plan</button><button class=gbtn onclick=manageBilling()>Manage / cancel</button></div>';
+    const manage=CFG.subEnabled?'<div class=prow><button class=gbtn onclick=pricingModal()>Change plan</button><button class=gbtn onclick=manageBilling()>Manage / cancel</button></div>':'';
+    return '<p class=pnote>You\\u2019re on <b>'+esc(lbl)+'</b> \\u2014 runs on our key, polished PDF included.</p>'+subMeterHtml()+manage;
   }
+  if(!CFG.subEnabled)return '<p class=pnote>Subscriptions aren\\u2019t enabled here.'+(CFG.byokEnabled?' Bring your own key to build for free.':'')+'</p>';
   return '<p class=pnote>Free on your own API key. Or subscribe monthly to run on our key (no key needed), polished PDF included.</p><div class=prow><button onclick=pricingModal()>See plans</button></div>';
 }
 async function manageBilling(){   // → Stripe billing portal (update card / cancel)
@@ -4261,7 +4263,7 @@ async function removeKey(){
 function saveIdea(){try{const v=document.getElementById('idea').value;if(v)localStorage.setItem('filg_idea',v);}catch(e){}}
 function restoreIdea(){try{const v=localStorage.getItem('filg_idea');if(v){document.getElementById('idea').value=v;localStorage.removeItem('filg_idea');}}catch(e){}}
 async function loadMe(){
-  if(!session){me=null;HAS_KEY=false;return;}
+  if(!session&&!CFG.devEmail){me=null;HAS_KEY=false;return;}   // dev: with CFG.devEmail, fetch /api/me even with auth off
   try{const r=await fetch('/api/me',{headers:authHeaders()});me=r.ok?await r.json():null;}catch(e){me=null;}
   await loadKey();   // refresh BYOK key state alongside identity
 }
@@ -4438,7 +4440,7 @@ async function initAuth(){
   if(q.get('pdf_canceled')){banner('Checkout canceled, no charge. Your raw export is still free.');
     try{history.replaceState(history.state,'',location.pathname);}catch(e){}}
   restoreIdea();renderBoardPick();renderStack();paintMeter();   // show the crew picker + meter from first paint
-  if(!CFG.authEnabled||!window.supabase){renderAuth();routeFromPath();return;}
+  if(!CFG.authEnabled||!window.supabase){if(CFG.devEmail)await loadMe();renderAuth();renderStack();routeFromPath();return;}
   sb=window.supabase.createClient(CFG.supabaseUrl,CFG.supabaseAnon);
   sb.auth.onAuthStateChange(async (_e,s)=>{session=s;await loadMe();renderAuth();});
   const {data}=await sb.auth.getSession();session=data.session;await loadMe();renderAuth();routeFromPath();
