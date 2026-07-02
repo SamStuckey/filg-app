@@ -1,6 +1,7 @@
-"""Adversarial assumption-checking on the live research path (skeptic.stress_test)."""
+"""Adversarial assumption-checking on the live research path (skeptic.stress_test) + its route."""
 
 import skeptic
+from conftest import wait_status
 
 
 # ── mock path ────────────────────────────────────────────────────────────────
@@ -74,3 +75,29 @@ def test_unknown_verdict_defaults_to_weakened(patch_call):
     a = res["assessments"][0]
     assert a["verdict"] == "weakened" and a["confidence"] == 1.0   # bad verdict + confidence clamped
     assert a["evidence"] == []
+
+
+# ── the /stress-test route (mock mode, through the FastAPI app) ───────────────
+_IDEA = "I like basketball, Magic the Gathering, and food, and I'm good at sales"
+
+
+def test_stress_test_route_returns_assessments(client):
+    sid = client.post("/api/plan/start", json={"idea": _IDEA, "email": "st@x.com"}).json()["id"]
+    s = wait_status(client, sid)
+    assert s["shaped"]["thesis"]
+    r = client.post(f"/api/plan/{sid}/stress-test")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["assessments"] and body["summary"]
+    assert all(a["verdict"] in skeptic._VERDICTS for a in body["assessments"])
+    assert "cost" in body and "tokens" in body
+
+
+def test_stress_test_route_unknown_session_is_404(client):
+    assert client.post("/api/plan/does-not-exist/stress-test").status_code == 404
+
+
+def test_stress_test_route_requires_shaped(client):
+    from app import store
+    store.plan_create("st_raw", "st@x.com", "an unshaped idea")     # researching, no shaped yet
+    assert client.post("/api/plan/st_raw/stress-test").status_code == 409

@@ -52,6 +52,7 @@ import gibberish  # noqa: E402 — pre-LLM "is this even an idea?" gate (saves a
 import intake     # noqa: E402 — shape + vet (the kill-gate); /revet re-runs it after added substance
 import plan_pdf   # noqa: E402 — styled PDF generation (synthesis + fpdf2 render)
 import advisor    # noqa: E402 — "chat with your plan" (grounded advisory layer)
+import skeptic    # noqa: E402 — adversarial assumption-checking on the live research path
 import provider   # noqa: E402 — BYOK: per-run LLM provider (FILG's key vs a user's OpenRouter key)
 import pipeline   # noqa: E402 — engine: per-run cost ledger (run_ledger) for safe concurrency
 
@@ -1158,6 +1159,34 @@ async def api_research_query(sid: str, request: Request):
     try:
         with _run_slot(s.get("user"), s.get("stack")):
             res, cost = advisor.research_answer(s, q, mode=mode, mock=MOCK)
+            toks = pipeline.LEDGER.tokens()
+    except BusyError as be:
+        return _busy_response(be)
+    except Exception as e:  # noqa: BLE001
+        traceback.print_exc()
+        return JSONResponse({"error": str(e)}, status_code=500)
+    _meter(s.get("user"), cost)
+    nc, nt = _fold_usage(sid, s, cost, toks)
+    return {**res, "cost": nc, "tokens": nt}
+
+
+@app.post("/api/plan/{sid}/stress-test")
+async def api_plan_stress_test(sid: str, request: Request):
+    """Adversarially stress-test the plan's load-bearing assumptions with live, gate-graded refutation
+    research (skeptic.stress_test). An explicit, high-stakes action — it's real spend (N refutation
+    searches + a gate batch + a verdict batch) — so the operator triggers it deliberately. Owner only,
+    on their bound key. Returns {assessments, summary, cost, tokens}."""
+    s = store.plan_get(sid)
+    if not s or not _owns(request, s):
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    if (wall := _key_wall(s)):
+        return wall
+    shaped = s.get("shaped")
+    if not shaped:
+        return JSONResponse({"error": "Shape the idea first, then stress-test it."}, status_code=409)
+    try:
+        with _run_slot(s.get("user"), s.get("stack")):
+            res, cost = skeptic.stress_test(s["idea"], shaped, s.get("research"), mock=MOCK)
             toks = pipeline.LEDGER.tokens()
     except BusyError as be:
         return _busy_response(be)
