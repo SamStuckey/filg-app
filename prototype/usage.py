@@ -59,6 +59,15 @@ def _init() -> None:
             con.execute("CREATE TABLE IF NOT EXISTS usage_daily ("
                         "  day TEXT PRIMARY KEY,"
                         "  spend REAL NOT NULL DEFAULT 0)")
+            # Per-subscriber monthly usage: the fair-use meter for paid tiers that run on FILG's key.
+            # `period` is the billing-window key (the subscription's current_period_end, or a calendar
+            # month as a fallback). A renewal advances the period → a fresh row → the cap resets.
+            con.execute("CREATE TABLE IF NOT EXISTS usage_monthly ("
+                        "  email TEXT NOT NULL,"
+                        "  period TEXT NOT NULL,"
+                        "  spend REAL NOT NULL DEFAULT 0,"
+                        "  tokens INTEGER NOT NULL DEFAULT 0,"
+                        "  PRIMARY KEY (email, period))")
     finally:
         con.close()
     _initialized = True
@@ -153,6 +162,48 @@ def record_spend(cost: float) -> None:
             con.close()
 
 
+# ── Per-subscriber monthly fair-use meter (paid tiers on FILG's key) ──────────
+def monthly_usage(email: str, period: str) -> dict:
+    """This account's spend ($) + tokens accumulated in the given billing period (zeros if none)."""
+    if not email or not period:
+        return {"spend": 0.0, "tokens": 0}
+    _init()
+    con = _connect()
+    try:
+        row = con.execute("SELECT spend, tokens FROM usage_monthly WHERE email=? AND period=?",
+                          (email.strip().lower(), period)).fetchone()
+    finally:
+        con.close()
+    return {"spend": row["spend"] if row else 0.0, "tokens": row["tokens"] if row else 0}
+
+
+def record_monthly(email: str, period: str, cost: float, tokens: int = 0) -> None:
+    """Fold one run's cost + tokens into a subscriber's monthly fair-use total (also bumps the global
+    daily kill switch, since the spend is real money on FILG's key)."""
+    if not email or not period:
+        return
+    _init()
+    cost = round(cost or 0.0, 4)
+    tokens = int(tokens or 0)
+    email = email.strip().lower()
+    with _lock:
+        con = _connect()
+        try:
+            with con:
+                today = date.today().isoformat()
+                con.execute(
+                    "INSERT INTO usage_daily (day, spend) VALUES (?, ?) "
+                    "ON CONFLICT(day) DO UPDATE SET spend = round(spend + ?, 4)",
+                    (today, cost, cost))
+                con.execute(
+                    "INSERT INTO usage_monthly (email, period, spend, tokens) VALUES (?,?,?,?) "
+                    "ON CONFLICT(email, period) DO UPDATE SET "
+                    "  spend = round(spend + ?, 4), tokens = tokens + ?",
+                    (email, period, cost, tokens, cost, tokens))
+        finally:
+            con.close()
+
+
 def snapshot() -> dict:
     _init()
     con = _connect()
@@ -169,9 +220,17 @@ def snapshot() -> dict:
 if __name__ == "__main__":  # quick self-test (no API)
     import tempfile
     DB = tempfile.mktemp(suffix=".db")
+    FREE_RUNS = 1   # pin the per-user free cap for a deterministic test (module default is env-driven)
     assert can_run("a@x.com") == (True, "ok")
     record_run("a@x.com", 0.45)
     ok, why = can_run("a@x.com")
     assert not ok, "free cap should block 2nd run"
     assert can_run("a@x.com", is_paid=True)[0], "paid should pass"
+    # monthly fair-use meter: accumulates per (account, period); a new period resets to zero
+    assert monthly_usage("sub@x.com", "p1") == {"spend": 0.0, "tokens": 0}
+    record_monthly("sub@x.com", "p1", 1.20, 45000)
+    record_monthly("sub@x.com", "p1", 0.80, 15000)
+    mu = monthly_usage("sub@x.com", "p1")
+    assert round(mu["spend"], 2) == 2.00 and mu["tokens"] == 60000
+    assert monthly_usage("sub@x.com", "p2")["spend"] == 0.0, "next period starts fresh"
     print("usage.py self-test OK:", snapshot())

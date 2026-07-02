@@ -33,6 +33,7 @@ import threading
 import traceback
 import uuid
 import zipfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 import markdown
@@ -56,7 +57,7 @@ import skeptic    # noqa: E402 — adversarial assumption-checking on the live r
 import provider   # noqa: E402 — BYOK: per-run LLM provider (FILG's key vs a user's OpenRouter key)
 import pipeline   # noqa: E402 — engine: per-run cost ledger (run_ledger) for safe concurrency
 
-from . import auth, billing, keys, planner, store  # noqa: E402 — persistence, auth, billing, BYOK keys
+from . import auth, billing, keys, planner, store, tiers  # noqa: E402 — persistence, auth, billing, keys, tiers
 
 MOCK = os.environ.get("FILG_MOCK") == "1"
 # "First query on us": when FILG has its own hosted Anthropic key (ANTHROPIC_API_KEY on Render), a
@@ -71,6 +72,8 @@ def _has_pdf_access(email: str, plan_key: str | None = None, verified: bool = Fa
     unspent credits (the button checks those separately); does NOT consume one. Spending a credit on a
     new plan happens at download time via billing.claim_pdf."""
     if not billing.PDF_BILLING_ENABLED:
+        return True
+    if _is_subscriber(email):        # the subscription includes the polished PDF (no per-plan charge)
         return True
     return billing.has_purchased(email, plan_key)
 
@@ -90,6 +93,55 @@ def _plan_key(s: dict) -> str | None:
 def _is_byok(user: str) -> bool:
     """True iff this user runs on their own key (BYOK configured + a key saved)."""
     return bool(user and keys.enabled() and keys.has_key(user))
+
+
+# ── Subscriptions: paid tiers that run on FILG's key (see app/tiers.py) ───────
+def _acct(user: str) -> str:
+    """Normalized account id (alias-collapsed) — the key billing, subscriptions, and monthly usage share."""
+    return auth.normalize_email(user or "")
+
+
+def _tier(user: str) -> str | None:
+    """The active paid subscription tier for this user, or None (free / BYOK)."""
+    return store.account_tier(_acct(user)) if user else None
+
+
+def _is_subscriber(user: str) -> bool:
+    return bool(_tier(user))
+
+
+def _period(user: str) -> str:
+    """The current fair-use window key for a subscriber: the subscription's period-end (so the cap
+    resets exactly on renewal), falling back to the calendar month before Stripe fills the period in."""
+    a = store.account_get(_acct(user)) or {}
+    return a.get("current_period_end") or datetime.now(timezone.utc).strftime("%Y-%m")
+
+
+def _budget(user: str, tier: str | None = None) -> dict | None:
+    """A subscriber's fair-use status this period (None for non-subscribers). Enforced on COST — dollars
+    bound margin identically across models, so a bounded cap makes any tier price safe regardless of
+    which stack they pick; `tokens` is display-only."""
+    tier = tier or _tier(user)
+    if not tier:
+        return None
+    cap = tiers.monthly_cap_cents(tier)
+    mu = usage.monthly_usage(_acct(user), _period(user))
+    spent = int(round((mu.get("spend") or 0.0) * 100))
+    a = store.account_get(_acct(user)) or {}
+    return {"tier": tier, "cap_cents": cap, "spent_cents": spent,
+            "remaining_cents": max(0, cap - spent), "tokens": mu.get("tokens") or 0,
+            "reset_at": a.get("current_period_end"), "over": spent >= cap}
+
+
+def _feature_ok(user: str, feature: str) -> bool:
+    """Whether a premium engine feature (director_forge / custom_directors / skeptic) is available.
+    Open in dev/local (no BYOK regime → no paywall at all, same as _needs_key). When the paid regime is
+    on: available to BYOK users (their own key → everything) and to paid tiers that include it."""
+    if not keys.enabled():
+        return True
+    if _is_byok(user):
+        return True
+    return tiers.has_feature(_tier(user), feature)
 
 
 def _key_provider_kind(api_key: str) -> str:
@@ -121,10 +173,22 @@ def _provider_for(user: str):
 
 
 def _meter(user: str, cost: float) -> None:
-    """Record spend against FILG's daily budget — but ONLY for non-BYOK runs. A BYOK run is the
-    user's spend (and resolves to ~$0 on FILG's ledger anyway), so it never touches the kill switch."""
-    if not _is_byok(user):
+    """Record a hosted op's spend. BYOK → the user's own spend, untracked (≈$0 on FILG's ledger). A
+    SUBSCRIBER's run goes on FILG's key → count it against their monthly fair-use cap (record_monthly
+    also bumps the daily kill switch). A free-taste run → the daily kill switch only."""
+    if _is_byok(user):
+        return
+    if _is_subscriber(user):
+        usage.record_monthly(_acct(user), _period(user), cost, 0)
+    else:
         usage.record_spend(cost)
+
+
+def _meter_tokens(user: str, toks: int) -> None:
+    """Fold an op's token count into a subscriber's monthly usage (tokens only — cost is metered by
+    `_meter`; tracked here so the fair-use meter can show real token totals). No-op for BYOK/free."""
+    if toks and user and not _is_byok(user) and _is_subscriber(user):
+        usage.record_monthly(_acct(user), _period(user), 0.0, int(toks))
 
 
 def _fold_usage(sid: str, s: dict, cost: float, toks: int, **extra) -> tuple[float, int]:
@@ -135,13 +199,15 @@ def _fold_usage(sid: str, s: dict, cost: float, toks: int, **extra) -> tuple[flo
     new_cost = round((s.get("cost") or 0) + cost, 4)
     new_tokens = (s.get("tokens") or 0) + int(toks or 0)
     store.plan_save(sid, cost=new_cost, tokens=new_tokens, **extra)
+    _meter_tokens(s.get("user"), toks)   # subscriber fair-use meter tracks tokens too (cost via _meter)
     return new_cost, new_tokens
 
 
 def _needs_key(user: str) -> bool:
-    """BYOK model: when BYOK is on and this user has no saved key, they're behind the wall — every
-    API action, including the very first plan, requires their own key."""
-    return bool(keys.enabled() and not _is_byok(user))
+    """BYOK model: when BYOK is on and this user has neither a saved key NOR an active subscription,
+    they're behind the wall — every API action requires their own key. A subscriber runs on FILG's key
+    (bounded by their monthly fair-use cap), so they're never key-walled."""
+    return bool(keys.enabled() and not _is_byok(user) and not _is_subscriber(user))
 
 
 def _key_wall(session: dict):
@@ -185,6 +251,14 @@ class BusyError(Exception):
         super().__init__(f"at concurrency limit ({cap})")
 
 
+class BudgetError(Exception):
+    """Raised when a subscriber has spent their monthly fair-use allowance on FILG's key. Carries the
+    budget snapshot so the response can name the reset date. Caught centrally in `_engine_error`."""
+    def __init__(self, budget: dict):
+        self.budget = budget or {}
+        super().__init__("monthly fair-use allowance reached")
+
+
 def _concurrency_cap(user: str) -> int:
     return CONCURRENCY_CAP
 
@@ -195,14 +269,21 @@ def _run_slot(user: str, stack: str | None = None):
     ledger, then release the slot on exit. Raises BusyError if they're already at their plan's limit.
     The premium stack is clamped off FILG's free key so a free run can't spend Opus on FILG's dime."""
     cap = _concurrency_cap(user)
+    tier = _tier(user)
+    if tier:   # subscriber over their monthly fair-use cap → block before spending more on FILG's key
+        b = _budget(user, tier)
+        if b and b["over"]:
+            raise BudgetError(b)
     with _inflight_lock:
         if _inflight.get(user, 0) >= cap:
             raise BusyError(cap)
         _inflight[user] = _inflight.get(user, 0) + 1
     try:
         prov = _provider_for(user)
-        # Only a user-PAID provider unlocks the premium (Opus) tiers; FILG's hosted free key stays clamped.
-        stk = provider.clamp_stack(stack, byok=bool(prov and not prov.bills_filg))
+        # Stack ceiling: BYOK (own key) → any stack; a subscriber → up to their tier's ceiling (Opus for
+        # Pro/Studio, ON FILG's key); free taste on FILG's key → the Opus-free default (invariant #3).
+        is_byok = bool(prov and not prov.bills_filg)
+        stk = tiers.clamp_stack(stack, tier=tier, byok=is_byok)
         with provider.use(prov), provider.use_stack(stk), pipeline.run_ledger():
             yield
     finally:
@@ -219,6 +300,17 @@ def _busy_response(e: BusyError) -> JSONResponse:
     return JSONResponse(
         {"error": f"You already have {e.cap} operation{plural} running. Let one finish, then try again.",
          "busy": True}, status_code=429)
+
+
+def _budget_response(e: BudgetError) -> JSONResponse:
+    """402 when a subscriber has used their monthly allowance: offer the two off-ramps (bring a key to
+    keep going free, or wait for the renewal reset). `needKey` reopens the key modal in the frontend."""
+    b = e.budget or {}
+    return JSONResponse(
+        {"error": "You've used this month's plan allowance on our key. Add your own API key to keep "
+                  "building for free, or your allowance resets when your subscription renews.",
+         "fairUse": True, "needKey": True, "resetAt": b.get("reset_at"), "tier": b.get("tier")},
+        status_code=402)
 
 
 def _humanize_error(e: Exception) -> tuple[str, bool]:
@@ -251,7 +343,10 @@ def _humanize_error(e: Exception) -> tuple[str, bool]:
 
 def _engine_error(e: Exception, status_code: int = 500):
     """Standard JSON error for an engine route — humanized message + a needKey flag the frontend uses
-    to reopen the key modal."""
+    to reopen the key modal. A subscriber's fair-use BudgetError is surfaced as a 402 (every route
+    already routes unexpected exceptions here, so no per-route wiring is needed)."""
+    if isinstance(e, BudgetError):
+        return _budget_response(e)
     msg, need_key = _humanize_error(e)
     body = {"error": msg}
     if need_key:
@@ -309,12 +404,18 @@ async def api_me(request: Request):
     if not authed:
         return {"signed_in": False, "auth_enabled": auth.AUTH_ENABLED,
                 "pdf_billing": billing.PDF_BILLING_ENABLED,
-                "pdf_price": billing.PDF_PRICE_CENTS}
+                "pdf_price": billing.PDF_PRICE_CENTS,
+                "sub_enabled": billing.PDF_BILLING_ENABLED, "tiers": tiers.catalog()}
+    tier = _tier(authed["email"])
     return {"signed_in": True, "email": authed["email"],
-            "pdf_unlocked": _has_pdf_access(authed["email"]),   # account-wide comp (coupon) → unlimited
+            "pdf_unlocked": _has_pdf_access(authed["email"]),   # comp (coupon) OR subscription → unlimited
             "pdf_credits": billing.credits_left(authed["email"]),   # paid plan-unlock credits remaining
             "pdf_billing": billing.PDF_BILLING_ENABLED, "pdf_price": billing.PDF_PRICE_CENTS,
-            "auth_enabled": auth.AUTH_ENABLED}
+            "auth_enabled": auth.AUTH_ENABLED,
+            # subscription state for the fork UI + usage meter
+            "sub_enabled": billing.PDF_BILLING_ENABLED, "tiers": tiers.catalog(),
+            "tier": tier, "tier_label": tiers.label(tier) if tier else None,
+            "subscription": _budget(authed["email"], tier)}
 
 
 @app.post("/api/plan/{sid}/buy-pdf")
@@ -337,6 +438,34 @@ async def api_buy_pdf(sid: str, request: Request):
     try:
         url = billing.create_pdf_checkout_url(authed["email"], user_id=authed["id"], plan_id=sid,
                                               plan_key=_plan_key(s))
+    except billing.StripeError as e:
+        return JSONResponse({"error": str(e)}, status_code=502)
+    return {"url": url}
+
+
+@app.post("/api/subscribe")
+async def api_subscribe(request: Request):
+    """Start a MONTHLY subscription Checkout for a paid tier (Starter/Pro/Studio). Signed-in only.
+    Returns the hosted Stripe URL; the webhook activates the account on completion."""
+    authed = auth.user_from_request(request)
+    if not authed or not authed["email"]:
+        return JSONResponse({"error": "Sign in first."}, status_code=401)
+    if not billing.PDF_BILLING_ENABLED:
+        return JSONResponse({"error": "Billing isn't configured yet."}, status_code=503)
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    tier = (body.get("tier") or "").strip()
+    if not tiers.is_tier(tier):
+        return JSONResponse({"error": "Unknown plan."}, status_code=400)
+    if _tier(authed["email"]) == tier:
+        return JSONResponse({"error": f"You're already on {tiers.label(tier)}.", "current": True},
+                            status_code=409)
+    try:
+        url = billing.create_subscription_checkout_url(
+            authed["email"], tier=tier, price_cents=tiers.price_cents(tier),
+            label=tiers.label(tier), user_id=authed["id"])
     except billing.StripeError as e:
         return JSONResponse({"error": str(e)}, status_code=502)
     return {"url": url}
@@ -715,17 +844,20 @@ def _plan_research(session_id: str, idea: str, user: str) -> None:
             progress.append(line)            # the UI spews it live AND the session meter ticks during research
             store.plan_save(session_id, progress=list(progress),
                             tokens=pipeline.LEDGER.tokens(), cost=round(pipeline.LEDGER.cost(), 4))
-        prov = _provider_for(user)   # user's own key if they have one, else FILG's hosted free key
+        prov = _provider_for(user)   # user's own key if they have one, else FILG's hosted key
         sess0 = store.plan_get(session_id) or {}
-        # premium (Opus) only on a user-paid key; FILG's hosted free key is clamped to the default tier
-        stk = provider.clamp_stack(sess0.get("stack"), byok=bool(prov and not prov.bills_filg))
+        # Stack ceiling: BYOK → any; subscriber → up to their tier; free taste on FILG's key → Opus-free default.
+        stk = tiers.clamp_stack(sess0.get("stack"), tier=_tier(user),
+                                byok=bool(prov and not prov.bills_filg))
         with provider.use(prov), provider.use_stack(stk), pipeline.run_ledger():
             prep = planner.prepare(idea, mock=MOCK, on_progress=on_progress)  # intake → research → vet → draft
             toks = pipeline.LEDGER.tokens()   # the welcome run's token usage → seeds the session meter
-        if prov is not None and prov.bills_filg:   # FILG's hosted key → meter the free run (invariant #3)
-            # the per-user free-taste counter dedupes on the normalized email (alias anti-abuse)
-            usage.record_run(auth.normalize_email(user), prep["research_cost"])  # free run + daily total
-            usage.record_spend(prep["cost"] - prep["research_cost"])  # intake + vet + first draft → daily
+        if prov is not None and prov.bills_filg:   # runs on FILG's hosted key → meter it (invariant #3)
+            if _is_subscriber(user):               # subscriber → count against their monthly fair-use cap
+                usage.record_monthly(_acct(user), _period(user), prep["cost"], toks)
+            else:                                  # free taste → per-user counter (alias-deduped) + daily
+                usage.record_run(auth.normalize_email(user), prep["research_cost"])  # free run + daily total
+                usage.record_spend(prep["cost"] - prep["research_cost"])  # intake + vet + first draft → daily
         root = _new_node(planner.root_node(prep["proposal"]), None)  # seed the decision tree's root
         tree = {"nodes": {root["id"]: root}, "active": root["id"]}
         store.plan_save(session_id, status="building", research=prep["research"], step=0,
@@ -750,6 +882,16 @@ async def api_plan_start(request: Request):
     taste_id = auth.normalize_email(user)   # dedupe the free taste across +suffix / gmail-dot aliases
     if _is_byok(user):
         pass   # has a key → unlimited plans on their own spend
+    elif _is_subscriber(user):
+        # Subscriber: runs on FILG's key, bounded by the monthly fair-use cap. Over it → offer the
+        # two off-ramps (own key, or wait for the renewal reset) instead of building on our dime.
+        b = _budget(user)
+        if b and b["over"]:
+            return JSONResponse(
+                {"error": "You've used this month's plan allowance on our key. Add your own API key to "
+                          "keep building free, or your allowance resets when your subscription renews.",
+                 "fairUse": True, "needKey": True, "resetAt": b.get("reset_at")}, status_code=402)
+        # else: runs on FILG's hosted key → _plan_research meters it against the monthly cap
     elif keys.enabled():
         # BYOK on, no key: the FIRST query is on us when FILG has a hosted key (metered + kill-switch).
         # Once the free taste is used (or the daily budget is hit), degrade to a key prompt, not a wall.
@@ -1178,6 +1320,11 @@ async def api_director_forge(sid: str, request: Request):
         return JSONResponse({"error": "unknown session"}, status_code=404)
     if (wall := _key_wall(s)):
         return wall
+    if not _feature_ok(s.get("user"), "director_forge"):   # premium feature: Pro/Studio, or BYOK
+        return JSONResponse(
+            {"error": "Forging a custom board director is a Pro feature. Upgrade to Pro, or add your "
+                      "own API key to use it free.", "upgrade": True, "feature": "director_forge"},
+            status_code=402)
     body = await request.json()
     desc = (body.get("description") or "").strip()
     if len(desc) < 4:
@@ -1270,7 +1417,7 @@ def _stress_worker(sid: str, idea: str, shaped: dict, research: dict | None,
                                           "result": None})
 
         prov = _provider_for(user)
-        stk = provider.clamp_stack(stack, byok=prov is not None)
+        stk = tiers.clamp_stack(stack, tier=_tier(user), byok=bool(prov and not prov.bills_filg))
         with provider.use(prov), provider.use_stack(stk), pipeline.run_ledger():
             res, cost = skeptic.stress_test(idea, shaped, research, mock=MOCK, on_progress=on_progress)
             toks = pipeline.LEDGER.tokens()
@@ -1294,6 +1441,10 @@ async def api_plan_stress_test(sid: str, request: Request):
         return JSONResponse({"error": "unknown session"}, status_code=404)
     if (wall := _key_wall(s)):
         return wall
+    if not _feature_ok(s.get("user"), "skeptic"):   # premium feature: Pro/Studio, or BYOK
+        return JSONResponse(
+            {"error": "The adversarial stress-test is a Pro feature. Upgrade to Pro, or add your own "
+                      "API key to use it free.", "upgrade": True, "feature": "skeptic"}, status_code=402)
     shaped = s.get("shaped")
     if not shaped:
         return JSONResponse({"error": "Shape the idea first, then stress-test it."}, status_code=409)
@@ -1597,9 +1748,11 @@ async def api_plan_pdf(sid: str, request: Request):
         return JSONResponse({"error": "plan isn't finished yet"}, status_code=400)
     authed = auth.user_from_request(request)
     email = (authed or {}).get("email", "")
-    # Claim this plan: free if comped or already unlocked, else spends one of the account's credits.
-    # When billing is off (dev) it's always open. False → no access and no credits → ask for payment.
-    if billing.PDF_BILLING_ENABLED and not billing.claim_pdf(email, _plan_key(s)):
+    # Subscribers get the polished PDF free (it's part of the plan). Otherwise claim it: free if comped
+    # or already unlocked, else spend one of the account's credits. Billing off (dev) → always open.
+    # False → no access and no credits → ask for payment.
+    if (billing.PDF_BILLING_ENABLED and not _is_subscriber(email)
+            and not billing.claim_pdf(email, _plan_key(s))):
         return JSONResponse(
             {"error": "You're out of PDF credits. Unlock 3 plans for $7. Your raw export is free.",
              "needPurchase": True, "price": billing.PDF_PRICE_CENTS}, status_code=402)
@@ -1613,8 +1766,9 @@ async def api_plan_pdf(sid: str, request: Request):
     except Exception as e:  # noqa: BLE001
         traceback.print_exc()
         return JSONResponse({"error": f"Could not build the PDF: {e}"}, status_code=500)
-    # Runs on the owner's own key (user-key-only), so it never touches FILG's budget; the per-session
-    # usage meter still reflects it (display-only).
+    # BYOK → the owner's own key (never touches FILG's budget). A subscriber → FILG's key, so meter the
+    # synth against their monthly fair-use cap. The per-session meter reflects it either way.
+    _meter(s.get("user"), cost)
     nc, nt = _fold_usage(sid, s, cost, toks)   # binary response → echo usage via headers for the meter
     fn = f"{_slug(s.get('idea'))}-business-plan.pdf"
     return Response(data, media_type="application/pdf",
@@ -1631,6 +1785,8 @@ def _render_page(deep: bool = False) -> str:
                       "pdfBilling": billing.PDF_BILLING_ENABLED, "pdfPrice": billing.PDF_PRICE_CENTS,
                       "byokEnabled": keys.enabled(),
                       "freeTaste": bool(HOSTED_FREE and keys.enabled()),   # first query on FILG's key
+                      "subEnabled": billing.PDF_BILLING_ENABLED,           # monthly tiers available (Stripe on)
+                      "tiers": tiers.catalog(),                            # pricing table / fork UI
                       "supabaseUrl": os.environ.get("SUPABASE_URL", ""),
                       "supabaseAnon": (os.environ.get("SUPABASE_PUBLISHABLE_KEY")
                                        or os.environ.get("SUPABASE_ANON_KEY", "")),

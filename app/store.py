@@ -146,6 +146,19 @@ def init() -> None:
                 if "updated_at" not in have:   # recency for the profile sort (most recently viewed/edited first)
                     con.execute("ALTER TABLE plan_sessions ADD COLUMN updated_at TEXT")
                     con.execute("UPDATE plan_sessions SET updated_at=created_at WHERE updated_at IS NULL")
+                # Subscription accounts: a paid tier that runs on FILG's key (see app/tiers.py). `email`
+                # is the NORMALIZED account id (alias-collapsed) so it lines up with billing/usage dedup.
+                # `current_period_end` doubles as the fair-use window boundary + the reset date shown to
+                # the user; a renewal (customer.subscription.updated) advances it → the monthly cap resets.
+                con.execute(
+                    "CREATE TABLE IF NOT EXISTS accounts ("
+                    "  email TEXT PRIMARY KEY,"
+                    "  tier TEXT,"                       # starter | pro | studio | NULL (canceled)
+                    "  status TEXT,"                     # active | trialing | past_due | canceled
+                    "  stripe_customer_id TEXT,"
+                    "  stripe_subscription_id TEXT,"
+                    "  current_period_end TEXT,"         # ISO ts — fair-use window boundary / reset date
+                    "  updated_at TEXT NOT NULL)")
         finally:
             con.close()
         _initialized = True
@@ -389,6 +402,97 @@ def coupon_status(code: str) -> dict | None:
             "remaining": max(0, row["max_uses"] - row["used"]), "active": bool(row["active"])}
 
 
+# ── Subscription accounts (paid tiers on FILG's key — see app/tiers.py) ───────
+# past_due keeps access through Stripe's dunning/retry window; canceled drops to free/BYOK.
+ACTIVE_STATUSES = ("active", "trialing", "past_due")
+
+
+def account_get(email: str) -> dict | None:
+    """The subscription row for a normalized account, or None."""
+    if not email:
+        return None
+    init()
+    con = _connect()
+    try:
+        row = con.execute("SELECT * FROM accounts WHERE email=?", (email.strip().lower(),)).fetchone()
+    finally:
+        con.close()
+    return dict(row) if row else None
+
+
+def account_tier(email: str) -> str | None:
+    """The ACTIVE paid tier for a normalized account (None if no subscription, or it's canceled)."""
+    row = account_get(email)
+    if row and row.get("status") in ACTIVE_STATUSES and row.get("tier"):
+        return row["tier"]
+    return None
+
+
+def set_subscription(email: str, *, tier: str | None, status: str,
+                     stripe_customer_id: str | None = None,
+                     stripe_subscription_id: str | None = None,
+                     current_period_end: str | None = None) -> None:
+    """Upsert an account's subscription state from a Stripe webhook. COALESCE preserves a previously
+    stored id/period when a later event doesn't carry it (checkout gives the ids but no period end; the
+    subscription.updated event fills the period end and advances it on each renewal)."""
+    if not email:
+        return
+    email = email.strip().lower()
+    init()
+    con = _connect()
+    try:
+        with con:
+            con.execute(
+                "INSERT INTO accounts (email, tier, status, stripe_customer_id, "
+                "  stripe_subscription_id, current_period_end, updated_at) VALUES (?,?,?,?,?,?,?) "
+                "ON CONFLICT(email) DO UPDATE SET "
+                "  tier=excluded.tier, status=excluded.status, "
+                "  stripe_customer_id=COALESCE(excluded.stripe_customer_id, accounts.stripe_customer_id), "
+                "  stripe_subscription_id=COALESCE(excluded.stripe_subscription_id, accounts.stripe_subscription_id), "
+                "  current_period_end=COALESCE(excluded.current_period_end, accounts.current_period_end), "
+                "  updated_at=excluded.updated_at",
+                (email, tier, status, stripe_customer_id, stripe_subscription_id,
+                 current_period_end, datetime.now(timezone.utc).isoformat()))
+    finally:
+        con.close()
+
+
+def cancel_subscription(email: str) -> None:
+    """Mark an account canceled (subscription ended) → drops back to free/BYOK. Row kept for history."""
+    if not email:
+        return
+    init()
+    con = _connect()
+    try:
+        with con:
+            con.execute("UPDATE accounts SET status='canceled', tier=NULL, updated_at=? WHERE email=?",
+                        (datetime.now(timezone.utc).isoformat(), email.strip().lower()))
+    finally:
+        con.close()
+
+
+def account_by_stripe(*, customer_id: str | None = None,
+                      subscription_id: str | None = None) -> dict | None:
+    """Look up an account by Stripe subscription id (preferred) or customer id — for webhook events
+    (subscription.updated/deleted) whose payload carries ids but not the account email."""
+    init()
+    con = _connect()
+    try:
+        if subscription_id:
+            row = con.execute("SELECT * FROM accounts WHERE stripe_subscription_id=?",
+                              (subscription_id,)).fetchone()
+            if row:
+                return dict(row)
+        if customer_id:
+            row = con.execute("SELECT * FROM accounts WHERE stripe_customer_id=?",
+                              (customer_id,)).fetchone()
+            if row:
+                return dict(row)
+    finally:
+        con.close()
+    return None
+
+
 # ── Plan-builder sessions ────────────────────────────────────────────────────
 _PLAN_JSON = ("research", "files", "proposal", "history",  # columns stored as JSON
               "shaped", "vetting", "directors", "board", "tree", "chat", "progress",
@@ -518,6 +622,7 @@ def delete_account(email: str, normalized: str | None = None) -> None:
                 con.execute("DELETE FROM pdf_purchases WHERE email=?", (e,))
                 con.execute("DELETE FROM pdf_credits WHERE email=?", (e,))
                 con.execute("DELETE FROM pdf_unlocks WHERE email=?", (e,))
+                con.execute("DELETE FROM accounts WHERE email=?", (e,))
     finally:
         con.close()
 
@@ -574,4 +679,20 @@ if __name__ == "__main__":  # quick self-test (no API)
     assert plan_get("pl1")["shared"] == 0
     plan_delete("pl1")
     assert plan_get("pl1") is None and plan_list("u@x.com") == []
+    # subscription accounts: activate → tier live; renewal advances period; cancel → drops to free
+    assert account_tier("sub@x.com") is None
+    set_subscription("sub@x.com", tier="pro", status="active",
+                     stripe_customer_id="cus_1", stripe_subscription_id="sub_1",
+                     current_period_end="2026-08-01T00:00:00Z")
+    assert account_tier("sub@x.com") == "pro"
+    assert account_by_stripe(subscription_id="sub_1")["email"] == "sub@x.com"
+    assert account_by_stripe(customer_id="cus_1")["email"] == "sub@x.com"
+    set_subscription("sub@x.com", tier="pro", status="active",   # renewal event: no ids, new period
+                     current_period_end="2026-09-01T00:00:00Z")
+    a = account_get("sub@x.com")
+    assert a["current_period_end"] == "2026-09-01T00:00:00Z" and a["stripe_customer_id"] == "cus_1"
+    set_subscription("sub@x.com", tier="pro", status="past_due")   # dunning → access holds
+    assert account_tier("sub@x.com") == "pro"
+    cancel_subscription("sub@x.com")
+    assert account_tier("sub@x.com") is None and account_get("sub@x.com")["status"] == "canceled"
     print("store.py self-test OK")
