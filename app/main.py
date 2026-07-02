@@ -1170,12 +1170,39 @@ async def api_research_query(sid: str, request: Request):
     return {**res, "cost": nc, "tokens": nt}
 
 
+def _stress_worker(sid: str, idea: str, shaped: dict, research: dict | None,
+                   user: str, stack: str | None) -> None:
+    """Background worker: run the adversarial stress-test on the user's bound key, streaming the
+    §LANES§/§LANEDONE§ runner sentinels into the session's `skeptic.progress` live (so the client's
+    runner panel paints the assumption→attack→verdict tree grey→green), then persist the result.
+    Mirrors _plan_research's threading + on_progress + provider/ledger binding."""
+    progress: list[str] = []
+    try:
+        def on_progress(line: str) -> None:
+            progress.append(line)
+            store.plan_save(sid, skeptic={"status": "running", "progress": list(progress),
+                                          "result": None})
+
+        prov = _provider_for(user)
+        stk = provider.clamp_stack(stack, byok=prov is not None)
+        with provider.use(prov), provider.use_stack(stk), pipeline.run_ledger():
+            res, cost = skeptic.stress_test(idea, shaped, research, mock=MOCK, on_progress=on_progress)
+            toks = pipeline.LEDGER.tokens()
+        _meter(user, cost)
+        s = store.plan_get(sid) or {}
+        _fold_usage(sid, s, cost, toks,
+                    skeptic={"status": "done", "progress": progress, "result": res, "cost": cost})
+    except Exception as e:  # noqa: BLE001
+        traceback.print_exc()
+        store.plan_save(sid, skeptic={"status": "error", "progress": progress, "result": None,
+                                      "error": _humanize_error(e)[0]})
+
+
 @app.post("/api/plan/{sid}/stress-test")
 async def api_plan_stress_test(sid: str, request: Request):
-    """Adversarially stress-test the plan's load-bearing assumptions with live, gate-graded refutation
-    research (skeptic.stress_test). An explicit, high-stakes action — it's real spend (N refutation
-    searches + a gate batch + a verdict batch) — so the operator triggers it deliberately. Owner only,
-    on their bound key. Returns {assessments, summary, cost, tokens}."""
+    """Kick off the adversarial assumption stress-test (skeptic.stress_test) in the background so its
+    runner tree streams live. High-stakes, real spend — an explicit action, owner only, behind the key
+    wall. Returns {started:true}; the client polls GET /api/plan/{sid}/stress-test for progress+result."""
     s = store.plan_get(sid)
     if not s or not _owns(request, s):
         return JSONResponse({"error": "unknown session"}, status_code=404)
@@ -1184,18 +1211,23 @@ async def api_plan_stress_test(sid: str, request: Request):
     shaped = s.get("shaped")
     if not shaped:
         return JSONResponse({"error": "Shape the idea first, then stress-test it."}, status_code=409)
-    try:
-        with _run_slot(s.get("user"), s.get("stack")):
-            res, cost = skeptic.stress_test(s["idea"], shaped, s.get("research"), mock=MOCK)
-            toks = pipeline.LEDGER.tokens()
-    except BusyError as be:
-        return _busy_response(be)
-    except Exception as e:  # noqa: BLE001
-        traceback.print_exc()
-        return JSONResponse({"error": str(e)}, status_code=500)
-    _meter(s.get("user"), cost)
-    nc, nt = _fold_usage(sid, s, cost, toks)
-    return {**res, "cost": nc, "tokens": nt}
+    if (s.get("skeptic") or {}).get("status") == "running":
+        return JSONResponse({"error": "A stress-test is already running.", "running": True},
+                            status_code=409)
+    store.plan_save(sid, skeptic={"status": "running", "progress": [], "result": None})
+    threading.Thread(target=_stress_worker,
+                     args=(sid, planner._working_idea(s), shaped, s.get("research"),
+                           s.get("user"), s.get("stack")), daemon=True).start()
+    return {"started": True}
+
+
+@app.get("/api/plan/{sid}/stress-test")
+async def api_plan_stress_test_state(sid: str, request: Request):
+    """Poll the stress-test: {status: idle|running|done|error, progress:[…sentinels…], result, cost}."""
+    s = store.plan_get(sid)
+    if not s or not _owns(request, s):
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    return s.get("skeptic") or {"status": "idle", "progress": [], "result": None}
 
 
 @app.post("/api/plan/{sid}/chat")

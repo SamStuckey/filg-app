@@ -77,24 +77,44 @@ def test_unknown_verdict_defaults_to_weakened(patch_call):
     assert a["evidence"] == []
 
 
-# ── the /stress-test route (mock mode, through the FastAPI app) ───────────────
+# ── the /stress-test route: async start + poll, streaming the runner sentinels ───
 _IDEA = "I like basketball, Magic the Gathering, and food, and I'm good at sales"
 
 
-def test_stress_test_route_returns_assessments(client):
+def _wait_skeptic(client, sid, tries=120, delay=0.03):
+    import time
+    st = client.get(f"/api/plan/{sid}/stress-test").json()
+    for _ in range(tries):
+        if st.get("status") in ("done", "error"):
+            break
+        time.sleep(delay)
+        st = client.get(f"/api/plan/{sid}/stress-test").json()
+    return st
+
+
+def test_stress_test_route_starts_streams_and_returns_result(client):
     sid = client.post("/api/plan/start", json={"idea": _IDEA, "email": "st@x.com"}).json()["id"]
-    s = wait_status(client, sid)
-    assert s["shaped"]["thesis"]
-    r = client.post(f"/api/plan/{sid}/stress-test")
-    assert r.status_code == 200
-    body = r.json()
-    assert body["assessments"] and body["summary"]
-    assert all(a["verdict"] in skeptic._VERDICTS for a in body["assessments"])
-    assert "cost" in body and "tokens" in body
+    assert wait_status(client, sid)["shaped"]["thesis"]
+    started = client.post(f"/api/plan/{sid}/stress-test")
+    assert started.status_code == 200 and started.json()["started"] is True
+    st = _wait_skeptic(client, sid)
+    assert st["status"] == "done"
+    assert st["result"]["assessments"] and st["result"]["summary"]
+    assert all(a["verdict"] in skeptic._VERDICTS for a in st["result"]["assessments"])
+    # the runner sentinels streamed into progress → the panel can paint the attack tree live
+    assert any(str(l).startswith("§LANES§") for l in st["progress"])
+    assert any(str(l).startswith("§LANEDONE§") for l in st["progress"])
+
+
+def test_stress_test_state_idle_before_start(client):
+    sid = client.post("/api/plan/start", json={"idea": _IDEA, "email": "st2@x.com"}).json()["id"]
+    wait_status(client, sid)
+    assert client.get(f"/api/plan/{sid}/stress-test").json()["status"] == "idle"
 
 
 def test_stress_test_route_unknown_session_is_404(client):
     assert client.post("/api/plan/does-not-exist/stress-test").status_code == 404
+    assert client.get("/api/plan/does-not-exist/stress-test").status_code == 404
 
 
 def test_stress_test_route_requires_shaped(client):
