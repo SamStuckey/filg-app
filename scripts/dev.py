@@ -18,6 +18,8 @@ then drive states from here.
   python scripts/dev.py spend <amount>        # add to today's spend → test the daily kill-switch / degrade
   python scripts/dev.py usage                 # show today_spend / daily_budget / free-run counters
   python scripts/dev.py plan <email> <tier>   # set a subscription tier (starter|pro|studio|free)
+  python scripts/dev.py account <email>       # why am I (not) walled? tier / saved key / monthly usage
+  python scripts/dev.py key <email> [--clear] # show or clear a saved BYOK key (flip free ↔ BYOK)
   python scripts/dev.py models [--check]      # show the model catalog (--check hits the cached Models API)
   python scripts/dev.py buy <email>           # grant PDF credits (the $7/3-plan unlock) → test the export
 """
@@ -114,7 +116,8 @@ def cmd_state(args):
     print(f"sid={args.sid}")
     print(f"  status={s.get('status')} step={s.get('step')} verdict={verdict} files={len(s.get('files') or {})}")
     print(f"  tree.active={tree.get('active')} nodes={len(tree.get('nodes') or {})}")
-    print(f"  user={user} plan={store.account_plan(user)} free_used={usage.free_used(_norm(user or ''))}")
+    print(f"  user={user} tier={store.account_tier(_norm(user or '')) or 'free'} "
+          f"free_used={usage.free_used(_norm(user or ''))}")
     print(f"  pdf_unlocked={store.has_purchased(_norm(user or ''))}")
     print(f"  today_spend=${snap['today_spend']:.2f} / ${snap['daily_budget']:.0f} budget")
 
@@ -177,6 +180,42 @@ def cmd_models(args):
     print(json.dumps(model_catalog.snapshot(check_availability=args.check), indent=2))
 
 
+def cmd_account(args):
+    """Inspect ONE identity's gating state — the 'why am I (not) being walled?' answer. The key wall
+    lifts for a subscriber OR a saved BYOK key OR when keys are off (dev). A free user (keys on, no tier,
+    no key) gets one welcome plan then a key prompt on every later step."""
+    from datetime import datetime, timezone
+    store, usage = _store(), _usage()
+    import keys
+    norm = _norm(args.email)
+    raw = (args.email or "").strip().lower()   # keys are stored on the raw-lower email; subs on the alias-norm
+    tier = store.account_tier(norm)
+    acct = store.account_get(norm) or {}
+    meta = keys.key_meta(raw)
+    key_state = f"{meta['provider']} …{meta['last4']}" if meta else "none"
+    period = acct.get("current_period_end") or datetime.now(timezone.utc).strftime("%Y-%m")
+    mu = usage.monthly_usage(norm, period)
+    walled = keys.enabled() and not meta and not tier
+    print(f"{args.email} (→ {norm})")
+    print(f"  tier={tier or 'free'} status={acct.get('status')} period_end={acct.get('current_period_end')}")
+    print(f"  saved_key={key_state}  keys.enabled={keys.enabled()}")
+    print(f"  monthly_usage=${(mu.get('spend') or 0):.3f} / {mu.get('tokens') or 0} tok  (period={period})")
+    print(f"  wall on next step? {'YES — free user, key-prompted after the welcome plan' if walled else 'NO — subscriber, saved key, or keys off (dev)'}")
+
+
+def cmd_key(args):
+    """Inspect or clear a saved BYOK key for an identity (so you can flip one email between
+    free / BYOK without juggling addresses). `key <email>` shows it; `key <email> --clear` removes it."""
+    import keys
+    raw = (args.email or "").strip().lower()
+    if args.clear:
+        keys.delete_key(raw)
+        print(f"{args.email} → saved key cleared (has_key={keys.has_key(raw)})")
+    else:
+        meta = keys.key_meta(raw)
+        print(f"{args.email} → {('%s …%s' % (meta['provider'], meta['last4'])) if meta else 'no saved key'}")
+
+
 def cmd_buy(args):
     store = _store()
     norm = _norm(args.email)
@@ -213,6 +252,13 @@ def main():
     a = sub.add_parser("models", help="show the model catalog (--check hits the cached Models API)")
     a.add_argument("--check", action="store_true", help="cached Anthropic Models API availability pass")
     a.set_defaults(fn=cmd_models)
+    a = sub.add_parser("account", help="inspect an identity's gating state (tier / saved key / monthly usage)")
+    a.add_argument("email")
+    a.set_defaults(fn=cmd_account)
+    a = sub.add_parser("key", help="show or clear an identity's saved BYOK key")
+    a.add_argument("email")
+    a.add_argument("--clear", action="store_true", help="remove the saved key")
+    a.set_defaults(fn=cmd_key)
     a = sub.add_parser("buy")
     a.add_argument("email")
     a.set_defaults(fn=cmd_buy)
