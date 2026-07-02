@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# filg — local dev convenience wrapper. Sets the dev-account env once, then runs scripts/dev.py.
+#
+#   ./filg plan sam@test.com pro     grant a subscription tier (starter|pro|studio|free)
+#   ./filg serve                     run the app (mock — canned output, no spend)
+#   ./filg serve --real              run the app for REAL (uses your key as FILG's account key)
+#   ./filg models --check            show the model catalog (--check hits the cached Models API)
+#   ./filg usage                     today's $ spend / daily budget
+#   ./filg buy <email>               grant PDF credits
+#
+# It wires three things so you don't have to export them every time:
+#   - FILG_DEV_EMAIL   a stable local identity (so the subscriber UX shows without Supabase)
+#   - FILG_KEY_SECRET  a stable BYOK key-store secret (so saved keys survive restarts)
+#   - FILG_ANTHROPIC_API_KEY  ← $ASDF_ANTHROPIC_API_KEY, so --real runs on your key WITHOUT
+#                             exporting ANTHROPIC_API_KEY (which would hijack your Claude Code login)
+# Override any of them by exporting it before calling ./filg.
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+mkdir -p "$ROOT/.dev"
+
+: "${FILG_DEV_EMAIL:=dev@filg.local}"; export FILG_DEV_EMAIL
+
+if [ -z "${FILG_KEY_SECRET:-}" ]; then
+  [ -f "$ROOT/.dev/key_secret" ] || openssl rand -hex 32 > "$ROOT/.dev/key_secret"
+  export FILG_KEY_SECRET="$(cat "$ROOT/.dev/key_secret")"
+fi
+
+if [ -z "${FILG_ANTHROPIC_API_KEY:-}" ] && [ -n "${ASDF_ANTHROPIC_API_KEY:-}" ]; then
+  export FILG_ANTHROPIC_API_KEY="$ASDF_ANTHROPIC_API_KEY"
+fi
+
+# One-line context so you know who you are / whether the account key is wired.
+key_state="no account key (mock only)"; [ -n "${FILG_ANTHROPIC_API_KEY:-}" ] && key_state="account key wired (--real ready)"
+echo "filg · identity=$FILG_DEV_EMAIL · $key_state" >&2
+
+exec python "$ROOT/scripts/dev.py" "$@"
