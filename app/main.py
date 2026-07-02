@@ -56,6 +56,7 @@ import advisor    # noqa: E402 — "chat with your plan" (grounded advisory laye
 import skeptic    # noqa: E402 — adversarial assumption-checking on the live research path
 import provider   # noqa: E402 — BYOK: per-run LLM provider (FILG's key vs a user's OpenRouter key)
 import pipeline   # noqa: E402 — engine: per-run cost ledger (run_ledger) for safe concurrency
+import model_catalog  # noqa: E402 — model ids/prices/slugs + cached Models API availability
 
 from . import auth, billing, keys, planner, store, tiers  # noqa: E402 — persistence, auth, billing, keys, tiers
 
@@ -630,7 +631,18 @@ async def api_stripe_webhook(request: Request):
 @app.get("/healthz")
 async def healthz():
     return {"ok": True, "mock": MOCK, "auth_enabled": auth.AUTH_ENABLED,
-            "pdf_billing": billing.PDF_BILLING_ENABLED, **usage.snapshot()}
+            "pdf_billing": billing.PDF_BILLING_ENABLED, "sub_enabled": billing.PDF_BILLING_ENABLED,
+            "models": model_catalog.snapshot()["slots"], **usage.snapshot()}
+
+
+@app.get("/api/models")
+async def api_models(request: Request):
+    """The model catalog: each id with its rung / price / OpenRouter slug, the current logical-slot
+    resolution, and — with ?check=1 — a cached Anthropic Models API availability pass plus any ids the
+    API reports that we don't yet catalog (the 'a new model shipped, go place + price it' signal).
+    Public + read-only; ids/prices/rungs aren't secret. Availability is cached (FILG_MODELS_TTL)."""
+    check = request.query_params.get("check") in ("1", "true", "yes")
+    return model_catalog.snapshot(check_availability=check)
 
 
 CTA = ('<div class="cta"><a class="btn btn-primary" href="https://filg.ai/#start">'

@@ -44,6 +44,7 @@ from urllib.parse import urlparse
 
 import anthropic
 
+import model_catalog
 import provider
 from provider import HAIKU, SONNET, OPUS  # canonical model ids (defined in provider to avoid a cycle)
 
@@ -53,10 +54,11 @@ from source_credibility_gate import (
 )
 
 # --- Prices: USD per 1M tokens (input, output) -------------------------------
-# Keyed by FILG's hosted model ids only. BYOK runs use a user's key (provider.bills_filg=False),
-# so their tokens are the user's spend, not FILG's — an unknown model id resolves to $0 here on
-# purpose (PRICES.get below), keeping BYOK runs off FILG's daily kill switch.
-PRICES = {HAIKU: (1.0, 5.0), SONNET: (3.0, 15.0), OPUS: (5.0, 25.0)}
+# Sourced from model_catalog (env-overridable) so a new/repointed model doesn't need a code edit here.
+# BYOK runs use a user's key (provider.bills_filg=False), so their tokens are the user's spend — an
+# unknown model id resolves to $0 (model_catalog.price fallback), keeping BYOK off FILG's kill switch.
+# Kept as a dict for back-compat; `_row_cost` consults the catalog directly so ANY resolved id prices.
+PRICES = {m: model_catalog.price(m) for m in (HAIKU, SONNET, OPUS)}
 WEB_SEARCH_PRICE = 10.0 / 1000  # $10 per 1k searches (Anthropic server tool)
 OPENROUTER_WEB_MAX = 4          # results per request for OpenRouter's web plugin
 
@@ -90,7 +92,7 @@ class Ledger:
         (Anthropic). An unknown model with no reported cost resolves to $0."""
         if real is not None:
             return float(real)
-        pin, pout = PRICES.get(model, (0.0, 0.0))
+        pin, pout = model_catalog.price(model)   # catalog + env overrides; unknown id → (0,0)
         return tin / 1e6 * pin + tout / 1e6 * pout + searches * WEB_SEARCH_PRICE
 
     def cost(self) -> float:

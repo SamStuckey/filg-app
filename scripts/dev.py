@@ -17,8 +17,9 @@ then drive states from here.
   python scripts/dev.py unkill <sid>          # back to 'pursue'
   python scripts/dev.py spend <amount>        # add to today's spend → test the daily kill-switch / degrade
   python scripts/dev.py usage                 # show today_spend / daily_budget / free-run counters
-  python scripts/dev.py plan <email> <plan>   # set an account's entitlement (free|byok|pro)
-  python scripts/dev.py buy <email>           # grant the one-time $35 PDF unlock → test the polished export
+  python scripts/dev.py plan <email> <tier>   # set a subscription tier (starter|pro|studio|free)
+  python scripts/dev.py models [--check]      # show the model catalog (--check hits the cached Models API)
+  python scripts/dev.py buy <email>           # grant PDF credits (the $7/3-plan unlock) → test the export
 """
 import os
 import sys
@@ -154,9 +155,26 @@ def cmd_usage(args):
 
 
 def cmd_plan(args):
+    """Set (or clear) an account's subscription tier locally — test the tier gating / fair-use meter /
+    PDF-free-for-subscribers without Stripe. `plan` = starter|pro|studio, or free|none to cancel."""
     store = _store()
-    store.set_account_plan(args.email, args.plan)
-    print(f"{args.email} → plan={store.account_plan(args.email)}")
+    norm = _norm(args.email)
+    if args.plan in ("free", "none", "cancel"):
+        store.cancel_subscription(norm)
+    else:
+        store.set_subscription(norm, tier=args.plan, status="active",
+                               stripe_customer_id="dev", stripe_subscription_id="dev",
+                               current_period_end=None)
+    print(f"{args.email} (→ {norm}) → tier={store.account_tier(norm)}")
+
+
+def cmd_models(args):
+    """Show the model catalog (ids/prices/rungs/slugs + logical-slot resolution). --check does the
+    cached Anthropic Models API availability pass + lists any uncatalogued (newly-shipped) ids."""
+    import json
+    sys.path.insert(0, str(ROOT / "prototype"))
+    import model_catalog
+    print(json.dumps(model_catalog.snapshot(check_availability=args.check), indent=2))
 
 
 def cmd_buy(args):
@@ -188,10 +206,13 @@ def main():
     a = sub.add_parser("spend")
     a.add_argument("amount")
     a.set_defaults(fn=cmd_spend)
-    a = sub.add_parser("plan")
+    a = sub.add_parser("plan", help="set an account's subscription tier (starter|pro|studio|free)")
     a.add_argument("email")
     a.add_argument("plan")
     a.set_defaults(fn=cmd_plan)
+    a = sub.add_parser("models", help="show the model catalog (--check hits the cached Models API)")
+    a.add_argument("--check", action="store_true", help="cached Anthropic Models API availability pass")
+    a.set_defaults(fn=cmd_models)
     a = sub.add_parser("buy")
     a.add_argument("email")
     a.set_defaults(fn=cmd_buy)

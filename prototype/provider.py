@@ -35,17 +35,21 @@ import contextvars
 import functools
 from dataclasses import dataclass, field
 
-# Logical model ids (canonical, lives here so pipeline and provider agree without a cycle).
-HAIKU = "claude-haiku-4-5"
-SONNET = "claude-sonnet-4-6"
-OPUS = "claude-opus-4-8"
+import model_catalog  # noqa: E402 — id/price/slug source of truth (one-directional: provider → catalog)
 
-# OpenRouter slugs for the same Claude models — generation behaves identically to the hosted
-# path, only the billing key changes. (Update if OpenRouter renames the slugs.)
+# Logical model ids (canonical; pipeline imports these). Resolved from the catalog so each slot is
+# env-repointable (FILG_MODEL_HAIKU/SONNET/OPUS) — defaults are the current live models, so behavior is
+# unchanged until a slot is repointed. Read once at import (a repoint is a restart, i.e. a config change).
+HAIKU = model_catalog.model_id_for("HAIKU")
+SONNET = model_catalog.model_id_for("SONNET")
+OPUS = model_catalog.model_id_for("OPUS")
+
+# OpenRouter slugs for the same models — generation behaves identically to the hosted path, only the
+# billing key changes. Sourced from the catalog (env-overridable via FILG_OPENROUTER_<ID>).
 OPENROUTER_MODELS = {
-    HAIKU: "anthropic/claude-haiku-4.5",
-    SONNET: "anthropic/claude-sonnet-4.6",
-    OPUS: "anthropic/claude-opus-4.8",
+    HAIKU: model_catalog.openrouter_slug(HAIKU),
+    SONNET: model_catalog.openrouter_slug(SONNET),
+    OPUS: model_catalog.openrouter_slug(OPUS),
 }
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
