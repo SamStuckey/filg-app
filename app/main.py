@@ -1956,6 +1956,11 @@ h1.logo{font-size:22px;font-weight:700;letter-spacing:-.01em;margin:0}.logo span
 /* the old brand tagline, now a tooltip that fades in after a 1s hover on the logo */
 .logotip{position:absolute;top:calc(100% + 6px);left:0;z-index:80;background:var(--ink);color:#fff;font-size:12px;font-weight:400;letter-spacing:0;white-space:nowrap;padding:6px 10px;border-radius:6px;opacity:0;pointer-events:none;transition:opacity .12s linear;transition-delay:0s}
 .logobtn:hover .logotip,.logobtn:focus-visible .logotip{opacity:1;transition-delay:1s}
+/* `.logo span` (the "LG") also matches this span and outranks `.logotip` — restore the white tagline text */
+.logobtn .logotip{color:#fff}
+/* in the build view the tools rail sits below-left, so drop the tagline into the header's empty gap to
+   the RIGHT of the logo (not down into the rail, where it was occluded) */
+body.ws .logotip{top:50%;left:calc(100% + 14px);transform:translateY(-50%);z-index:90}
 .logomark{display:none}
 .sub{color:var(--muted);margin:0 0 16px;font-size:14px}
 textarea,input{width:100%;padding:8px 10px;border:1px solid var(--line);font:inherit;background:#fff;margin-bottom:10px}
@@ -4172,7 +4177,7 @@ function mdToHtml(md){
 // ── Auth (Supabase) + billing (Stripe) + profile ────────────────────────────
 function renderAuth(){
   const bar=document.getElementById('authbar');
-  if(sb&&session){
+  if((sb&&session)||(CFG.devEmail&&me)){   // real signed-in session, OR the local dev identity (auth off)
     bar.style.display='';
     // portrait icon → the profile page (projects / API config / account); same on every screen, no hamburger
     bar.innerHTML=`<button type=button class=pfp onclick=openProfile() aria-label=Profile title=Profile><svg viewBox="0 0 24 24" aria-hidden=true><circle cx=12 cy=8 r=4 fill=currentColor></circle><path d="M4 20c0-4.4 3.6-7 8-7s8 2.6 8 7" fill=currentColor></path></svg></button>`;
