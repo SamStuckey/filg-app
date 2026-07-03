@@ -435,6 +435,8 @@ body.hasbar .helppanel{bottom:138px}
 .modal.wide{width:min(760px,94vw)}
 .tiergrid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:6px}
 @media(max-width:620px){.tiergrid{grid-template-columns:1fr}}
+.tiercard{display:flex;flex-direction:column}
+.tiercard button{margin-top:auto}   /* align the CTA to the bottom regardless of feature-list length */
 .modal.open{opacity:1;visibility:visible}
 .modal h3{font-size:18px;font-weight:700;margin:0 0 8px}
 .modal #modal-body{font-size:14px;color:var(--muted);margin-bottom:16px}.modal #modal-body p{margin:0}
