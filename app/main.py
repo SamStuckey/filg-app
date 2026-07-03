@@ -22,7 +22,6 @@ Env: FILG_MOCK, FILG_FREE_RUNS, FILG_DAILY_BUDGET, FILG_PAID_EMAILS (csv comp ov
 
 from __future__ import annotations
 
-import html
 import io
 import json
 import contextlib
@@ -33,7 +32,6 @@ import threading
 import traceback
 import uuid
 import zipfile
-from datetime import datetime, timezone
 from pathlib import Path
 
 import markdown
@@ -64,7 +62,7 @@ from . import auth, billing, keys, planner, render, store, tiers  # noqa: E402 â
 # so the route bodies call them as bare names and `main._budget` etc. stay importable by tests.
 from .access import (  # noqa: E402,F401
     _is_byok, _acct, _tier, _is_subscriber, _period, _budget, _feature_ok, _has_pdf_access,
-    _key_provider_kind, _build_provider, _hosted, _byok_provider, _on_filg_key, _provider_for,
+    _key_provider_kind, _build_provider, _on_filg_key, _provider_for,
     _meter, _meter_tokens, _needs_key)
 
 MOCK = os.environ.get("FILG_MOCK") == "1"
