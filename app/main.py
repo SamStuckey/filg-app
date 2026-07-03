@@ -50,6 +50,8 @@ import board     # noqa: E402 — Board of Directors orchestration
 import director_forge  # noqa: E402 — forge a custom Board director from a description (distill→draft→QA)
 import gibberish  # noqa: E402 — pre-LLM "is this even an idea?" gate (saves a run, hands back a roast)
 import intake     # noqa: E402 — shape + vet (the kill-gate); /revet re-runs it after added substance
+import brainstorm # noqa: E402 — diverge/merge: the top of the funnel (1-3 directions → one refined idea)
+import router     # noqa: E402 — the single prompt box (intent routing) + the pivot-fork integration gate
 import plan_pdf   # noqa: E402 — styled PDF generation (synthesis + fpdf2 render)
 import advisor    # noqa: E402 — "chat with your plan" (grounded advisory layer)
 import skeptic    # noqa: E402 — adversarial assumption-checking on the live research path
@@ -599,6 +601,8 @@ def _plan_state(s: dict) -> dict:
         "qa": s.get("qa"),   # final QA-pass report {notes, fixed} on the finished plan
 
         "tree": _tree_view(s["tree"]) if s.get("tree") else None,
+        "stage": s.get("stage"),                      # funnel position: brainstorm | refined | building | done
+        "activeNode": _active_node_view(s),           # the active node's funnel payload (option cards / refined idea / fork)
         "chat": s.get("chat") or [], "chatStarters": advisor.STARTERS,
         "progress": s.get("progress") or [],
         "cost": s.get("cost") or 0, "tokens": s.get("tokens") or 0,   # live session usage meter
@@ -617,22 +621,58 @@ def _new_node(content: dict, parent: str | None) -> dict:
     return {"id": uuid.uuid4().hex[:8], "parent": parent, "children": [], **content}
 
 
+def _kind(node: dict) -> str:
+    """A node's kind. Legacy plan-section nodes (built before the funnel existed) have no `kind`, so an
+    absent kind means 'section'. Funnel kinds: brainstorm | option | refined | fork."""
+    return (node or {}).get("kind") or "section"
+
+
 def _tree_view(tree: dict) -> dict:
-    """Trim the stored node tree to what the frontend needs to draw + navigate it. `show` flips on
-    once a real branch exists (a node with 2+ children, or 2+ roots) — matching 'reveal the tree once
-    they branch'."""
+    """Trim the stored node tree to what the frontend needs to draw + navigate it. Carries each node's
+    `kind` so the graph can render option/refined/section/fork nodes differently. `show` is on from the
+    first render (even a single node) so the decision-graph surface is always there."""
     nodes = tree.get("nodes") or {}
     return {"active": tree.get("active"),
-            "nodes": [{"id": n["id"], "parent": n.get("parent"), "step": n["step"],
-                       "title": n.get("title"), "feedback": n.get("feedback")}
+            "nodes": [{"id": n["id"], "parent": n.get("parent"), "step": n.get("step", 0),
+                       "kind": _kind(n), "title": n.get("title"), "feedback": n.get("feedback")}
                       for n in nodes.values()],
-            "show": bool(nodes)}   # show from the first render (even a single 'setup' node) so the tool's there
+            "show": bool(nodes)}
+
+
+def _active_node_view(s: dict) -> dict | None:
+    """The active node's full funnel payload, so the frontend can render the current stage (the option
+    cards, the refined idea, a pending fork) without a second fetch. Section nodes carry no extra
+    payload (the existing `proposal`/`sections` fields already cover them)."""
+    t = s.get("tree") or {}
+    a = (t.get("nodes") or {}).get(t.get("active"))
+    if not a:
+        return None
+    k = _kind(a)
+    view = {"id": a["id"], "kind": k, "title": a.get("title")}
+    if k == "brainstorm":
+        view["spread"] = a.get("spread")
+        view["options"] = [{"id": c, "direction": ((t["nodes"].get(c) or {}).get("direction"))}
+                           for c in a.get("children", []) if _kind(t["nodes"].get(c) or {}) == "option"]
+    elif k == "option":
+        view["direction"] = a.get("direction")
+    elif k == "refined":
+        for f in ("thesis", "founder_edge", "mold", "kept", "dropped", "research", "selected"):
+            view[f] = a.get(f)
+    elif k == "fork":
+        view["question"] = a.get("question")
+        view["options"] = a.get("options")
+    return view
 
 
 def _mirror(tree: dict) -> dict:
     """Flat session fields (step/files/proposal/history/board/status) for the active node, so the
-    existing _plan_state + frontend renders keep working off the active branch unchanged."""
+    existing _plan_state + frontend renders keep working off the active branch unchanged. A funnel node
+    (brainstorm/option/refined/fork) isn't a plan section, so it mirrors to neutral 'building' state with
+    no proposal — the funnel payload rides on _active_node_view instead."""
     a = tree["nodes"][tree["active"]]
+    if _kind(a) != "section":
+        return {"step": 0, "files": {}, "history": [], "board": [], "proposal": None,
+                "qa": None, "status": "building"}
     done = a["step"] >= planner.N
     return {"step": a["step"], "files": a["files"], "history": a["history"], "board": a["board"],
             "proposal": (None if done else {"section": a["section"], "title": a["title"],
@@ -704,6 +744,140 @@ def _plan_research(session_id: str, idea: str, user: str) -> None:
         store.plan_save(session_id, status="error", error=_humanize_error(e)[0])
 
 
+# ── The diverge/converge funnel (brainstorm → merge → commit), layered on the same node tree ──
+def _diverge_tree(diverge: dict, parent: str | None = None) -> tuple[dict, str]:
+    """A `brainstorm` fork node with one `option` child per direction. Returns (nodes_by_id,
+    brainstorm_node_id). The active pointer sits on the brainstorm node (the fork being decided)."""
+    b = _new_node({"kind": "brainstorm", "step": 0, "title": "A few directions",
+                   "spread": diverge.get("spread"), "draft": None, "files": {}, "history": [],
+                   "board": []}, parent)
+    nodes = {b["id"]: b}
+    for d in (diverge.get("directions") or []):
+        o = _new_node({"kind": "option", "step": 0, "title": d.get("title") or "Direction",
+                       "direction": d, "draft": d.get("one_liner"), "files": {}, "history": [],
+                       "board": []}, b["id"])
+        b["children"].append(o["id"])
+        nodes[o["id"]] = o
+    return nodes, b["id"]
+
+
+def _refined_node(m: dict, selected: list, parent: str | None) -> dict:
+    """The reconciled single idea (+ the adversarial cull + a light research skim) as one `refined`
+    node, a child of the brainstorm fork. `selected` records which option ids fed the merge."""
+    return _new_node({"kind": "refined", "step": 0, "title": "Refined idea", "thesis": m["thesis"],
+                      "founder_edge": m.get("founder_edge"), "mold": m.get("mold"),
+                      "kept": m.get("kept"), "dropped": m.get("dropped"), "research": m.get("research"),
+                      "selected": selected, "draft": m["thesis"], "files": {}, "history": [],
+                      "board": []}, parent)
+
+
+def _meter_bg(user: str, prov, cost: float, toks: int, *, is_run: bool = False,
+              research_cost: float = 0.0) -> None:
+    """Meter a background funnel op that ran on FILG's hosted key. A subscriber's usage counts against
+    their monthly cap; a free user's daily kill-switch is always fed (record_spend); only a COMMIT (the
+    deep research run) counts as a metered free 'run'. Ops on a user's own key aren't FILG's spend."""
+    if prov is None or not getattr(prov, "bills_filg", False):
+        return
+    if _is_subscriber(user):
+        usage.record_monthly(_acct(user), _period(user), cost, toks)
+        return
+    if is_run:
+        usage.record_run(auth.normalize_email(user), research_cost)
+        usage.record_spend(round(cost - research_cost, 4))
+    else:
+        usage.record_spend(cost)
+
+
+def _bg_progress(sid: str, base_cost: float, base_tokens: int, progress: list):
+    """A progress sink for a background funnel op: append the line + persist the running (base + this
+    run's) cost/tokens so the session meter ticks live during the op."""
+    def on_progress(line: str) -> None:
+        progress.append(line)
+        store.plan_save(sid, progress=list(progress), tokens=base_tokens + pipeline.LEDGER.tokens(),
+                        cost=round(base_cost + pipeline.LEDGER.cost(), 4))
+    return on_progress
+
+
+def _run_merge(sid: str, option_ids: list, user: str) -> None:
+    """Background: reconcile the chosen directions into one refined idea (+ light research skim), then
+    attach a `refined` node under the brainstorm fork and advance the active pointer to it."""
+    try:
+        s0 = store.plan_get(sid) or {}
+        base_cost, base_tokens = s0.get("cost") or 0, s0.get("tokens") or 0
+        progress = list(s0.get("progress") or [])
+        tree = s0.get("tree") or {}
+        nodes = tree.get("nodes") or {}
+        directions = [(nodes.get(i) or {}).get("direction") for i in option_ids]
+        directions = [d for d in directions if d]
+        prov = _provider_for(user)
+        stk = tiers.clamp_stack(s0.get("stack"), tier=_tier(user), byok=bool(prov and not prov.bills_filg))
+        with provider.use(prov), provider.use_stack(stk), pipeline.run_ledger():
+            m, cost = brainstorm.merge(s0["idea"], directions, mock=MOCK,
+                                       on_progress=_bg_progress(sid, base_cost, base_tokens, progress))
+            toks = pipeline.LEDGER.tokens()
+        _meter_bg(user, prov, cost, toks)
+        parent = tree.get("active")
+        refined = _refined_node(m, option_ids, parent)
+        nodes[refined["id"]] = refined
+        if parent and nodes.get(parent):
+            nodes[parent].setdefault("children", []).append(refined["id"])
+        tree["active"] = refined["id"]
+        store.plan_save(sid, status="building", stage="refined", tree=tree, progress=progress,
+                        cost=round(base_cost + cost, 4), tokens=base_tokens + toks)
+    except Exception as e:  # noqa: BLE001
+        traceback.print_exc()
+        store.plan_save(sid, status="error", error=_humanize_error(e)[0])
+
+
+def _deep_build(sid: str, thesis: str, user: str) -> None:
+    """Background: the COMMIT step — the one deep research run + first section draft, attached to the
+    tree under the active (refined) node so the funnel history is preserved. Same engine as the legacy
+    welcome run, but it grows the existing tree instead of reseeding a fresh root."""
+    try:
+        s0 = store.plan_get(sid) or {}
+        base_cost, base_tokens = s0.get("cost") or 0, s0.get("tokens") or 0
+        progress = list(s0.get("progress") or [])
+        prov = _provider_for(user)
+        stk = tiers.clamp_stack(s0.get("stack"), tier=_tier(user), byok=bool(prov and not prov.bills_filg))
+        with provider.use(prov), provider.use_stack(stk), pipeline.run_ledger():
+            prep = planner.prepare(thesis, mock=MOCK,
+                                   on_progress=_bg_progress(sid, base_cost, base_tokens, progress))
+            toks = pipeline.LEDGER.tokens()
+        _meter_bg(user, prov, prep["cost"], toks, is_run=True, research_cost=prep["research_cost"])
+        tree = s0.get("tree") or {}
+        nodes = tree.get("nodes") or {}
+        parent = tree.get("active")
+        root = _new_node(planner.root_node(prep["proposal"]), parent)   # a plain section node (kind absent)
+        nodes[root["id"]] = root
+        if parent and nodes.get(parent):
+            nodes[parent].setdefault("children", []).append(root["id"])
+        tree["active"] = root["id"]
+        store.plan_save(sid, status="building", stage="building", research=prep["research"], step=0,
+                        proposal=prep["proposal"], shaped=prep["shaped"], vetting=prep["vetting"],
+                        tree=tree, progress=progress, cost=round(base_cost + prep["cost"], 4),
+                        tokens=base_tokens + toks)
+    except Exception as e:  # noqa: BLE001
+        traceback.print_exc()
+        store.plan_save(sid, status="error", error=_humanize_error(e)[0])
+
+
+def _route_context(s: dict) -> str:
+    """A compact summary of what the user is looking at, so the router reads their prompt in context."""
+    parts = []
+    t = s.get("tree") or {}
+    a = (t.get("nodes") or {}).get(t.get("active")) or {}
+    if _kind(a) == "refined" and a.get("thesis"):
+        parts.append("Refined idea: " + a["thesis"])
+    elif (s.get("shaped") or {}).get("thesis"):
+        parts.append("Idea: " + s["shaped"]["thesis"])
+    else:
+        parts.append("Idea: " + (s.get("idea") or "")[:160])
+    p = s.get("proposal") or {}
+    if p.get("title"):
+        parts.append("Currently on the '" + p["title"] + "' part of the plan")
+    return " · ".join(parts)[:500]
+
+
 @app.post("/api/plan/start")
 async def api_plan_start(request: Request):
     body = await request.json()
@@ -754,6 +928,150 @@ async def api_plan_start(request: Request):
     store.plan_save(sid, stack=provider.stack_name(body.get("stack")))  # honor the crew picked at intake
     threading.Thread(target=_plan_research, args=(sid, idea, user), daemon=True).start()
     return {"id": sid}
+
+
+@app.post("/api/brainstorm")
+async def api_brainstorm(request: Request):
+    """Top of the funnel — ANONYMOUS, no email/login required. Spread a raw prompt into 1-3 loose,
+    vetted-shape directions (pure LLM, no web, cheap) and seed the decision tree with a brainstorm fork
+    + one option node per direction. This is the free, frictionless entry point."""
+    body = await request.json()
+    idea = (body.get("idea") or "").strip()
+    if len(idea) < 12:
+        return JSONResponse({"error": "Tell me a bit more about the idea."}, status_code=400)
+    if gibberish.looks_like_gibberish(idea):   # total nonsense → free roast, no run
+        return JSONResponse({"gibberish": True, **gibberish.roast(idea)})
+    user, _verified = _identity(request, body.get("email"))   # may be "" (anonymous) — that's allowed here
+    directors = [k for k in (body.get("directors") or []) if k in personas.KEYS]
+    sid = uuid.uuid4().hex[:12]
+    store.plan_create(sid, user, idea, directors=directors)
+    store.plan_save(sid, stack=provider.stack_name(body.get("stack")))
+    try:
+        with _run_slot(user, body.get("stack")):
+            d, cost = brainstorm.diverge(idea, mock=MOCK)
+            toks = pipeline.LEDGER.tokens()
+    except BusyError as be:
+        return _busy_response(be)
+    except Exception as e:  # noqa: BLE001
+        return _engine_error(e)
+    _meter_bg(user, _provider_for(user), cost, toks)
+    nodes, bid = _diverge_tree(d, None)
+    store.plan_save(sid, status="building", stage="brainstorm", tree={"nodes": nodes, "active": bid},
+                    cost=round(cost, 4), tokens=toks)
+    return _plan_state(store.plan_get(sid))
+
+
+@app.post("/api/plan/{sid}/merge")
+async def api_plan_merge(sid: str, request: Request):
+    """Converge: reconcile the checked directions into one refined idea (+ adversarial cull + a light
+    research skim). Runs in the background (the skim hits the web); the frontend polls /api/plan/{sid}."""
+    s = store.plan_get(sid)
+    if not s or not _owns(request, s):
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    body = await request.json()
+    nodes = (s.get("tree") or {}).get("nodes") or {}
+    valid = [i for i in (body.get("options") or [])
+             if isinstance(i, str) and _kind(nodes.get(i) or {}) == "option"]
+    if not valid:
+        return JSONResponse({"error": "Pick at least one direction to try."}, status_code=400)
+    store.plan_save(sid, status="researching", stage="merging")
+    threading.Thread(target=_run_merge, args=(sid, valid, s.get("user")), daemon=True).start()
+    return {"id": sid}
+
+
+@app.post("/api/plan/{sid}/commit")
+async def api_plan_commit(sid: str, request: Request):
+    """'I'm sold, build the plan' — the one deep research run + first plan page. Uses the active refined
+    node's thesis (or a direction/thesis passed in the body). Background; the frontend polls."""
+    s = store.plan_get(sid)
+    if not s or not _owns(request, s):
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    body = await request.json()
+    thesis = (body.get("thesis") or "").strip()
+    if not thesis:
+        a = ((s.get("tree") or {}).get("nodes") or {}).get((s.get("tree") or {}).get("active")) or {}
+        if _kind(a) == "refined":
+            thesis = a.get("thesis") or ""
+        elif _kind(a) == "option":
+            dr = a.get("direction") or {}
+            thesis = dr.get("one_liner") or dr.get("title") or ""
+    if len(thesis) < 8:
+        return JSONResponse({"error": "Refine an idea or pick a direction to build first."}, status_code=400)
+    store.plan_save(sid, status="researching", stage="researching")
+    threading.Thread(target=_deep_build, args=(sid, thesis, s.get("user")), daemon=True).start()
+    return {"id": sid}
+
+
+@app.post("/api/plan/{sid}/route")
+async def api_plan_route(sid: str, request: Request):
+    """The single prompt box. Classify a free-text prompt against the funnel stage + active tool mode
+    into one action (steer/commit/diverge/restart_keep/restart_hard/ask). A plan-stage steer that hard-
+    clashes with the committed idea returns a `fork` (discard vs pivot) instead of applying. Returns the
+    decision; the frontend acts on it (calls /merge, /commit, /next, /redraft, a tool, etc.)."""
+    s = store.plan_get(sid)
+    if not s or not _owns(request, s):
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    body = await request.json()
+    prompt = (body.get("prompt") or "").strip()
+    if not prompt:
+        return JSONResponse({"error": "Type something."}, status_code=400)
+    mode = body.get("mode") or "build"
+    stage = s.get("stage") or ("building" if s.get("proposal") else "plan")
+    rstage = {"brainstorm": "brainstorm", "merging": "merge", "refined": "refined",
+              "building": "plan", "done": "plan"}.get(stage, "plan")
+    try:
+        with _run_slot(s.get("user"), s.get("stack")):
+            decision, cost = router.route(prompt, stage=rstage, mode=mode,
+                                          context=_route_context(s), mock=MOCK)
+            fork = None
+            if decision["intent"] == "steer" and rstage == "plan" and decision.get("steer"):
+                idea = planner._working_idea(s)
+                ic, ic_cost = router.check_integration(
+                    decision["steer"], idea, planner.bundle_markdown(idea, s.get("files") or {}), mock=MOCK)
+                cost = round(cost + ic_cost, 4)
+                if not ic["integrable"]:
+                    fork = {"clash": ic["clash"], "skeptic_say": ic["skeptic_say"],
+                            "steer": decision["steer"]}
+            toks = pipeline.LEDGER.tokens()
+    except BusyError as be:
+        return _busy_response(be)
+    except Exception as e:  # noqa: BLE001
+        return _engine_error(e)
+    _fold_usage(sid, s, cost, toks)
+    out = {"decision": decision, "cost": cost, "tokens": toks}
+    if fork:
+        out["fork"] = fork
+    return out
+
+
+@app.get("/api/plan/{sid}/node/{nid}")
+async def api_plan_node(sid: str, nid: str, request: Request):
+    """Lazy node content for the decision-graph zoom: given a node id, return its full page (the
+    section's built content, the option's direction, the refined idea, or a fork's options)."""
+    s = store.plan_get(sid)
+    if not s or not _owns(request, s):
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    n = ((s.get("tree") or {}).get("nodes") or {}).get(nid)
+    if not n:
+        return JSONResponse({"error": "unknown node"}, status_code=404)
+    k = _kind(n)
+    out = {"id": n["id"], "kind": k, "title": n.get("title"), "parent": n.get("parent"),
+           "children": n.get("children") or [], "feedback": n.get("feedback"), "step": n.get("step", 0)}
+    if k == "section":
+        sec = next((x for x in planner.SECTIONS if x["key"] == n.get("section")), None)
+        content = (n.get("files") or {}).get(sec["file"]) if sec else None
+        out.update({"section": n.get("section"), "sub": (sec or {}).get("sub"),
+                    "draft": n.get("draft"), "content": content})
+    elif k == "option":
+        out["direction"] = n.get("direction")
+    elif k == "refined":
+        for f in ("thesis", "founder_edge", "mold", "kept", "dropped", "research", "selected"):
+            out[f] = n.get(f)
+    elif k == "brainstorm":
+        out["spread"] = n.get("spread")
+    elif k == "fork":
+        out.update({"question": n.get("question"), "options": n.get("options")})
+    return out
 
 
 @app.get("/api/plans")
