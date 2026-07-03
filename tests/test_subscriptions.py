@@ -6,7 +6,7 @@ math, PDF-free-for-subscribers, the premium-feature gate, and that a subscriber 
 
 import provider
 import usage
-from app import billing, keys, main, store, tiers
+from app import access, billing, keys, main, store, tiers
 
 
 def _sub(email, tier, period_end="2099-01-01T00:00:00Z"):
@@ -65,7 +65,7 @@ def test_feature_gate(monkeypatch):
 
 def test_subscriber_not_key_walled(monkeypatch):
     monkeypatch.setattr(keys, "enabled", lambda: True)
-    monkeypatch.setattr(main, "_is_byok", lambda u: False)
+    monkeypatch.setattr(access, "_is_byok", lambda u: False)
     email = "wall@x.com"
     assert main._needs_key(email) is True     # no key, no sub → behind the BYOK wall
     _sub(email, "starter")
@@ -92,9 +92,9 @@ def test_key_precedence_paid_allowance_first(monkeypatch):
     import usage
     email = "prec@x.com"
     # free user: no key → hosted taste; with a key → their key
-    monkeypatch.setattr(main, "_is_byok", lambda u: False)
+    monkeypatch.setattr(access, "_is_byok", lambda u: False)
     assert main._on_filg_key(email) is True
-    monkeypatch.setattr(main, "_is_byok", lambda u: True)
+    monkeypatch.setattr(access, "_is_byok", lambda u: True)
     assert main._on_filg_key(email) is False
     # subscriber UNDER allowance → OUR key even though they have a key (spend paid credits first)
     _sub(email, "pro")
@@ -103,7 +103,7 @@ def test_key_precedence_paid_allowance_first(monkeypatch):
     usage.record_monthly(main._acct(email), main._period(email), 100.0, 0)
     assert main._on_filg_key(email) is False
     # over allowance but NO key → still ours (the fair-use gate then prompts add-key/wait)
-    monkeypatch.setattr(main, "_is_byok", lambda u: False)
+    monkeypatch.setattr(access, "_is_byok", lambda u: False)
     assert main._on_filg_key(email) is True
 
 
@@ -113,7 +113,7 @@ def test_meter_follows_actual_key(monkeypatch):
     import usage
     email = "mfollow@x.com"
     _sub(email, "pro")
-    monkeypatch.setattr(main, "_is_byok", lambda u: True)   # has a key, but under allowance → our key
+    monkeypatch.setattr(access, "_is_byok", lambda u: True)   # has a key, but under allowance → our key
     rec = []
     monkeypatch.setattr(usage, "record_monthly", lambda e, p, c, t: rec.append((c, t)))
     main._meter(email, 0.5)
