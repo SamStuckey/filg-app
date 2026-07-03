@@ -128,3 +128,14 @@ def test_node_content_unknown_node_404(client):
     s = _brainstorm(client)
     r = client.get(f"/api/plan/{s['id']}/node/nope")
     assert r.status_code == 404
+
+
+# ── the v2 two-panel surface shell + assets serve ────────────────────────────
+def test_v2_shell_and_assets_serve(client):
+    page = client.get("/v2")
+    assert page.status_code == 200 and "window.FILG=" in page.text   # shares the config head
+    assert '/static/v2.js' in page.text and '/static/v2.css' in page.text
+    assert client.get("/static/v2.js").status_code == 200
+    assert client.get("/static/v2.css").status_code == 200
+    # the live shell (/) is untouched by the v2 addition
+    assert client.get("/").status_code == 200

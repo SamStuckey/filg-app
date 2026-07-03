@@ -1929,11 +1929,9 @@ async def api_plan_pdf(sid: str, request: Request):
                              "X-FILG-Cost": str(nc), "X-FILG-Tokens": str(nt)})
 
 
-def _render_page(deep: bool = False) -> str:
-    """The single-page app shell. Served at `/` and at clean deep-link paths like `/plan/{id}` so the
-    frontend can use real History-API URLs (no `#`) and direct-load / refresh still works. `deep`
-    (a `/plan/{id}` load) marks the document up front so the intake never flashes before the plan
-    routes in — the boot loader shows instead until render() clears it."""
+def _page_head(deep: bool = False) -> str:
+    """The `__FILG_HEAD__` block: the window.FILG config + optional deep-link + Supabase script. Shared
+    by the live shell (_render_page) and the v2 surface so both boot with the same config."""
     cfg = json.dumps({"authEnabled": auth.AUTH_ENABLED,
                       "pdfBilling": billing.PDF_BILLING_ENABLED, "pdfPrice": billing.PDF_PRICE_CENTS,
                       "byokEnabled": keys.enabled(),
@@ -1952,12 +1950,26 @@ def _render_page(deep: bool = False) -> str:
         head += "<script>document.documentElement.className+=' route-plan'</script>"
     if auth.AUTH_ENABLED:
         head += '<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>'
-    return PAGE.replace("__FILG_HEAD__", head)
+    return head
+
+
+def _render_page(deep: bool = False) -> str:
+    """The single-page app shell. Served at `/` and at clean deep-link paths like `/plan/{id}` so the
+    frontend can use real History-API URLs (no `#`) and direct-load / refresh still works."""
+    return PAGE.replace("__FILG_HEAD__", _page_head(deep))
 
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
     return _render_page()
+
+
+@app.get("/v2", response_class=HTMLResponse)
+async def v2():
+    """The UX-overhaul surface: the unified two-panel build (left = prompt box + tree + tools, right =
+    the decision graph). Wired to the funnel routes (/api/brainstorm → /merge → /commit) + /route.
+    Served alongside the live app so the new experience can be built + shown without destabilizing it."""
+    return V2_PAGE.replace("__FILG_HEAD__", _page_head())
 
 
 @app.get("/plan/{sid}", response_class=HTMLResponse)
@@ -1980,3 +1992,4 @@ async def account_page(tab: str = ""):
 # The shell lives in app/web/index.html (CSS/JS split into app/web/static, served via the /static
 # mount above). Read once at import; _render_page injects __FILG_HEAD__ per request.
 PAGE = (_WEB_DIR / "index.html").read_text(encoding="utf-8")
+V2_PAGE = (_WEB_DIR / "v2.html").read_text(encoding="utf-8")   # the UX-overhaul two-panel surface (/v2)
