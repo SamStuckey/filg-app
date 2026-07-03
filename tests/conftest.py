@@ -53,6 +53,16 @@ def patch_call(monkeypatch):
     return setter
 
 
+def frontend(client):
+    """The full SPA source across the extracted display layer — the templated shell (`/`) plus the
+    external stylesheet and script (`/static/*`). UI-wiring guards use this so they keep asserting on
+    the same total content after the CSS/JS were split out of Python into app/web/static. Also proves
+    the /static mount actually serves the assets."""
+    return (client.get("/").text
+            + "\n" + client.get("/static/styles.css").text
+            + "\n" + client.get("/static/app.js").text)
+
+
 def wait_status(client, sid, target="building", tries=80, delay=0.05):
     """Poll a plan session until it leaves 'researching' (the background thread finishes)."""
     s = client.get(f"/api/plan/{sid}").json()

@@ -4,7 +4,7 @@ This is the test that, run automatically, would have caught the prod break: it
 drives /api/plan/start through to a built section. (In mock mode it exercises the
 wiring; the real-mode parsing is covered in test_intake_vet.)"""
 
-from conftest import wait_status
+from conftest import frontend, wait_status
 
 GRAB_BAG = "I like basketball, Magic the Gathering, and food, and I'm good at sales"
 
@@ -340,7 +340,7 @@ def test_share_and_delete(client):
 
 
 def test_tables_favicon_and_headings(client):
-    html = client.get("/").text
+    html = frontend(client)
     assert "<table><thead><tr>" in html and ".md table{" in html  # client renders + styles md tables
     assert 'rel="icon"' in html and "class=logomark" in html      # custom favicon + header mark
     assert "<h3>Board of Directors</h3>" in html and "Add-ons ·" not in html
@@ -354,7 +354,7 @@ def test_healthz(client):
 
 def test_advisor_uses_drawer_not_native_prompt(client):
     # Ask-an-expert / convene must use the flyout drawer, never the native prompt() dialog.
-    html = client.get("/").text
+    html = frontend(client)
     assert 'class=drawer' in html and 'id=drawer-out' in html
     assert "function openDrawer" in html and "function submitDrawer" in html
     assert "prompt('Ask the advisor" not in html and "prompt('Ask your board" not in html
@@ -362,7 +362,7 @@ def test_advisor_uses_drawer_not_native_prompt(client):
 
 def test_inline_comment_and_runner_ui_present(client):
     # #7 inline comments + the permanent main-column runner are client-side; guard their wiring stays.
-    html = client.get("/").text
+    html = frontend(client)
     assert "id=cmtpop" in html and "function saveComment" in html and "function commentsSteer" in html
     assert "function onDraftSelect" in html and "function renderComments" in html
     assert 'id=runner' in html and "classList.toggle('min')" in html   # permanent runner + collapse toggle
@@ -389,7 +389,7 @@ def test_no_native_browser_dialogs(client):
     # The ux-design skill forbids native alert/confirm/prompt for product UI. The whole app must
     # use the styled toast/modal helpers instead. Match call-sites (foo(, not substrings of words).
     import re
-    html = client.get("/").text
+    html = frontend(client)
     bad = re.findall(r"(?<![\w.])(?:alert|confirm|prompt)\s*\(", html)
     assert not bad, f"native dialog call(s) leaked back in: {bad}"
     assert "function toast(" in html and "function uiConfirm(" in html and "function uiPrompt(" in html
@@ -397,7 +397,7 @@ def test_no_native_browser_dialogs(client):
 
 def test_accessibility_essentials_present(client):
     # Guards the UX-pass a11y baseline (WCAG/POUR) against regression.
-    html = client.get("/").text
+    html = frontend(client)
     assert "focus-visible{outline" in html            # visible keyboard focus
     assert "prefers-reduced-motion" in html           # honors reduced motion
     assert "role=dialog aria-modal=true" in html      # drawer is a real dialog
@@ -522,7 +522,7 @@ def test_clean_plan_url_serves_spa(client):
     # and there's no '#' in the path. Distinct from /p/{id} (public share) and /r/{id} (teardown).
     r = client.get("/plan/abc123def")
     assert r.status_code == 200 and "window.FILG" in r.text
-    home = client.get("/").text
+    home = frontend(client)
     assert "routeFromPath" in home and "popstate" in home   # path router + back/fwd wired
     assert "location.hash" not in home                       # hash routing fully removed
 

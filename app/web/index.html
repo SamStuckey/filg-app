@@ -1,0 +1,135 @@
+<!doctype html><html lang=en><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1"><title>FILG, build your business plan, with receipts</title>
+<link rel="icon" href='data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"%3E%3Crect width="32" height="32" rx="8" fill="%23FF6B4A"/%3E%3Cpath d="M16 4c-3.2 2.8-4.3 7.4-4.3 11.8v3.2h8.6v-3.2C20.3 11.4 19.2 6.8 16 4z" fill="%23fff"/%3E%3Ccircle cx="16" cy="12" r="2.1" fill="%232E7CF6"/%3E%3Cpath d="M11.7 15.5 8.6 20.5l3.1-1.3z" fill="%23fff"/%3E%3Cpath d="M20.3 15.5 23.4 20.5l-3.1-1.3z" fill="%23fff"/%3E%3Cpath d="M13.6 19.5h4.8L16 25.5z" fill="%23FFC23F"/%3E%3C/svg%3E'>
+__FILG_HEAD__
+<link rel="stylesheet" href="/static/styles.css">
+</head><body><div id=disclaimer role=button tabindex=0 onclick=openDisclaimer() onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openDisclaimer();}" title="Read the full disclaimer"><span class=disc-full>This is just for fun. Do your research, talk to your lawyer, family, or local deity before investing any real time or money into a new business. AI is great at being confidently wrong!</span><span class=disc-short>Disclaimer!</span></div>
+<div id=bootload aria-hidden=true><span class=spin aria-hidden=true></span><span>Loading your plan…</span></div>
+<div class=page>
+<div class=top><h1 class=logo><button type=button class=logobtn onclick=newPlan() aria-label="FILG, start a new idea"><svg class=logomark viewBox="0 0 32 32" aria-hidden=true><rect width=32 height=32 rx=8 fill=#FF6B4A></rect><path d="M16 4c-3.2 2.8-4.3 7.4-4.3 11.8v3.2h8.6v-3.2C20.3 11.4 19.2 6.8 16 4z" fill=#fff></path><circle cx=16 cy=12 r=2.1 fill=#2E7CF6></circle><path d="M11.7 15.5 8.6 20.5l3.1-1.3z" fill=#fff></path><path d="M20.3 15.5 23.4 20.5l-3.1-1.3z" fill=#fff></path><path d="M13.6 19.5h4.8L16 25.5z" fill=#FFC23F></path></svg>FI<span>LG</span><span class=logotip aria-hidden=true>“Fuck it. Let’s go.” — You, 30 seconds ago</span></button></h1><div class=stackdial id=stackdial hidden><button type=button class=stackbtn id=stackbtn aria-haspopup=true aria-expanded=false aria-label="Choose your model crew" onclick=toggleStackPop()><span class=stacklbl id=stacklbl></span><span class=stack-cost id=stackcost aria-hidden=true></span><span class=stackcaret aria-hidden=true>&#9662;</span></button><div class=stackpop id=stackpop role=menu aria-label="Choose a model crew" hidden></div></div><div class=topright><button type=button class=meter id=meter hidden title="Token usage this session (resets when you reload)"></button><div class=authbar id=authbar></div></div></div>
+<div class=note-banner id=banner></div>
+<div class=intake id=intake>
+<h2>You've got a business in you. Let's find it. 🚀</h2>
+<p class=intro>FILG turns a rough idea, or just your skills and interests, into a sellable plan: the offer, the pricing, the go-to-market, and a delivery playbook. It researches your market live and runs every stat through a source-credibility gate, so vendor marketing gets labeled instead of repeated back to you as fact.</p>
+<p class=intro-how>How to use it: type what you've got below (a real idea, or just what you're good at), then watch it research, grade the numbers, and build the plan with you. Free to run on your own API key.</p>
+<label for=idea class=sr-only>Your business idea</label>
+<textarea id=idea placeholder="e.g. I know automation and feel like I could help scale small dental businesses… OR I like doggies, the color purple, and live in a bunker with my 12 brothers, either way, let's find the business."></textarea>
+<div class=boardpick id=boardpick></div>
+<div id=authgate></div>
+<label for=email class=sr-only>Your email</label>
+<input id=email type=email placeholder="you@email.com">
+<div class=golane><button id=go class=go onclick=start()>Build my plan →</button><button type=button class=bail onclick=goofOff()>nah I'm gonna go fuck around some more</button></div>
+
+<div class=err id=err></div>
+<div id=joke></div>
+</div>
+<div id=profile style="display:none"></div>
+<div id=live class=sr-only aria-live=polite></div>
+<aside class=drawer id=drawer role=dialog aria-modal=true aria-labelledby=drawer-title aria-hidden=true>
+<div class=dr-head><span id=drawer-title>Your board</span><button type=button class=dr-x onclick=closeDrawer() aria-label="Close panel">×</button></div>
+<div class=dr-body>
+<p class=dr-sub id=drawer-sub></p>
+<label for=drawerq class=sr-only>Your question for the advisor</label>
+<textarea id=drawerq rows=3 placeholder="Ask a question, or leave blank for their straight take."></textarea>
+<button type=button class=dr-go id=drawer-go onclick=submitDrawer()>Ask →</button>
+<div class="dr-out md" id=drawer-out></div>
+</div></aside>
+<div class=drawer-back id=drawerback onclick=closeDrawer()></div>
+<div class=modal-back id=modalback onclick="_closeModal()"></div>
+<div class=modal id=modal role=dialog aria-modal=true aria-labelledby=modal-title aria-hidden=true>
+<h3 id=modal-title></h3><div id=modal-body></div><div class=modal-actions id=modal-actions></div></div>
+<div class=secdrawer-back id=secdrawerback onclick=closeSecDrawer()></div>
+<div class=secdrawer id=secdrawer role=dialog aria-modal=false aria-hidden=true>
+<div class=sd-head><button type=button class=sd-back onclick=backToTools() aria-label="Back to tools" title="Back to tools">&#8592;</button><span id=sd-title></span><button type=button class=sd-x onclick=closeSecDrawer() aria-label="Close panel">&times;</button></div>
+<div class=sd-body id=sd-body></div>
+<button type=button class=sd-rail onclick=closeSecDrawer() aria-label="Close panel" title="Collapse">&#8249;</button></div>
+<div class=cmtpop id=cmtpop role=dialog aria-label="Add a comment on this part" aria-hidden=true>
+<div class=cmtpq id=cmtquote></div>
+<label for=cmtnote class=sr-only>Your comment on the highlighted text</label>
+<textarea id=cmtnote rows=2 placeholder="Comment on this… (folded in when you regenerate or roll forward)"></textarea>
+<div class=cmtpa><button type=button class=ghost onclick=hideCmtPop()>Cancel</button><button type=button onclick=saveComment()>Comment</button></div></div>
+<div class=toasts id=toasts aria-live=polite></div>
+<div class=workspace id=workspace style="display:none">
+<button type=button class=drawer-rail onclick="document.body.classList.remove('drawer-collapsed')" aria-label="Open tools" title="Tools">&#8250;</button>
+<aside class=side>
+<div class=drawerhead><b>Tools</b><button type=button class=drawerx onclick="document.body.classList.add('drawer-collapsed')" aria-label="Collapse tools">&#8249;</button></div>
+<div class=side-scroll>
+<div class="sec collap" id=spewsec><button type=button class=sechead aria-expanded=false onclick="toggleSec('spewsec')"><h3>The machine</h3><span class=caret aria-hidden=true>▸</span></button>
+<div class=secbody>
+<div class="runner show" id=runner aria-live=polite>
+<div class=run-head><span class=run-dot aria-hidden=true></span><span class=run-title id=run-title>The machine</span><span class=run-spacer></span><button type=button class=run-min id=run-min onclick="document.getElementById('runner').classList.toggle('min')" aria-label="Collapse or expand the runner">&#9662;</button></div>
+<div class=run-log id=runner-log><div class=run-empty id=run-empty>Nothing running yet. This is the engine's terminal: every operation, the research fan-out, grading, drafting, the board, shows here step by step and stays as collapsed history you can reopen.</div></div>
+</div></div></div>
+<div class="sec collap" id=straightsec style="display:none"><button type=button class=sechead aria-expanded=false onclick="toggleSec('straightsec')"><h3>The straight read</h3><span class=caret aria-hidden=true>▸</span></button>
+<div class=secbody><div id=vet></div></div></div>
+<div class="sec collap" id=dtreesec style="display:none"><button type=button class=sechead aria-expanded=false onclick="toggleSec('dtreesec')"><h3>Decision tree</h3><span class=caret aria-hidden=true>▸</span></button>
+<div class=secbody><p class=bhelp>Every part you build is a node. The highlighted path is your current plan; click any node to jump there, then back up and branch a different direction if you want.</p><div id=dtree></div></div></div>
+<div class="sec collap" id=chatsec style="display:none"><button type=button class=sechead aria-expanded=false onclick="toggleSec('chatsec')"><h3>Chat with your plan</h3><span class=caret aria-hidden=true>▸</span></button>
+<div class=secbody>
+<div class=chatlog id=chatlog></div>
+<div class=chatstart id=chatstart></div>
+<label for=chatinput class=sr-only>Ask the planner about your plan</label>
+<textarea id=chatinput rows=2 placeholder="Ask anything about your plan…"></textarea>
+<button type=button class=chatsend id=chatsend onclick=sendChat()>Ask the planner →</button>
+<div class=disc>AI advisor grounded in your plan + graded research, not professional advice.</div></div></div>
+<div class="sec collap board" id=boardsec style="display:none"><button type=button class=sechead aria-expanded=false onclick="toggleSec('boardsec')"><h3>Board of Directors</h3><span class=caret aria-hidden=true>▸</span></button>
+<div class=secbody>
+<div class="dsec" id=ds-weighedin hidden><button type=button class=dsec-h onclick="this.parentNode.classList.toggle('open')"><span>🗣️ Your board weighed in</span><span class=dsec-caret aria-hidden=true>▸</span></button>
+<div class=dsec-b id=conveneresult></div></div>
+<div class="dsec open" id=ds-directors><button type=button class=dsec-h onclick="this.parentNode.classList.toggle('open')"><span>Your directors</span><span class=dsec-caret aria-hidden=true>▸</span></button>
+<div class=dsec-b><p class=bhelp>Tap to add or drop a director.</p>
+<div class=bdirs id=boarddirs></div>
+<button type=button class=convene id=convene onclick=convene()>Convene the board</button>
+<div id=convenebody></div></div></div>
+<div class=dsec id=ds-forge><button type=button class=dsec-h onclick="this.parentNode.classList.toggle('open')"><span>Forge a director</span><span class=dsec-caret aria-hidden=true>▸</span></button>
+<div class=dsec-b>
+<div id=forgemain><p class=forge-sub>Describe the advisor you wish you had. We can't say we trained them on anyone real… but we can't stop you from asking.</p>
+<label for=forgeinput class=sr-only>Describe your ideal director</label>
+<textarea id=forgeinput rows=2 placeholder="e.g. a ruthless ops nerd who has scaled 3 agencies and hates busywork"></textarea>
+<button type=button class=forge-go onclick=openForge()>✦ Forge a director →</button></div>
+<div class=dpanel id=forgepanel hidden></div></div></div>
+<div class=disc>AI composite directors, not real people, not professional advice.</div></div></div>
+<div class="sec collap open" id=researchsec><button type=button class=sechead aria-expanded=true onclick="toggleSec('researchsec')"><h3>Check the facts</h3><span class=caret aria-hidden=true>▸</span></button>
+<div class=secbody>
+<div class="dsec open" id=ds-ask><button type=button class=dsec-h onclick="this.parentNode.classList.toggle('open')"><span>Ask the research</span><span class=dsec-caret aria-hidden=true>▸</span></button>
+<div class=dsec-b><p class=bhelp>Ask a question against your graded research. <b>Quick check</b> reads what's already there (and will say when it's not sure); <b>Go deeper</b> spawns fresh research.</p>
+<label for=rqinput class=sr-only>Your research question</label>
+<textarea id=rqinput rows=2 placeholder="e.g. how price-sensitive is this buyer, really?"></textarea>
+<div class=rqacts><button type=button class=ghost onclick="runResearchQuery('quick')">Quick check</button><button type=button class=rq-go onclick="runResearchQuery('deep')">🔎 Go deeper</button></div>
+<div class=rqout id=rqout></div></div></div>
+<div class="dsec open" id=ds-stress><button type=button class=dsec-h onclick="this.parentNode.classList.toggle('open')"><span>Stress-test the assumptions</span><span class=dsec-caret aria-hidden=true>▸</span></button>
+<div class=dsec-b><p class=bhelp>Adversarially attack the plan's load-bearing assumptions with fresh, gate-graded research: for each one, it hunts evidence you're <b>wrong</b>, grades that evidence, and rules it survives / weakened / broken. Real spend. Watch it run in <b>The machine</b>.</p>
+<button type=button class=rq-go onclick="runStressTest()">🩺 Stress-test the plan →</button>
+<div class=rqout id=stressout></div></div></div>
+<div class="dsec open" id=ds-graded><button type=button class=dsec-h onclick="this.parentNode.classList.toggle('open')"><span>The graded research</span><span class=dsec-caret aria-hidden=true>▸</span></button>
+<div class=dsec-b><div id=research></div></div></div>
+</div></div>
+</div>
+<div class=dlbar id=dlbar style="display:none"><button type=button class=dl-all onclick=openExportModal() title="Take your data with you, free, at any point">⬇ Take your data</button></div>
+<button type=button class=side-rail onclick=collapseAll() aria-label="Collapse tools" title="Collapse">&#8249;</button>
+</aside>
+<div class=mback id=mback onclick=collapseAll()></div>
+<main class=main>
+<div id=answer class=summary></div>
+<div class=planwrap id=planwrap style="display:none"><div class=plantabs id=plantabs role=tablist aria-label="Your plan, part by part"></div></div>
+<div id=planview style="display:none"></div>
+<div id=node></div>
+<div class=err id=err2></div>
+</main>
+<div class=actionbar id=actionbar aria-label="Plan step actions"></div>
+<div class=stephint id=stephint></div>
+<button type=button class=helpfab id=helpfab onclick=toggleHelp() aria-label="Help with using FILG" title="Help">?</button>
+<div class=helppanel id=helppanel role=dialog aria-label="FILG help">
+<div class=help-head><span>Help</span><button type=button class=help-x onclick=toggleHelp() aria-label="Close help">×</button></div>
+<div class=help-body id=help-body></div>
+<div class=help-foot><label for=help-input class=sr-only>Ask for help using FILG</label><input id=help-input type=text placeholder="How do I…?" onkeydown="if(event.key==='Enter')sendHelp()"><button type=button onclick=sendHelp()>Send</button></div>
+</div>
+<div class=wpop-back id=welcomepop><div class=wpop role=dialog aria-modal=true aria-labelledby=wpop-title>
+<h2 id=wpop-title>Your first prompt is on the house 🎁</h2>
+<p>The opening run, market research, the source-credibility grading, and your first draft, is free and on our key. No card, no setup.</p>
+<p>After that, add your own API key (OpenRouter or Anthropic) to keep building. It runs entirely on your key, usually pennies a plan.</p>
+<div class=wpop-acts><button type=button onclick=dismissWelcome()>Let's go</button></div>
+</div></div>
+</div>
+<script src="/static/app.js"></script>
+</div></body></html>
