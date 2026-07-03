@@ -1049,6 +1049,7 @@ let MODAL_RESOLVE=null, MODAL_TRIGGER=null;
 function _openModal(focusSel){
   MODAL_TRIGGER=document.activeElement;
   const m=document.getElementById('modal');
+  m.classList.remove('wide');   // default narrow; pricingModal re-adds it after opening
   m.classList.add('open');m.setAttribute('aria-hidden','false');
   document.getElementById('modalback').classList.add('show');
   setTimeout(()=>{if(!focusSel)return;const el=m.querySelector(focusSel);if(el)el.focus();},60);
@@ -1371,7 +1372,10 @@ function allowedStackKeys(){
   const t=curTier();
   if(t){const tier=subTiers().find(x=>x.id===t);return tier?tier.stacks.map(s=>s.key):['the-work-horse'];}
   if(HAS_KEY) return STACKS_UI.map(u=>u.k);
-  return ['the-work-horse'];
+  // Free taste on FILG's key: any NON-Opus stack (the server honors a downgrade — clamp only pulls
+  // Opus stacks down). Downgrading is always allowed; only Opus (Wonder kid / Trust fund) needs a
+  // plan or your own key. Never force a pricier model on our dime.
+  return STACKS_UI.filter(u=>!u.o).map(u=>u.k);
 }
 function stackLocked(key){ return allowedStackKeys().indexOf(key)<0; }
 function tierForStack(key){ for(const t of subTiers()){ if((t.stacks||[]).some(s=>s.key===key)) return t; } return null; }
@@ -1399,7 +1403,8 @@ function _tierCard(t){
     '<div style="font-size:.85em;opacity:.8;margin-bottom:8px">Models up to <b>'+esc(top)+'</b></div>'+
     (feats.length?'<ul style="font-size:.85em;margin:0 0 10px;padding-left:18px">'+feats.map(f=>'<li>'+esc(f)+'</li>').join('')+'</ul>':'<div style="font-size:.85em;opacity:.6;margin:0 0 10px">Core plan builder + PDF</div>')+
     '<div style="font-size:.8em;opacity:.7;margin-bottom:10px">Polished PDF included \u00b7 runs on our key</div>'+
-    (cur?'<button type=button disabled>Your plan</button>':'<button type=button onclick="subscribe(\''+t.id+'\')">Choose '+esc(t.label)+'</button>');
+    (cur?'<button type=button disabled>Your plan</button>':'<button type=button onclick="subscribe(\''+t.id+'\')">Choose '+esc(t.label)+'</button>')+
+    '</div>';
 }
 function subMeterHtml(){
   const s=me&&me.subscription; if(!s||!s.cap_cents)return '';
@@ -1415,9 +1420,10 @@ function pricingModal(note){
   const byok=CFG.byokEnabled?'<div style="margin-top:14px;font-size:.9em">Prefer your own API key? <a href=# onclick="_closeModal();keyForm();return false">Bring your own key</a> \u2014 free and unlimited, you pay your provider (pennies a plan). The polished PDF is '+pdfPriceStr()+' for 3 plans on that path.</div>':'';
   document.getElementById('modal-body').innerHTML=
     (note?'<p class=or style="margin:0 0 10px">'+esc(note)+'</p>':'')+(isSub()?subMeterHtml():'')+
-    '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px">'+cards+'</div>'+byok;
+    '<div class=tiergrid>'+cards+'</div>'+byok;
   document.getElementById('modal-actions').innerHTML='<button type=button class=ghost onclick="_closeModal()">Maybe later</button>';
   _openModal('.tiercard button:not([disabled])');
+  document.getElementById('modal').classList.add('wide');   // 3 tiers side by side
 }
 function fairUseModal(d){
   const reset=d&&d.resetAt?(' It resets '+new Date(d.resetAt).toLocaleDateString()+'.'):'';

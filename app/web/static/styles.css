@@ -432,6 +432,9 @@ body.hasbar .helppanel{bottom:138px}
 .modal-back{position:fixed;inset:0;background:rgba(0,0,0,.35);opacity:0;visibility:hidden;transition:opacity .15s;z-index:71}
 .modal-back.show{opacity:1;visibility:visible}
 .modal{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:min(420px,92vw);background:var(--card);border:1px solid #888;padding:20px 22px;z-index:72;opacity:0;visibility:hidden;transition:opacity .15s}
+.modal.wide{width:min(760px,94vw)}
+.tiergrid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:6px}
+@media(max-width:620px){.tiergrid{grid-template-columns:1fr}}
 .modal.open{opacity:1;visibility:visible}
 .modal h3{font-size:18px;font-weight:700;margin:0 0 8px}
 .modal #modal-body{font-size:14px;color:var(--muted);margin-bottom:16px}.modal #modal-body p{margin:0}
