@@ -59,7 +59,7 @@ import provider   # noqa: E402 — BYOK: per-run LLM provider (FILG's key vs a u
 import pipeline   # noqa: E402 — engine: per-run cost ledger (run_ledger) for safe concurrency
 import model_catalog  # noqa: E402 — model ids/prices/slugs + cached Models API availability
 
-from . import auth, billing, keys, planner, store, tiers  # noqa: E402 — persistence, auth, billing, keys, tiers
+from . import auth, billing, keys, planner, render, store, tiers  # noqa: E402 — persistence, auth, billing, keys, tiers, share-page HTML
 
 MOCK = os.environ.get("FILG_MOCK") == "1"
 # "First query on us" + subscriptions: when FILG has its own hosted Anthropic key, a keyless user gets a
@@ -682,94 +682,13 @@ async def api_models(request: Request):
     return model_catalog.snapshot(check_availability=check)
 
 
-CTA = ('<div class="cta"><a class="btn btn-primary" href="https://filg.ai/#start">'
-       'Run your own idea →</a></div>')
-
-# Plain, Craigslist-style shell for the app's shared/served pages (/p plan share, /r teardown share).
-# The old teardown.page_shell uses the teal Fraunces brand + a "Get these weekly" lead-magnet link; the
-# app is now stripped plain, so the share pages match it (no decorative brand, no weekly link).
-_SHARE_CSS = (
-    ":root{--ink:#222;--muted:#666;--line:#ccc;--link:#1a0dab;--ok:#067d2f;--ok-bg:#eef6ef;"
-    "--warn:#a85b00;--warn-bg:#f7f1e8}"
-    "*{box-sizing:border-box}body{margin:0;background:#fff;color:var(--ink);"
-    "font:15px/1.55 Arial,Helvetica,sans-serif}"
-    ".wrap{max-width:760px;margin:0 auto;padding:0 18px}"
-    "a{color:var(--link)}"
-    "nav{display:flex;justify-content:space-between;align-items:center;padding:14px 0;"
-    "border-bottom:1px solid var(--line)}"
-    ".logo{font-weight:700;font-size:16px;text-decoration:none;color:var(--ink)}"
-    "article{padding:24px 0}h1{font-size:24px;margin:0 0 6px}h2{font-size:18px;margin:24px 0 8px}"
-    ".eyebrow{display:inline-block;font-size:11px;font-weight:700;text-transform:uppercase;"
-    "letter-spacing:.05em;color:var(--muted);margin-bottom:12px}"
-    ".tag{color:var(--muted);font-size:14px;margin:0 0 18px}"
-    ".ev{list-style:none;padding:0;margin:12px 0 0}"
-    ".ev li{padding:10px 0;border-top:1px solid var(--line);display:flex;gap:10px;font-size:14px}"
-    ".ev li:first-child{border-top:0}.ev .ok{color:var(--ok)}.ev .warn{color:var(--warn)}"
-    ".ev .note{color:var(--muted);font-size:13px}"
-    ".badge{display:inline-block;font-size:11px;font-weight:700;padding:1px 6px;border-radius:4px;margin-left:2px}"
-    ".badge.ok{background:var(--ok-bg);color:var(--ok)}.badge.warn{background:var(--warn-bg);color:var(--warn)}"
-    ".recpt{margin-top:18px;padding:12px 14px;background:var(--ok-bg);border-radius:6px;font-size:14px}"
-    ".cta{margin:24px 0}.btn{display:inline-block;font-weight:700;text-decoration:underline;color:var(--link)}"
-    "footer{padding:24px 0;color:var(--muted);font-size:13px;border-top:1px solid var(--line)}")
-
-
-def share_shell(title: str, desc: str, body: str) -> str:
-    """A plain HTML page for the app's shared views — matches the stripped-down app: no brand chrome,
-    no lead-magnet link."""
-    import html as _html
-    t, d = _html.escape(title), _html.escape((desc or "")[:180])
-    return (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
-            f'<meta name="viewport" content="width=device-width,initial-scale=1">'
-            f'<title>{t}, FILG</title><meta name="description" content="{d}">'
-            f'<meta property="og:title" content="{t}"><meta property="og:description" content="{d}">'
-            f'<meta property="og:type" content="article">'
-            f'<style>{_SHARE_CSS}</style></head><body><div class="wrap">'
-            f'<nav><a class="logo" href="/">fuck it, let\'s go</a></nav>'
-            f'{body}'
-            f"<footer>Built with FILG. Every number above is graded by a source-credibility gate. "
-            f'<a href="/">filg.ai</a></footer>'
-            f'</div></body></html>')
-
-
-def _receipt(stats: dict) -> str:
-    return (f'<div class="recpt"><strong>The credibility receipt:</strong> {stats["checked"]} '
-            f'claims checked · <strong>{stats["cleared"]} cited</strong> · {stats["flagged"]} '
-            f'flagged as vendor marketing and labeled.</div>')
-
-
-def render_result_page(job: dict) -> str:
-    """Server-render a finished run as a standalone, shareable branded page (reuses the engine's
-    brand shell). Backed by SQLite (app/store.py) so the share link survives restarts."""
-    res = job["result"]
-    stats = res["stats"]
-    ev = f'<h2>The evidence — graded</h2><ul class="ev">{teardown.evidence_li(res["rows"])}</ul>'
-    if job.get("mode") == "full":
-        title = "Your FILG offer"
-        inner = markdown.markdown(res["artifacts_md"], extensions=["extra"])
-        desc = "Your full, cited offer + go-to-market from FILG."
-        article = (f'<article><span class="eyebrow">Full artifact set · ~${res["cost"]:.2f}</span>'
-                   f'{inner}{ev}{_receipt(stats)}{CTA}</article>')
-    else:
-        p = res["prose"]
-        title = p["title"]
-        desc = p.get("idea_line", "Your graded offer from FILG.")
-        article = (f'<article><span class="eyebrow">Cited Offer Teardown · ~${res["cost"]:.2f}</span>'
-                   f'<h1>{html.escape(p["title"])}</h1>'
-                   f'<p class="tag">Every number graded — vendor stats labeled, not laundered.</p>'
-                   f'<p><strong>The offer:</strong> {html.escape(p["offer"])}</p>'
-                   f'<p><strong>How you\'d sell it:</strong> {html.escape(p["gtm"])}</p>'
-                   f'{ev}{_receipt(stats)}{CTA}</article>')
-    return share_shell(title, desc, article)
-
-
 @app.get("/r/{job_id}", response_class=HTMLResponse)
 async def share(job_id: str):
     job = store.get(job_id)
     if not job or job.get("status") != "done":
-        return HTMLResponse(
-            "<p style='font-family:sans-serif;max-width:520px;margin:60px auto;padding:0 22px'>"
-            "This result isn't ready yet, failed, or doesn't exist.</p>", status_code=404)
-    return render_result_page(job)
+        return HTMLResponse(render.not_found("This result isn't ready yet, failed, or doesn't exist."),
+                            status_code=404)
+    return render.result_page(job)
 
 
 @app.get("/p/{sid}", response_class=HTMLResponse)
@@ -777,15 +696,11 @@ async def share_plan(sid: str):
     """Public, read-only view of a plan the owner explicitly shared (private by default)."""
     s = store.plan_get(sid)
     if not s or not s.get("shared"):
-        return HTMLResponse(
-            "<p style='font-family:sans-serif;max-width:520px;margin:60px auto;padding:0 22px'>"
-            "This plan isn't shared or doesn't exist.</p>", status_code=404)
+        return HTMLResponse(render.not_found("This plan isn't shared or doesn't exist."), status_code=404)
     idea = planner._working_idea(s)
     inner = markdown.markdown(planner.bundle_markdown(idea, s.get("files") or {}), extensions=["extra"])
     title = ((s.get("shaped") or {}).get("thesis") or s["idea"] or "Shared business plan")[:120]
-    article = (f'<article><span class="eyebrow">Shared business plan · built with FILG</span>'
-               f'{inner}{CTA}</article>')
-    return share_shell("Shared plan — FILG", title, article)
+    return HTMLResponse(render.shared_plan_page(title, inner))
 
 
 # ── Interactive plan builder (idea → decision tree → downloadable file tree) ──
