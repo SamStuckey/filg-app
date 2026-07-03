@@ -1417,7 +1417,12 @@ function pricingModal(note){
   if(!subTiers().length){keyForm();return;}          // no tiers configured → fall back to BYOK
   document.getElementById('modal-title').textContent=isSub()?'Change your plan':'Keep building';
   const cards=subTiers().map(_tierCard).join('');
-  const byok=CFG.byokEnabled?'<div style="margin-top:14px;font-size:.9em">Prefer your own API key? <a href=# onclick="_closeModal();keyForm();return false">Bring your own key</a> \u2014 free and unlimited, you pay your provider (pennies a plan). The polished PDF is '+pdfPriceStr()+' for 3 plans on that path.</div>':'';
+  const byok=CFG.byokEnabled?
+    '<div class=byokbox>'+
+      '<div class=byokhd><b>Bring your own key</b> \u00b7 <span class=byokfree>free</span></div>'+
+      '<div class=byoksub>Your own OpenRouter or Anthropic key \u2014 unlimited, every model stack, all features. You pay your provider (pennies a plan). The polished PDF is '+pdfPriceStr()+' for 3 plans.</div>'+
+      '<button type=button onclick="_closeModal();keyForm()">Use my own key</button>'+
+    '</div>':'';
   document.getElementById('modal-body').innerHTML=
     (note?'<p class=or style="margin:0 0 10px">'+esc(note)+'</p>':'')+(isSub()?subMeterHtml():'')+
     '<div class=tiergrid>'+cards+'</div>'+byok;
