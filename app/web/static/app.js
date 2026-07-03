@@ -78,9 +78,9 @@ function _drainProgress(s){
   const prog=s.progress||[];
   for(let i=ACT_PROG_N;i<prog.length;i++){
     const ln=prog[i]||'';
-    if(ln.indexOf('\\u00A7LANES\\u00A7')===0){ try{Activity.leaves(ACT_ID,JSON.parse(ln.slice(7)));}catch(e){} }
-    else if(ln.indexOf('\\u00A7LANEDONE\\u00A7')===0){ Activity.leafDone(parseInt(ln.slice(10),10)); }
-    else if(ln.indexOf('\\uD83D\\uDD0E')===0){ /* "🔎 X is digging into: <lane>" — now shown as the nested leaf, skip */ }
+    if(ln.indexOf('\u00A7LANES\u00A7')===0){ try{Activity.leaves(ACT_ID,JSON.parse(ln.slice(7)));}catch(e){} }
+    else if(ln.indexOf('\u00A7LANEDONE\u00A7')===0){ Activity.leafDone(parseInt(ln.slice(10),10)); }
+    else if(ln.indexOf('\uD83D\uDD0E')===0){ /* "🔎 X is digging into: <lane>" — now shown as the nested leaf, skip */ }
     else Activity.push(ACT_ID,ln);
   }
   ACT_PROG_N=Math.max(ACT_PROG_N,prog.length);
@@ -92,7 +92,7 @@ let STRESS_BUSY=false;
 function runStressTest(){
   if(STRESS_BUSY)return; STRESS_BUSY=true;
   const out=document.getElementById('stressout');
-  if(out)out.innerHTML='<div class=think>Attacking your assumptions\\u2026</div>';
+  if(out)out.innerHTML='<div class=think>Attacking your assumptions\u2026</div>';
   fetch('/api/plan/'+SID+'/stress-test',{method:'POST',headers:authHeaders()}).then(r=>r.json().then(d=>({ok:r.ok,d}))).then(({ok,d})=>{
     if(!ok){ if(out)out.innerHTML='<div class=ferr>'+esc(d.error||'Could not start.')+'</div>'; STRESS_BUSY=false; return; }
     const aid=Activity.open('Stress-testing your assumptions'); Activity.resetLeaves(); Activity.push(aid,'Naming the load-bearing assumptions');
@@ -101,8 +101,8 @@ function runStressTest(){
       fetch('/api/plan/'+SID+'/stress-test',{headers:authHeaders()}).then(r=>r.json()).then(st=>{
         const prog=st.progress||[];
         for(let i=cur;i<prog.length;i++){ const ln=prog[i]||'';
-          if(ln.indexOf('\\u00A7LANES\\u00A7')===0){ try{Activity.leaves(aid,JSON.parse(ln.slice(7)));}catch(e){} }
-          else if(ln.indexOf('\\u00A7LANEDONE\\u00A7')===0){ Activity.leafDone(parseInt(ln.slice(10),10)); }
+          if(ln.indexOf('\u00A7LANES\u00A7')===0){ try{Activity.leaves(aid,JSON.parse(ln.slice(7)));}catch(e){} }
+          else if(ln.indexOf('\u00A7LANEDONE\u00A7')===0){ Activity.leafDone(parseInt(ln.slice(10),10)); }
           else Activity.push(aid,ln);
         }
         cur=Math.max(cur,prog.length);
@@ -117,9 +117,9 @@ function runStressTest(){
 }
 function renderStress(res){
   if(!res||!res.assessments||!res.assessments.length)return '<div class=think>No load-bearing assumptions found to test.</div>';
-  const chip={survives:'\\u2705 survives',weakened:'\\u26A0\\uFE0F weakened',broken:'\\u274C broken'};
+  const chip={survives:'\u2705 survives',weakened:'\u26A0\uFE0F weakened',broken:'\u274C broken'};
   const col={survives:'#2e7d32',weakened:'#b8860b',broken:'#c62828'};
-  const sm=res.summary||{}; let h='<div class=stresssum>'+(sm.broken||0)+' broken \\u00B7 '+(sm.weakened||0)+' weakened \\u00B7 '+(sm.survives||0)+' survived</div>';
+  const sm=res.summary||{}; let h='<div class=stresssum>'+(sm.broken||0)+' broken \u00B7 '+(sm.weakened||0)+' weakened \u00B7 '+(sm.survives||0)+' survived</div>';
   res.assessments.forEach(a=>{
     h+='<div style="border-left:3px solid '+(col[a.verdict]||'#888')+';padding:4px 0 4px 10px;margin:10px 0">';
     h+='<div><b>'+(chip[a.verdict]||esc(a.verdict))+'</b> &mdash; '+esc(a.assumption)+'</div>';
@@ -147,7 +147,7 @@ function renderStack(s){   // s optional; updates the header button (+ open pane
   if(s&&s.stack)STACK_CUR=s.stack;
   const i=_stackIdx(STACK_CUR), u=STACKS_UI[i]||STACKS_UI[2];
   const lbl=document.getElementById('stacklbl');
-  if(lbl)lbl.innerHTML=esc(u.n)+(u.rec?' <span class=sk-star aria-hidden=true>\\u2605</span>':'');
+  if(lbl)lbl.innerHTML=esc(u.n)+(u.rec?' <span class=sk-star aria-hidden=true>\u2605</span>':'');
   const c=document.getElementById('stackcost'); if(c)c.innerHTML=_stackCost(i);
   const pop=document.getElementById('stackpop'); if(pop&&!pop.hidden)renderStackTiles();
 }
@@ -157,7 +157,7 @@ function renderStackTiles(){
   pop.innerHTML='<div class=stackpop-h>Pick your crew. Sets the models behind research, the credibility gate, and the writing you read.</div>'+
     STACKS_UI.map((u,i)=>{
       const locked=stackLocked(u.k);
-      const badges=(u.rec?'<span class="st-badge rec">Recommended</span>':'')+(locked?'<span class="st-badge" style="opacity:.7">\\uD83D\\uDD12 upgrade</span>':'');
+      const badges=(u.rec?'<span class="st-badge rec">Recommended</span>':'')+(locked?'<span class="st-badge" style="opacity:.7">\uD83D\uDD12 upgrade</span>':'');
       return '<button type=button role=menuitemradio aria-checked='+(i===cur)+' class="stacktile'+(i===cur?' sel':'')+'"'+(locked?' style="opacity:.6"':'')+' onclick="pickStack('+i+')">'+
         '<span class=st-top><span class=st-name>'+esc(u.n)+'</span><span class=st-badges>'+badges+'</span>'+
         '<span class=stack-cost aria-hidden=true>'+_stackCost(i)+'</span></span>'+
@@ -173,7 +173,7 @@ function toggleStackPop(){
 function closeStackPop(){const pop=document.getElementById('stackpop'),btn=document.getElementById('stackbtn');
   if(pop&&!pop.hidden){pop.hidden=true;btn.setAttribute('aria-expanded','false');}}
 function pickStack(i){const u=STACKS_UI[i];closeStackPop();if(!u)return;
-  if(stackLocked(u.k)){const t=tierForStack(u.k);pricingModal(t?('\\u201c'+u.n+'\\u201d is on the '+t.label+' plan and up. Upgrade to run it on our key, or bring your own key.'):null);return;}
+  if(stackLocked(u.k)){const t=tierForStack(u.k);pricingModal(t?('\u201c'+u.n+'\u201d is on the '+t.label+' plan and up. Upgrade to run it on our key, or bring your own key.'):null);return;}
   if(u.k!==STACK_CUR)commitStack(i);}
 async function commitStack(i){
   const u=STACKS_UI[i]; if(!u)return;
@@ -203,7 +203,7 @@ function meterTick(o){
   if(dc>0||dt>0){METER.cost+=Math.max(0,dc);METER.tokens+=Math.max(0,dt);PLAN_BASE[id]={c,t};}
   animateMeter();
 }
-function fmtTokens(n){n=Math.round(n);return n>=1000?(n/1000).toFixed(n>=10000?0:1).replace(/\\.0$/,'')+'k':String(n);}
+function fmtTokens(n){n=Math.round(n);return n>=1000?(n/1000).toFixed(n>=10000?0:1).replace(/\.0$/,'')+'k':String(n);}
 function animateMeter(){   // ease the displayed numbers toward the real totals so the meter reads live
   if(_mRAF)cancelAnimationFrame(_mRAF);
   const from={tokens:_mShown.tokens,cost:_mShown.cost}, t0=performance.now(), dur=650;
@@ -299,7 +299,7 @@ async function sendChat(){
   CHAT_BUSY=true;btn.disabled=true;t.value='';if(st)st.innerHTML='';
   log.insertAdjacentHTML('beforeend',`<div class="cmsg user">${esc(msg)}</div><div class="cmsg bot md" id=chatthinking><span class=think>Thinking…</span></div>`);
   log.scrollTop=log.scrollHeight;
-  const aid=Activity.start(["Reading your plan","Checking the graded evidence","Thinking it through"],1200,'You asked: '+(msg.length>40?msg.slice(0,40)+'\\u2026':msg));
+  const aid=Activity.start(["Reading your plan","Checking the graded evidence","Thinking it through"],1200,'You asked: '+(msg.length>40?msg.slice(0,40)+'\u2026':msg));
   tabNotify('chatsec','running');
   try{
     const [r]=await Promise.all([fetch('/api/plan/'+SID+'/chat',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({message:msg})}),new Promise(res=>setTimeout(res,850))]);
@@ -379,9 +379,9 @@ async function runResearchQuery(mode){
   // terminal-style spew, inline in the drawer, until the answer comes back
   if(out)out.innerHTML='<div class=rqspew id=rqspew></div>';
   const spew=document.getElementById('rqspew');
-  const raid=Activity.open((deep?'Researching: ':'Quick check: ')+(q.length>42?q.slice(0,42)+'\\u2026':q||'your question'));   // tight headline + machine-tab mirror
+  const raid=Activity.open((deep?'Researching: ':'Quick check: ')+(q.length>42?q.slice(0,42)+'\u2026':q||'your question'));   // tight headline + machine-tab mirror
   tabNotify('researchsec','running');
-  let si=0; const pushLine=()=>{if(si<steps.length){if(spew){const d=document.createElement('div');d.className='rqline';d.textContent='\\u203a '+steps[si];spew.appendChild(d);spew.scrollTop=spew.scrollHeight;}Activity.push(raid,steps[si]);si++;}};
+  let si=0; const pushLine=()=>{if(si<steps.length){if(spew){const d=document.createElement('div');d.className='rqline';d.textContent='\u203a '+steps[si];spew.appendChild(d);spew.scrollTop=spew.scrollHeight;}Activity.push(raid,steps[si]);si++;}};
   pushLine(); const tmr=setInterval(pushLine,1100);
   try{
     const r=await _aiRun('/api/plan/'+SID+'/research/query',{question:q,mode:deep?'deep':'quick'});
@@ -390,7 +390,7 @@ async function runResearchQuery(mode){
     Activity.done(raid,'Answered from the graded research.');tabNotify('researchsec','done');
     if(d.cost!=null)meterTick({id:SID,cost:d.cost,tokens:d.tokens});
     let html='<div class="rqans md">'+mdToHtml(d.answer||'')+'</div>';
-    if(d.rows&&d.rows.length){html+='<div class=rqrows>'+d.rows.map(x=>`<div class=rqrow>${x.mark==='ok'?'\\u2705':'\\u26a0\\ufe0f'} ${esc(x.text)} <span class=rqsrc>${esc(host(x.url))}</span></div>`).join('')+'</div>';}
+    if(d.rows&&d.rows.length){html+='<div class=rqrows>'+d.rows.map(x=>`<div class=rqrow>${x.mark==='ok'?'\u2705':'\u26a0\ufe0f'} ${esc(x.text)} <span class=rqsrc>${esc(host(x.url))}</span></div>`).join('')+'</div>';}
     if(out)out.innerHTML=html;
   }catch(e){clearInterval(tmr);Activity.stop(raid);tabNotify('researchsec','fail');if(out)out.innerHTML='<div class=ferr>Network error.</div>';}
   RQ_BUSY=false;
@@ -408,7 +408,7 @@ function renderAnswer(s){
   const mtb=(mt&&MT_LABELS[mt])?`<span class="modelbadge mt-${esc(mt)}">${esc(MT_LABELS[mt])}</span>`:'';
   // the cheeky spoken reaction (vet voice) — a plain-spoken sub-header under the title
   const react=(s.vetting&&s.vetting.reaction)?`<p class=sum-react>${esc(s.vetting.reaction)}</p>`:'';
-  a.innerHTML=`<button type=button class=sum-head aria-expanded="${SUM_OPEN}" onclick=toggleSummary()><span class=sum-headl>${stamp}${mtb}<h2>${esc(p.title)}</h2></span><span class=sum-caret aria-hidden=true>\\u25be</span></button>`+
+  a.innerHTML=`<button type=button class=sum-head aria-expanded="${SUM_OPEN}" onclick=toggleSummary()><span class=sum-headl>${stamp}${mtb}<h2>${esc(p.title)}</h2></span><span class=sum-caret aria-hidden=true>\u25be</span></button>`+
     `<div class=sum-body>${react}<p class=tag>Your offer, with the research graded, vendor spin labeled, not laundered.</p>`+
     `<p><b>What you'd sell:</b> ${esc(p.offer)}</p><p><b>How you'd sell it:</b> ${esc(p.gtm)}</p></div>`;
 }
@@ -476,7 +476,7 @@ function renderNode(s){
   const n=document.getElementById('node');
   if(s.status==='researching')return;
   if(s.done){const cpn=pdfUnlocked()?'':'<div class=couponrow><input id=coupon placeholder="Coupon code" autocomplete=off spellcheck=false><button type=button class=ghost onclick=redeemCoupon()>Apply</button></div>';
-    n.innerHTML='<div class=node><div class=done>🎉 <b>Your plan is ready</b>, all '+s.total+' parts. This is your plan\\'s home: grab the <b>polished PDF</b> (or the free raw files), <b>chat with your plan</b> in the sidebar to pressure-test it, or share it.</div>'+
+    n.innerHTML='<div class=node><div class=done>🎉 <b>Your plan is ready</b>, all '+s.total+' parts. This is your plan\'s home: grab the <b>polished PDF</b> (or the free raw files), <b>chat with your plan</b> in the sidebar to pressure-test it, or share it.</div>'+
     qaHtml(s.qa)+
     '<div class=planacts>'+pdfBtn()+'<button type=button class=ghost onclick=downloadZip()>⬇ Raw files (.zip), free</button><button type=button class=ghost onclick="sharePlan(SID)">🔗 Share</button></div>'+cpn+'</div>';return;}
   const p=s.proposal; if(!p){n.innerHTML='';return;}
@@ -504,8 +504,8 @@ function renderActionBar(s){
   document.body.classList.toggle('hasbar',show);
   if(show)bar.innerHTML=
     `<span class=ab-hint><b>I'm with you</b> locks this part and builds the next<br><b>Not feeling it</b> redraws it (add a note to steer)</span>`+
-    `<button type=button class="ab-btn ab-back" onclick="openFeedbackModal('regen')" title="Redo this part \\u2014 you can add a note to steer the rewrite">\\u21bb Not feeling it</button>`+
-    `<button type=button class="ab-btn ab-next" onclick="openFeedbackModal('next')" title="Lock this part in and build the next one">I'm with you \\u2192</button>`;
+    `<button type=button class="ab-btn ab-back" onclick="openFeedbackModal('regen')" title="Redo this part \u2014 you can add a note to steer the rewrite">\u21bb Not feeling it</button>`+
+    `<button type=button class="ab-btn ab-next" onclick="openFeedbackModal('next')" title="Lock this part in and build the next one">I'm with you \u2192</button>`;
   if(show)maybeStepHint(); else dismissStepHint(true);
 }
 // The kill gate is now a COACHING LADDER, not a hard wall. First hit = genuine advisement (Coach voice
@@ -524,7 +524,7 @@ function killGateHtml(s){
   const q=esc((s.shaped||{}).clarifying_question||'Name one real skill, asset, or audience you already have, and who would pay for it.');
   const risk=(WOD_PUSHES===0&&v.biggest_risk)?`<p class=kg-risk><b>The gap:</b> ${esc(v.biggest_risk)}</p>`:'';
   const say=WOD_PUSHES>0?WOD_SNARK[Math.min(WOD_PUSHES,WOD_SNARK.length-1)]:(v.reaction||WOD_SNARK[0]);
-  const head=WOD_PUSHES>0?'\\u26d4 Still nothing to sell':'\\u26d4 Not buildable yet';
+  const head=WOD_PUSHES>0?'\u26d4 Still nothing to sell':'\u26d4 Not buildable yet';
   return `<div class=killgate><div class=kg-head>${head}</div>`+
     `<p class=kg-say>${esc(say)}</p>`+
     risk+`<p class=kg-q>${q}</p>`+
@@ -565,7 +565,7 @@ function suggestedFb(s){
   const qs=[]; const cq=((s.shaped||{}).clarifying_question||'').trim(); if(cq)qs.push(cq);
   return qs;
 }
-function useFb(t){const f=document.getElementById('feedback'); if(!f)return; f.value=(f.value?f.value.replace(/\\s*$/,'')+' ':'')+t; f.focus();}
+function useFb(t){const f=document.getElementById('feedback'); if(!f)return; f.value=(f.value?f.value.replace(/\s*$/,'')+' ':'')+t; f.focus();}
 
 // ── #2 inline comments: highlight the targeted block, leave a 💬/✕ marker you can edit or remove ──
 let COMMENTS={};     // {nodeId:[{quote,note,blk}]}  (blk = index among the draft's block elements)
@@ -574,8 +574,8 @@ let CMT_QUOTE='', CMT_BLK=-1, CMT_EDIT=-1;
 function nodeComments(){return (CUR_NODE&&COMMENTS[CUR_NODE])||[];}
 function commentsSteer(){   // fold inline comments into the feedback string the model receives
   const cs=nodeComments(); if(!cs.length)return '';
-  return "\\n\\nInline comments on the current draft (address each, anchored to the quoted text):\\n"+
-    cs.map(c=>`- On \\u201c${c.quote}\\u201d: ${c.note}`).join("\\n");
+  return "\n\nInline comments on the current draft (address each, anchored to the quoted text):\n"+
+    cs.map(c=>`- On \u201c${c.quote}\u201d: ${c.note}`).join("\n");
 }
 function draftBlocks(){const d=document.querySelector('#node .draft');return d?Array.prototype.slice.call(d.querySelectorAll('p,li,h3,h4,h5,h6,td')):[];}
 function clearCmtTarget(){document.querySelectorAll('.draft .cmt-target').forEach(el=>el.classList.remove('cmt-target'));}
@@ -586,7 +586,7 @@ function decorateComments(){   // re-apply highlights + markers for the active n
     const b=blocks[c.blk]; if(!b)return;
     b.classList.add('hascmt');
     const mk=document.createElement('span'); mk.className='cmtmark'; mk.contentEditable='false';
-    mk.innerHTML=`<button type=button class=cmtmark-e title="Edit note: ${esc(c.note)}" onclick="editComment(${i})">💬</button><button type=button class=cmtmark-x aria-label="Remove note" title="Remove note" onclick="removeComment(${i})">\\u00d7</button>`;
+    mk.innerHTML=`<button type=button class=cmtmark-e title="Edit note: ${esc(c.note)}" onclick="editComment(${i})">💬</button><button type=button class=cmtmark-x aria-label="Remove note" title="Remove note" onclick="removeComment(${i})">\u00d7</button>`;
     b.appendChild(mk);
   });
 }
@@ -597,8 +597,8 @@ function renderModalComments(){
   const host=document.getElementById('mfbcmtshost'); if(!host)return;
   const cs=nodeComments();
   host.innerHTML = cs.length ? (`<div class=mfb-h>Your comments on this part (sent with your note)</div><ol class=mfb-clist>`+
-    cs.map((c,i)=>{const q=c.quote.length>90?c.quote.slice(0,90)+'\\u2026':c.quote;
-      return `<li><span class=mfb-cq>\\u201c${esc(q)}\\u201d</span> <span class=mfb-cn>${esc(c.note)}</span><button type=button class=mfb-cx aria-label="Remove this comment" title="Remove" onclick="removeModalComment(${i})">\\u00d7</button></li>`;
+    cs.map((c,i)=>{const q=c.quote.length>90?c.quote.slice(0,90)+'\u2026':c.quote;
+      return `<li><span class=mfb-cq>\u201c${esc(q)}\u201d</span> <span class=mfb-cn>${esc(c.note)}</span><button type=button class=mfb-cx aria-label="Remove this comment" title="Remove" onclick="removeModalComment(${i})">\u00d7</button></li>`;
     }).join('')+`</ol>`) : '';
 }
 function removeModalComment(i){ removeComment(i); renderModalComments(); }
@@ -608,7 +608,7 @@ function editComment(i){const c=nodeComments()[i]; if(!c)return; CMT_EDIT=i; CMT
 function openCmtPop(anchorEl, prefill){
   const pop=document.getElementById('cmtpop'); if(!pop)return;
   clearCmtTarget(); if(anchorEl)anchorEl.classList.add('cmt-target');
-  document.getElementById('cmtquote').textContent='\\u201c'+(CMT_QUOTE.length>90?CMT_QUOTE.slice(0,90)+'\\u2026':CMT_QUOTE)+'\\u201d';
+  document.getElementById('cmtquote').textContent='\u201c'+(CMT_QUOTE.length>90?CMT_QUOTE.slice(0,90)+'\u2026':CMT_QUOTE)+'\u201d';
   document.getElementById('cmtnote').value=prefill||'';
   pop.classList.add('show'); pop.setAttribute('aria-hidden','false');   // show first so we can measure it
   const r=anchorEl?anchorEl.getBoundingClientRect():{left:40,bottom:80,top:60};
@@ -641,7 +641,7 @@ function saveComment(){
 document.addEventListener('mouseup',onDraftSelect);
 document.addEventListener('keydown',function(e){if(e.key==='Escape')hideCmtPop();});
 const FB_CHIPS=["go bolder","narrower niche","cheaper entry","B2B only","more specific","add an upsell"];
-function addChip(txt){const t=document.getElementById('feedback'); if(!t)return; t.value=(t.value?t.value.replace(/\\s*$/,'')+', ':'')+txt; t.focus();}
+function addChip(txt){const t=document.getElementById('feedback'); if(!t)return; t.value=(t.value?t.value.replace(/\s*$/,'')+', ':'')+txt; t.focus();}
 function _navBusy(){const n=document.getElementById('node');if(n)n.querySelectorAll('button').forEach(b=>b.disabled=true);
   const ab=document.getElementById('actionbar');
   if(ab){ab.querySelectorAll('button').forEach(b=>b.disabled=true);ab.classList.add('working');
@@ -670,7 +670,7 @@ async function nextStep(){
   const steps=[]; if(full)steps.push("Folding in your notes");
   steps.push("Drafting the next part of your plan","Checking it against your graded research");
   const _sx=(LAST_S&&LAST_S.sections)||[], _nt=(_sx[((LAST_S&&LAST_S.step)||0)+1]||{}).title;   // tight headline
-  const aid=Activity.start(steps,1200,_nt?("Writing \\u2018"+_nt+"\\u2019"):'Building the next part');
+  const aid=Activity.start(steps,1200,_nt?("Writing \u2018"+_nt+"\u2019"):'Building the next part');
   try{
     const r=await _aiRun('/api/plan/'+SID+'/next',{feedback:full});
     const s=await r.json();
@@ -742,13 +742,13 @@ async function openFeedbackModal(mode){
   document.getElementById('modal-body').innerHTML=
     `<p class=mfb-hint>${regen?"Tell me what to change and I'll rework this part.":'Add an optional note to steer the next part, or just go.'}</p>`+sfb+
     `<div class=mfb-cmts id=mfbcmtshost></div>`+
-    `<div class=mfb-chips id=fbchips><span class=mfb-load>thinking up quick edits\\u2026</span></div>`+
+    `<div class=mfb-chips id=fbchips><span class=mfb-load>thinking up quick edits\u2026</span></div>`+
     `<label for=feedback class=sr-only>Your feedback</label>`+
-    `<textarea id=feedback rows=3 placeholder="${regen?'e.g. simpler pricing, drop the second tier':'Optional note\\u2026'}"></textarea>`+
+    `<textarea id=feedback rows=3 placeholder="${regen?'e.g. simpler pricing, drop the second tier':'Optional note\u2026'}"></textarea>`+
     `<div class=ferr id=ferr></div>`;
   document.getElementById('modal-actions').innerHTML=
     `<button type=button class=ghost onclick="_closeModal()">Cancel</button>`+
-    `<button type=button class=mfb-go onclick="commitFeedback()">${regen?'Rework it':'Go'} \\u2192</button>`;
+    `<button type=button class=mfb-go onclick="commitFeedback()">${regen?'Rework it':'Go'} \u2192</button>`;
   renderModalComments(); _openModal('#feedback'); loadNudges();
 }
 function loadNudges(){
@@ -796,7 +796,7 @@ function renderDecisionTree(s){
     const n=byId[id];
     const cls='dnode'+(id===t.active?' on':'')+(path[id]?' path':'');
     const sub=subOf[n.step]?`<span class=dsub>${esc(subOf[n.step])}</span>`:'';
-    const tag=n.feedback?`<span class=ds>\\u21b3 ${esc(n.feedback.slice(0,60))}</span>`:'';
+    const tag=n.feedback?`<span class=ds>\u21b3 ${esc(n.feedback.slice(0,60))}</span>`:'';
     let h=`<button type=button class="${cls}" style="padding-left:${8+depth*14}px" onclick="gotoNode('${id}')" aria-current="${id===t.active?'true':'false'}"><span class=dtitle>${esc(n.title||('Part '+(n.step+1)))}</span>${sub}${tag}</button>`;
     (kids[id]||[]).forEach(c=>{h+=row(c,depth+1);});
     return h;
@@ -842,7 +842,7 @@ function renderBoardPick(){
   const ax=CFG.archetypes||[]; if(!ax.length){el.innerHTML='';return;}
   el.classList.toggle('open',BOARDPICK_OPEN);
   const n=BOARD.length;
-  el.innerHTML=`<button type=button class=bp-head aria-expanded="${BOARDPICK_OPEN}" onclick=toggleBoardPick()><span class=lab id=boardpicklab>Pick your Board of Directors<span id=bp-n>${n?` (${n} picked)`:''}</span>, they'll vet every step (optional)</span><span class=bp-caret aria-hidden=true>\\u25b8</span></button>`+
+  el.innerHTML=`<button type=button class=bp-head aria-expanded="${BOARDPICK_OPEN}" onclick=toggleBoardPick()><span class=lab id=boardpicklab>Pick your Board of Directors<span id=bp-n>${n?` (${n} picked)`:''}</span>, they'll vet every step (optional)</span><span class=bp-caret aria-hidden=true>\u25b8</span></button>`+
     `<div class=opts role=group aria-labelledby=boardpicklab>`+ax.map(a=>`<button type=button class="bchip${BOARD.includes(a.key)?' on':''}" aria-pressed=${BOARD.includes(a.key)} onclick="toggleBoard('${a.key}',this)" title="${esc(a.first?a.first+', ':'')}${esc(a.blurb)}">${esc(a.name)}</button>`).join('')+`</div>`;
 }
 function toggleBoard(key,btn){
@@ -863,7 +863,7 @@ function renderBoard(s){
   const all=(CFG.archetypes||[]).concat(CUSTOM_DIRECTORS);
   document.getElementById('boarddirs').innerHTML=all.map(a=>{
     const custom=CUSTOM_DIRECTORS.some(c=>c.key===a.key);
-    return `<button type=button class="bchip${custom?' custom':''}${SESSION_BOARD.includes(a.key)?' on':''}" aria-pressed=${SESSION_BOARD.includes(a.key)} onclick="toggleSessionBoard('${a.key}',this)" title="${esc(a.first?a.first+', ':'')}${esc(a.blurb||'')}">${custom?'\\u2726 ':''}${esc(a.name)}</button>`;
+    return `<button type=button class="bchip${custom?' custom':''}${SESSION_BOARD.includes(a.key)?' on':''}" aria-pressed=${SESSION_BOARD.includes(a.key)} onclick="toggleSessionBoard('${a.key}',this)" title="${esc(a.first?a.first+', ':'')}${esc(a.blurb||'')}">${custom?'\u2726 ':''}${esc(a.name)}</button>`;
   }).join('');
 }
 let SESSION_BOARD=null;
@@ -887,9 +887,9 @@ async function openForge(){
   const fs=document.getElementById('ds-forge'); if(fs)fs.classList.add('open','running');
   const panel=document.getElementById('forgepanel'); if(!panel)return;
   panel.hidden=false;
-  panel.innerHTML=`<div class=dpanel-h><span>Forging your director</span><button type=button class=dpanel-x onclick=cancelForge() aria-label="Close">\\u00d7</button></div>`+
-    `<p class=mfb-hint>Running a quick research + QA pass on: <i>${esc(desc.length>120?desc.slice(0,120)+'\\u2026':desc)}</i></p>`+
-    `<div class=forgetree id=forgetree>`+FORGE_STEPS.map(st=>`<div class=ftstep data-k=${st.k}><span class=ftleaf aria-hidden=true>\\uD83C\\uDF43</span><span class=ftlabel>${esc(st.l)}</span><span class=ftnote></span></div>`).join('')+`</div>`+
+  panel.innerHTML=`<div class=dpanel-h><span>Forging your director</span><button type=button class=dpanel-x onclick=cancelForge() aria-label="Close">\u00d7</button></div>`+
+    `<p class=mfb-hint>Running a quick research + QA pass on: <i>${esc(desc.length>120?desc.slice(0,120)+'\u2026':desc)}</i></p>`+
+    `<div class=forgetree id=forgetree>`+FORGE_STEPS.map(st=>`<div class=ftstep data-k=${st.k}><span class=ftleaf aria-hidden=true>\uD83C\uDF43</span><span class=ftlabel>${esc(st.l)}</span><span class=ftnote></span></div>`).join('')+`</div>`+
     `<div class=forgeout id=forgeout></div><div class=dpanel-acts id=forgeacts></div>`;
   runForge();
 }
@@ -928,20 +928,20 @@ function showForgeResult(){
   const fs=document.getElementById('ds-forge'); if(fs){fs.classList.remove('running');fs.classList.add('done');}
   if(!p){showForgeError('No director came back. Try again.');return;}
   const doms=(p.domains||[]).slice(0,6).map(d=>`<span class=fdom>${esc(d)}</span>`).join('');
-  out.innerHTML=`<div class=forgecard><div class=fc-name>\\u2726 ${esc(p.name)}${p.first?` <span class=fc-first>(${esc(p.first)})</span>`:''}</div>`+
+  out.innerHTML=`<div class=forgecard><div class=fc-name>\u2726 ${esc(p.name)}${p.first?` <span class=fc-first>(${esc(p.first)})</span>`:''}</div>`+
     `<div class=fc-blurb>${esc(p.blurb||'')}</div>`+
     `<div class="fc-voice md">${mdToHtml(p.voice||'')}</div>`+
     (doms?`<div class=fc-doms>${doms}</div>`:'')+`</div>`;
   const acts=document.getElementById('forgeacts'); if(acts)acts.innerHTML=
     `<button type=button class=ghost onclick=cancelForge()>Cancel</button>`+
-    `<button type=button class=ghost onclick=runForge()>\\u21bb Redo</button>`+
-    `<button type=button class=mfb-go onclick=approveForge()>\\u2713 Seat on my board</button>`;
+    `<button type=button class=ghost onclick=runForge()>\u21bb Redo</button>`+
+    `<button type=button class=mfb-go onclick=approveForge()>\u2713 Seat on my board</button>`;
 }
 function showForgeError(msg){
   const out=document.getElementById('forgeout'); if(out)out.innerHTML=`<div class=ferr>${esc(msg)}</div>`;
   const acts=document.getElementById('forgeacts'); if(acts)acts.innerHTML=
     `<button type=button class=ghost onclick=cancelForge()>Cancel</button>`+
-    `<button type=button class=mfb-go onclick=runForge()>\\u21bb Retry</button>`;
+    `<button type=button class=mfb-go onclick=runForge()>\u21bb Retry</button>`;
 }
 async function approveForge(){
   if(!FORGE_DRAFT)return;
@@ -952,7 +952,7 @@ async function approveForge(){
     SESSION_BOARD=null;                 // re-seed the board chips (the new director is now seated)
     const fi=document.getElementById('forgeinput'); if(fi)fi.value='';
     const nm=FORGE_DRAFT.name||'Director'; FORGE_DRAFT=null;
-    _forgeClose(); render(s); toast('\\u2726 '+nm+' seated on your board.','ok');
+    _forgeClose(); render(s); toast('\u2726 '+nm+' seated on your board.','ok');
   }catch(e){showForgeError('Network error.');}
 }
 function cancelForge(){ FORGE_DRAFT=null; FORGE_BUSY=false; _forgeClose(); }
@@ -967,7 +967,7 @@ async function convene(){
   body.innerHTML=`<p class=forge-sub>Convene your board on the plan so far. Leave it blank for a general read, or aim them at one thing.</p>`+
     `<label for=conveneq class=sr-only>What should the board weigh in on?</label>`+
     `<textarea id=conveneq rows=2 placeholder="e.g. is the pricing right?"></textarea>`+
-    `<button type=button class=mfb-go onclick=runConvene()>Convene the board \\u2192</button>`+
+    `<button type=button class=mfb-go onclick=runConvene()>Convene the board \u2192</button>`+
     `<div class=dpanel id=convenepanel></div>`;
   const t=document.getElementById('conveneq'); if(t)t.focus();
 }
@@ -983,7 +983,7 @@ async function runConvene(){
   tabNotify('boardsec','running');
   panel.innerHTML='<div class=rqspew id=convspew></div>';
   const spew=document.getElementById('convspew'); let si=0;
-  const push=()=>{if(si<steps.length){if(spew){const d=document.createElement('div');d.className='rqline';d.textContent='\\u203a '+steps[si];spew.appendChild(d);spew.scrollTop=spew.scrollHeight;}Activity.push(aid,steps[si]);si++;}};
+  const push=()=>{if(si<steps.length){if(spew){const d=document.createElement('div');d.className='rqline';d.textContent='\u203a '+steps[si];spew.appendChild(d);spew.scrollTop=spew.scrollHeight;}Activity.push(aid,steps[si]);si++;}};
   push(); const tmr=setInterval(push,1100);
   try{
     const body={question:q}; if(SESSION_BOARD&&SESSION_BOARD.length)body.directors=SESSION_BOARD;
@@ -994,7 +994,7 @@ async function runConvene(){
     Activity.done(aid,'Your board weighed in.');tabNotify('boardsec','done');
     if(d.cost!=null)meterTick({id:SID,cost:d.cost,tokens:d.tokens});
     const split=(d.conflicts&&d.conflicts.toLowerCase()!=='none')?`<span class=split>Where they split: ${esc(d.conflicts)}</span>`:'';
-    const balloons=(d.directors||[]).map((x,i)=>`<div class=balloon id=cbal_${i}><button type=button class=bh onclick="document.getElementById('cbal_${i}').classList.toggle('open')">\\uD83D\\uDCAC ${esc(x.first||x.name)}<span class=caret>\\u25b8</span></button><div class="bb md">${mdToHtml(x.take)}</div></div>`).join('');
+    const balloons=(d.directors||[]).map((x,i)=>`<div class=balloon id=cbal_${i}><button type=button class=bh onclick="document.getElementById('cbal_${i}').classList.toggle('open')">\uD83D\uDCAC ${esc(x.first||x.name)}<span class=caret>\u25b8</span></button><div class="bb md">${mdToHtml(x.take)}</div></div>`).join('');
     const resHtml=`<div class=bround>${skepticCardHtml(d.skeptic||{})}<div class=balloons>${balloons}</div>`+
       `<div class=takeaway><div class=tl>Board takeaway</div>${esc(d.verdict||'')}${split}</div></div>`+
       `<div class=dpanel-acts><button type=button class=ghost onclick=convene()>Convene again</button></div>`;
@@ -1110,7 +1110,7 @@ function collapseAll(){closeSecDrawer();document.body.classList.add('drawer-coll
 // "Back to tools": close the open tab drawer and reveal the tool menu (the sidebar). On small screens
 // the sidebar was collapsed when the drawer opened, so bring it back.
 function backToTools(){closeSecDrawer();document.body.classList.remove('drawer-collapsed');}
-const TAB_ICONS={spewsec:'\\u2699\\ufe0f',straightsec:'\\uD83D\\uDCCB',dtreesec:'\\uD83C\\uDF3F',chatsec:'\\uD83D\\uDCAC',boardsec:'\\uD83D\\uDC65',researchsec:'\\uD83D\\uDD0D'};
+const TAB_ICONS={spewsec:'\u2699\ufe0f',straightsec:'\uD83D\uDCCB',dtreesec:'\uD83C\uDF3F',chatsec:'\uD83D\uDCAC',boardsec:'\uD83D\uDC65',researchsec:'\uD83D\uDD0D'};
 function setupTabs(){   // turn every collapsible sidebar section into a modern nav tab (icon + label, no caret)
   document.querySelectorAll('.side .sec.collap').forEach(sec=>{
     if(!sec.id)return;
@@ -1258,7 +1258,7 @@ const Activity={
   restoreFor(sid){   // lay this plan's saved terminal history into a fresh machine tab (once per plan)
     this._restoredSid=sid;
     const log=this._log(); if(!log)return;
-    log.innerHTML='<div class=run-empty id=run-empty>Nothing running yet. This is the engine\\u2019s terminal: every operation shows here step by step and stays as collapsed history you can reopen.</div>';
+    log.innerHTML='<div class=run-empty id=run-empty>Nothing running yet. This is the engine\u2019s terminal: every operation shows here step by step and stays as collapsed history you can reopen.</div>';
     let data; try{data=JSON.parse(localStorage.getItem('filg_machine_'+sid)||'[]');}catch(e){data=[];}
     if(!data.length)return;
     const empty=document.getElementById('run-empty'); if(empty)empty.style.display='none';
@@ -1283,11 +1283,11 @@ const Activity={
     const box=document.createElement('div'); box.className='leaftree leafnest';
     box.innerHTML=labels.map((ln,i)=>
       '<button type=button class=leafnode data-i="'+i+'" onclick="Activity.toggleLeaf('+i+')" aria-expanded=false>'+
-        '<span class=leaf-ico aria-hidden=true>\\uD83C\\uDF43</span>'+
+        '<span class=leaf-ico aria-hidden=true>\uD83C\uDF43</span>'+
         '<span class=leaf-lbl>Lane '+(i+1)+'</span>'+
-        '<span class=leaf-q>'+esc(ln)+'</span><span class=lcaret aria-hidden=true>\\u25b8</span></button>'+
+        '<span class=leaf-q>'+esc(ln)+'</span><span class=lcaret aria-hidden=true>\u25b8</span></button>'+
       '<div class=leafbody data-i="'+i+'"><div class=lq>'+esc(ln)+'</div>'+
-        '<div class=lsrc data-i="'+i+'"><span class=pending>Researching this lane\\u2026</span></div></div>'
+        '<div class=lsrc data-i="'+i+'"><span class=pending>Researching this lane\u2026</span></div></div>'
     ).join('');
     // nest it directly under the current step line (Planning the research fan-out)
     if(t.line&&t.line.parentNode){ t.line.parentNode.insertBefore(box, t.line.nextSibling); }
@@ -1312,8 +1312,8 @@ const Activity={
       if(!mine.length)return;   // keep the "Researching…" placeholder until this lane has rows
       cell.innerHTML=mine.map(r=>{
         const ok=r.mark==='ok', jl=JL[r.judge]||'';
-        const gate=(r.tier||jl)?'<span class=gate>\\u2699 gate: '+esc((r.tier||'').toLowerCase())+(jl?' \\u00b7 '+esc(jl):'')+'</span>':'';
-        return '<div class=src>'+(ok?'\\u2705':'\\u26a0\\ufe0f')+' '+esc(r.text)+
+        const gate=(r.tier||jl)?'<span class=gate>\u2699 gate: '+esc((r.tier||'').toLowerCase())+(jl?' \u00b7 '+esc(jl):'')+'</span>':'';
+        return '<div class=src>'+(ok?'\u2705':'\u26a0\ufe0f')+' '+esc(r.text)+
           '<br><span class=note>'+esc(host(r.url))+', '+esc(r.note)+'</span>'+gate+'</div>';
       }).join('');
     });
@@ -1325,7 +1325,7 @@ const Activity={
     // drop the running/done state. Don't hide it.
     const a=this._el(); if(a)a.classList.remove('min','busy'); this._busy();
     const sec=this._sec(); if(sec)sec.classList.remove('running','done');
-    const l=this._log(); if(l)l.innerHTML='<div class=run-empty id=run-empty>Nothing running yet. This is the engine\\u2019s terminal: every operation, the research fan-out, grading, drafting, the board, shows here step by step and stays as collapsed history you can reopen.</div>'; }
+    const l=this._log(); if(l)l.innerHTML='<div class=run-empty id=run-empty>Nothing running yet. This is the engine\u2019s terminal: every operation, the research fan-out, grading, drafting, the board, shows here step by step and stays as collapsed history you can reopen.</div>'; }
 };
 const RESEARCH_STEPS=["Focusing your idea into one sharp thesis","Spinning up research across the web","Pulling sources on the market and competition","Grading every source for credibility","Flagging vendor-marketing spin","Re-sourcing the headline stats to primary sources","Scoring demand, market, and willingness to pay","Drafting your first offer"];
 const PDF_STEPS=["Applying your board's input","Pulling your graded evidence","Building the decision matrix","Laying out a modern, on-brand design","Typesetting your PDF"];
@@ -1350,7 +1350,7 @@ function qaHtml(qa){
 }
 async function buyPdf(){
   if(CFG.authEnabled&&!session){toast('Sign in to unlock your PDF.');signinEmail();return;}
-  if(!CFG.pdfBilling){toast('Billing isn\\'t set up yet.','err');return;}
+  if(!CFG.pdfBilling){toast('Billing isn\'t set up yet.','err');return;}
   try{
     const r=await fetch('/api/plan/'+SID+'/buy-pdf',{method:'POST',headers:authHeaders()});
     const d=await r.json();
@@ -1379,12 +1379,12 @@ const FEAT_LABEL={director_forge:'Forge custom directors',custom_directors:'Cust
 
 async function subscribe(tier){
   if(CFG.authEnabled&&!session){toast('Sign in to subscribe.');signinEmail();return;}
-  if(!CFG.subEnabled){toast('Billing isn\\u2019t set up yet.','err');return;}
+  if(!CFG.subEnabled){toast('Billing isn\u2019t set up yet.','err');return;}
   try{
     const r=await fetch('/api/subscribe',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({tier})});
     const d=await r.json();
     if(d.url){location.href=d.url;return;}          // → Stripe Checkout
-    if(d.current){toast('You\\u2019re already on that plan.');return;}
+    if(d.current){toast('You\u2019re already on that plan.');return;}
     toast(d.error||'Could not start checkout.','err');
   }catch(e){toast('Network error starting checkout.','err');}
 }
@@ -1394,25 +1394,25 @@ function _tierCard(t){
   const top=names[names.length-1]||'';
   const feats=(t.features||[]).map(f=>FEAT_LABEL[f]||f);
   return '<div class=tiercard style="border:1px solid '+(cur?'#2a7':'#ccc')+';border-radius:8px;padding:14px;flex:1;min-width:150px">'+
-    '<div style="font-weight:700">'+esc(t.label)+(cur?' <span style="color:#2a7">\\u2713 current</span>':'')+'</div>'+
+    '<div style="font-weight:700">'+esc(t.label)+(cur?' <span style="color:#2a7">\u2713 current</span>':'')+'</div>'+
     '<div style="font-size:1.5em;font-weight:700;margin:4px 0">$'+t.price+'<span style="font-size:.5em;opacity:.6">/mo</span></div>'+
     '<div style="font-size:.85em;opacity:.8;margin-bottom:8px">Models up to <b>'+esc(top)+'</b></div>'+
     (feats.length?'<ul style="font-size:.85em;margin:0 0 10px;padding-left:18px">'+feats.map(f=>'<li>'+esc(f)+'</li>').join('')+'</ul>':'<div style="font-size:.85em;opacity:.6;margin:0 0 10px">Core plan builder + PDF</div>')+
-    '<div style="font-size:.8em;opacity:.7;margin-bottom:10px">Polished PDF included \\u00b7 runs on our key</div>'+
-    (cur?'<button type=button disabled>Your plan</button>':'<button type=button onclick="subscribe(\\''+t.id+'\\')">Choose '+esc(t.label)+'</button>');
+    '<div style="font-size:.8em;opacity:.7;margin-bottom:10px">Polished PDF included \u00b7 runs on our key</div>'+
+    (cur?'<button type=button disabled>Your plan</button>':'<button type=button onclick="subscribe(\''+t.id+'\')">Choose '+esc(t.label)+'</button>');
 }
 function subMeterHtml(){
   const s=me&&me.subscription; if(!s||!s.cap_cents)return '';
   const pct=Math.min(100,Math.round(100*s.spent_cents/s.cap_cents));
-  const reset=s.reset_at?(' \\u00b7 resets '+new Date(s.reset_at).toLocaleDateString()):'';
-  return '<div style="margin:0 0 14px;font-size:.85em">This month\\u2019s allowance: <b>'+pct+'% used</b>'+reset+
+  const reset=s.reset_at?(' \u00b7 resets '+new Date(s.reset_at).toLocaleDateString()):'';
+  return '<div style="margin:0 0 14px;font-size:.85em">This month\u2019s allowance: <b>'+pct+'% used</b>'+reset+
     '<div style="height:6px;background:#eee;border-radius:3px;margin-top:4px;overflow:hidden"><div style="height:100%;width:'+pct+'%;background:'+(pct>=100?'#c33':'#2a7')+'"></div></div></div>';
 }
 function pricingModal(note){
   if(!subTiers().length){keyForm();return;}          // no tiers configured → fall back to BYOK
   document.getElementById('modal-title').textContent=isSub()?'Change your plan':'Keep building';
   const cards=subTiers().map(_tierCard).join('');
-  const byok=CFG.byokEnabled?'<div style="margin-top:14px;font-size:.9em">Prefer your own API key? <a href=# onclick="_closeModal();keyForm();return false">Bring your own key</a> \\u2014 free and unlimited, you pay your provider (pennies a plan). The polished PDF is '+pdfPriceStr()+' for 3 plans on that path.</div>':'';
+  const byok=CFG.byokEnabled?'<div style="margin-top:14px;font-size:.9em">Prefer your own API key? <a href=# onclick="_closeModal();keyForm();return false">Bring your own key</a> \u2014 free and unlimited, you pay your provider (pennies a plan). The polished PDF is '+pdfPriceStr()+' for 3 plans on that path.</div>':'';
   document.getElementById('modal-body').innerHTML=
     (note?'<p class=or style="margin:0 0 10px">'+esc(note)+'</p>':'')+(isSub()?subMeterHtml():'')+
     '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px">'+cards+'</div>'+byok;
@@ -1422,7 +1422,7 @@ function pricingModal(note){
 function fairUseModal(d){
   const reset=d&&d.resetAt?(' It resets '+new Date(d.resetAt).toLocaleDateString()+'.'):'';
   document.getElementById('modal-title').textContent='Monthly allowance used';
-  document.getElementById('modal-body').innerHTML='<p class=or style="margin:0 0 12px">You\\u2019ve used this month\\u2019s plan allowance on our key.'+esc(reset)+' Add your own API key to keep building for free, or wait for the reset.</p>';
+  document.getElementById('modal-body').innerHTML='<p class=or style="margin:0 0 12px">You\u2019ve used this month\u2019s plan allowance on our key.'+esc(reset)+' Add your own API key to keep building for free, or wait for the reset.</p>';
   document.getElementById('modal-actions').innerHTML='<button type=button class=ghost onclick="_closeModal()">OK</button>'+(CFG.byokEnabled?'<button type=button onclick="_closeModal();keyForm()">Add my key</button>':'');
   _openModal('#modal-actions button');
 }
@@ -1430,9 +1430,9 @@ function subPlanBlock(){   // the Account tab's subscription section
   if(isSub()){   // a live subscription shows regardless of whether Stripe is wired (dev grants via dev.py)
     const lbl=(me&&me.tier_label)||'your plan';
     const manage=CFG.subEnabled?'<div class=prow><button class=gbtn onclick=pricingModal()>Change plan</button><button class=gbtn onclick=manageBilling()>Manage / cancel</button></div>':'';
-    return '<p class=pnote>You\\u2019re on <b>'+esc(lbl)+'</b> \\u2014 runs on our key, polished PDF included.</p>'+subMeterHtml()+manage;
+    return '<p class=pnote>You\u2019re on <b>'+esc(lbl)+'</b> \u2014 runs on our key, polished PDF included.</p>'+subMeterHtml()+manage;
   }
-  if(!CFG.subEnabled)return '<p class=pnote>Subscriptions aren\\u2019t enabled here.'+(CFG.byokEnabled?' Bring your own key to build for free.':'')+'</p>';
+  if(!CFG.subEnabled)return '<p class=pnote>Subscriptions aren\u2019t enabled here.'+(CFG.byokEnabled?' Bring your own key to build for free.':'')+'</p>';
   return '<p class=pnote>Free on your own API key. Or subscribe monthly to run on our key (no key needed), polished PDF included.</p><div class=prow><button onclick=pricingModal()>See plans</button></div>';
 }
 async function manageBilling(){   // → Stripe billing portal (update card / cancel)
@@ -1447,7 +1447,7 @@ async function manageBilling(){   // → Stripe billing portal (update card / ca
 function gate(d){
   if(!d)return false;
   if(d.fairUse){fairUseModal(d);return true;}
-  if(d.upgrade){pricingModal('That\\u2019s a Pro feature (forge a custom director, adversarial stress-test). Upgrade, or add your own key.');return true;}
+  if(d.upgrade){pricingModal('That\u2019s a Pro feature (forge a custom director, adversarial stress-test). Upgrade, or add your own key.');return true;}
   if(d.needKey){ if(CFG.subEnabled&&!HAS_KEY){pricingModal();} else {keyForm();} return true; }
   return false;
 }
@@ -1462,7 +1462,7 @@ async function redeemCoupon(){
       await loadMe();                               // refresh credits
       toast('Code applied, PDF credits added.','ok');
       try{const pr=await fetch('/api/plan/'+SID,{headers:authHeaders()});render(await pr.json());}catch(e){}  // flip the button to Download
-    } else { toast(d.error||'That code isn\\'t valid.','err'); }
+    } else { toast(d.error||'That code isn\'t valid.','err'); }
   }catch(e){toast('Network error.','err');}
 }
 async function download(){
@@ -1497,18 +1497,18 @@ function openExportModal(){
   document.getElementById('modal-title').textContent='Take your data with you';
   document.getElementById('modal-body').innerHTML=
     `<p class=mfb-hint>Everything you've built so far is yours, free, at any point. Grab the plain-text file, or copy a prompt that lets any AI pick up exactly where you left off.</p>`+
-    `<div class=exp-row><button type=button class=mfb-go onclick="exportTxt();_closeModal()">\\u2b07 Download .txt</button>`+
-    `<button type=button class=ghost onclick=loadHandoff()>\\uD83D\\uDCCB As an LLM prompt</button></div>`+
+    `<div class=exp-row><button type=button class=mfb-go onclick="exportTxt();_closeModal()">\u2b07 Download .txt</button>`+
+    `<button type=button class=ghost onclick=loadHandoff()>\uD83D\uDCCB As an LLM prompt</button></div>`+
     `<div id=handoffwrap style="display:none"><div class=exp-lbl>Paste this into ChatGPT, Claude, or any model to continue where you left off:</div>`+
-    `<textarea id=handofftext class=handoff readonly rows=10>Loading\\u2026</textarea>`+
-    `<button type=button class=mfb-go onclick=copyHandoff()>\\uD83D\\uDCCB Copy prompt</button></div>`;
+    `<textarea id=handofftext class=handoff readonly rows=10>Loading\u2026</textarea>`+
+    `<button type=button class=mfb-go onclick=copyHandoff()>\uD83D\uDCCB Copy prompt</button></div>`;
   document.getElementById('modal-actions').innerHTML=`<button type=button class=ghost onclick=_closeModal()>Done</button>`;
   _openModal();
 }
 function loadHandoff(){
   const wrap=document.getElementById('handoffwrap'), ta=document.getElementById('handofftext');
   if(wrap)wrap.style.display='';
-  if(ta){ta.value='Building the prompt\\u2026';
+  if(ta){ta.value='Building the prompt\u2026';
     fetch('/api/plan/'+SID+'/handoff.txt',{headers:authHeaders()}).then(r=>r.ok?r.text():Promise.reject()).then(t=>{ta.value=t;ta.focus();ta.select();}).catch(()=>{ta.value='Could not build the prompt. Try the .txt download.';});}
 }
 function copyHandoff(){
@@ -1527,19 +1527,19 @@ async function exportTxt(){
   }catch(e){toast('Network error.','err');}
 }
 function esc(s){const d=document.createElement('div');d.textContent=s==null?'':s;return d.innerHTML;}
-function host(u){try{return new URL(u).hostname.replace(/^www\\./,'');}catch(e){return u;}}
+function host(u){try{return new URL(u).hostname.replace(/^www\./,'');}catch(e){return u;}}
 function isKeyErr(m){return /key was rejected|expired or invalid|update your key|401|user not found/i.test(m||'');}
 function mdToHtml(md){
   let h=esc(md==null?'':md);
   h=h.replace(/`([^`]+)`/g,'<code>$1</code>');
-  h=h.replace(/\\*\\*([^*]+)\\*\\*/g,'<strong>$1</strong>');
-  h=h.replace(/\\[([^\\]]+)\\]\\((https?:[^)\\s]+)\\)/g,'<a href="$2" target=_blank rel=noopener>$1</a>');   // [text](url) → embedded
-  h=h.replace(/\\[(https?:[^\\]\\s]+)\\]/g,function(_,u){return '<a href="'+u+'" target=_blank rel=noopener>'+host(u)+'</a>';});  // [bare url] → linked hostname, not the raw URL
-  h=h.replace(/(^|[\\s(])(https?:\\/\\/[^\\s<)]+)/g,function(_,pre,u){return pre+'<a href="'+u+'" target=_blank rel=noopener>'+host(u)+'</a>';});  // raw url → linked hostname
-  const lines=h.split('\\n'); const out=[]; let inList=false; let i=0;
-  const cells=function(r){return r.replace(/^\\s*\\|/,'').replace(/\\|\\s*$/,'').split('|').map(function(c){return c.trim();});};
-  const isRow=function(s){return /^\\s*\\|.*\\|\\s*$/.test(s);};
-  const isSep=function(s){return /^\\s*\\|?[\\s:|-]*-{2,}[\\s:|-]*$/.test(s);};
+  h=h.replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>');
+  h=h.replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g,'<a href="$2" target=_blank rel=noopener>$1</a>');   // [text](url) → embedded
+  h=h.replace(/\[(https?:[^\]\s]+)\]/g,function(_,u){return '<a href="'+u+'" target=_blank rel=noopener>'+host(u)+'</a>';});  // [bare url] → linked hostname, not the raw URL
+  h=h.replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g,function(_,pre,u){return pre+'<a href="'+u+'" target=_blank rel=noopener>'+host(u)+'</a>';});  // raw url → linked hostname
+  const lines=h.split('\n'); const out=[]; let inList=false; let i=0;
+  const cells=function(r){return r.replace(/^\s*\|/,'').replace(/\|\s*$/,'').split('|').map(function(c){return c.trim();});};
+  const isRow=function(s){return /^\s*\|.*\|\s*$/.test(s);};
+  const isSep=function(s){return /^\s*\|?[\s:|-]*-{2,}[\s:|-]*$/.test(s);};
   while(i<lines.length){
     const ln=lines[i]; let m;
     // markdown table: a '| ... |' header row followed by a '|---|---|' separator
@@ -1551,9 +1551,9 @@ function mdToHtml(md){
       t+=body.map(function(r){return '<tr>'+r.map(function(c){return '<td>'+c+'</td>';}).join('')+'</tr>';}).join('');
       out.push(t+'</tbody></table>'); continue;
     }
-    if(/^\\s*(-{3,}|\\*{3,}|_{3,})\\s*$/.test(ln)){if(inList){out.push('</ul>');inList=false;}out.push('<hr>');i++;continue;}  // --- → real rule, not text
-    if(m=ln.match(/^(#{1,6})\\s+(.*)$/)){if(inList){out.push('</ul>');inList=false;}const lvl=Math.min(m[1].length+3,5);out.push('<h'+lvl+'>'+m[2]+'</h'+lvl+'>');i++;continue;}
-    if(m=ln.match(/^\\s*[-*]\\s+(.*)$/)){if(!inList){out.push('<ul>');inList=true;}out.push('<li>'+m[1]+'</li>');i++;continue;}
+    if(/^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(ln)){if(inList){out.push('</ul>');inList=false;}out.push('<hr>');i++;continue;}  // --- → real rule, not text
+    if(m=ln.match(/^(#{1,6})\s+(.*)$/)){if(inList){out.push('</ul>');inList=false;}const lvl=Math.min(m[1].length+3,5);out.push('<h'+lvl+'>'+m[2]+'</h'+lvl+'>');i++;continue;}
+    if(m=ln.match(/^\s*[-*]\s+(.*)$/)){if(!inList){out.push('<ul>');inList=true;}out.push('<li>'+m[1]+'</li>');i++;continue;}
     if(ln.trim()===''){if(inList){out.push('</ul>');inList=false;}i++;continue;}
     if(inList){out.push('</ul>');inList=false;}
     out.push('<p>'+ln+'</p>');i++;
@@ -1596,13 +1596,13 @@ function authModal(){
 }
 function authGo(kind){_closeModal();if(kind==='google')signinGoogle();else signinEmail();}
 async function keyModal(){
-  if(!CFG.byokEnabled){toast('Bring-your-own-key isn\\u2019t turned on yet.','err');return;}
+  if(!CFG.byokEnabled){toast('Bring-your-own-key isn\u2019t turned on yet.','err');return;}
   if(CFG.authEnabled&&!session){authModal();return;}   // BYOK is account-scoped → sign in first
   let d; try{const r=await fetch('/api/key',{headers:authHeaders()});d=await r.json();}catch(e){d={key:null};}
   if(d&&d.key){
     document.getElementById('modal-title').textContent='Your API key';
     document.getElementById('modal-body').innerHTML=
-      `<p class=or style="margin:0 0 12px">You\\u2019re running on your own <b>${esc(d.key.provider)}</b> key (\\u2022\\u2022\\u2022\\u2022${esc(d.key.last4)}). Swap or remove it any time.</p>`+
+      `<p class=or style="margin:0 0 12px">You\u2019re running on your own <b>${esc(d.key.provider)}</b> key (\u2022\u2022\u2022\u2022${esc(d.key.last4)}). Swap or remove it any time.</p>`+
       `<div class=authgate><button class=gbtn onclick="keyForm()">Replace key</button>`+
       `<button class=gbtn onclick="removeKey()">Remove key</button></div>`;
     document.getElementById('modal-actions').innerHTML=`<button type=button onclick="_closeModal()">Done</button>`;
@@ -1614,11 +1614,11 @@ function setKeyProv(p){
   KEY_PROV=(p==='anthropic')?'anthropic':'openrouter';
   const wrap=document.getElementById('keyprov');
   if(wrap)wrap.querySelectorAll('button').forEach(b=>b.classList.toggle('on',b.dataset.p===KEY_PROV));
-  const inp=document.getElementById('keyinput'); if(inp)inp.placeholder=(KEY_PROV==='anthropic')?'sk-ant-\\u2026':'sk-or-v1-\\u2026';
+  const inp=document.getElementById('keyinput'); if(inp)inp.placeholder=(KEY_PROV==='anthropic')?'sk-ant-\u2026':'sk-or-v1-\u2026';
   const help=document.getElementById('keyprovhelp');
   if(help)help.innerHTML=(KEY_PROV==='anthropic')
-    ?'Get it at <a href="https://console.anthropic.com/settings/keys" target=_blank rel=noopener>Anthropic \\u2192 API keys</a> (Claude direct, all tiers, billed by Anthropic).'
-    :'Get it at <a href="https://openrouter.ai/keys" target=_blank rel=noopener>OpenRouter \\u2192 Keys</a> (one key fronts every model + cited web search).';
+    ?'Get it at <a href="https://console.anthropic.com/settings/keys" target=_blank rel=noopener>Anthropic \u2192 API keys</a> (Claude direct, all tiers, billed by Anthropic).'
+    :'Get it at <a href="https://openrouter.ai/keys" target=_blank rel=noopener>OpenRouter \u2192 Keys</a> (one key fronts every model + cited web search).';
 }
 function keyPrefixDetect(v){v=(v||'').trim();if(v.indexOf('sk-ant-')===0)setKeyProv('anthropic');else if(v.indexOf('sk-or-')===0)setKeyProv('openrouter');}
 function keyForm(){
@@ -1626,9 +1626,9 @@ function keyForm(){
   document.getElementById('modal-body').innerHTML=
     `<p class=or style="margin:0 0 10px">Hook up your own key to build your plan and use the full suite of tools: plans, branches, the board, chat, and PDF export. Pick your provider, paste a key, and you pay them directly (usually pennies a plan).</p>`+
     `<div class=modesw id=keyprov role=group aria-label="Key provider" style="margin:0 0 12px"><button type=button data-p=openrouter onclick="setKeyProv('openrouter')">OpenRouter</button><button type=button data-p=anthropic onclick="setKeyProv('anthropic')">Anthropic</button></div>`+
-    `<ol class=keysteps><li><span id=keyprovhelp></span></li><li>Create a key and copy it</li><li>Paste it below and save \\u2014 we\\u2019ll test it before storing</li></ol>`+
+    `<ol class=keysteps><li><span id=keyprovhelp></span></li><li>Create a key and copy it</li><li>Paste it below and save \u2014 we\u2019ll test it before storing</li></ol>`+
     `<label for=keyinput class=sr-only>Your API key</label>`+
-    `<input id=keyinput type=password placeholder="sk-or-v1-\\u2026" autocomplete=off spellcheck=false oninput="keyPrefixDetect(this.value)" style="margin:4px 0 2px">`+
+    `<input id=keyinput type=password placeholder="sk-or-v1-\u2026" autocomplete=off spellcheck=false oninput="keyPrefixDetect(this.value)" style="margin:4px 0 2px">`+
     `<div class=err id=keyerr></div>`;
   document.getElementById('modal-actions').innerHTML=
     `<button type=button class=ghost onclick="_closeModal()">Cancel</button>`+
@@ -1639,13 +1639,13 @@ function keyForm(){
 async function saveKey(){
   const inp=document.getElementById('keyinput'),btn=document.getElementById('keysave'),er=document.getElementById('keyerr');
   const key=(inp.value||'').trim(); er.textContent='';
-  if(key.length<8){er.textContent='That doesn\\u2019t look like a key.';return;}
-  btn.disabled=true;btn.textContent='Validating\\u2026';
+  if(key.length<8){er.textContent='That doesn\u2019t look like a key.';return;}
+  btn.disabled=true;btn.textContent='Validating\u2026';
   try{
     const r=await fetch('/api/key',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({provider:KEY_PROV,key})});  // chosen provider (server falls back to prefix detection)
     const d=await r.json();
     if(!r.ok){er.textContent=d.error||'Could not save the key.';btn.disabled=false;btn.textContent='Save & validate';return;}
-    HAS_KEY=true;toast('Key saved \\u2014 build as many plans as you want. \\u2713');_afterKeyChange();
+    HAS_KEY=true;toast('Key saved \u2014 build as many plans as you want. \u2713');_afterKeyChange();
   }catch(e){er.textContent='Network error.';btn.disabled=false;btn.textContent='Save & validate';}
 }
 async function removeKey(){
@@ -1728,9 +1728,9 @@ function planCardHtml(p,total){
 function fileCardHtml(p){
   const date=esc(new Date(p.created_at).toLocaleDateString());
   const acts=[];
-  if(p.done&&p.pdf_unlocked)acts.push(`<button onclick="resumeDownload('${p.id}')">\\u2b07 Polished PDF</button>`);
-  if(p.done)acts.push(`<button class=gbtn onclick="resumeZip('${p.id}')">\\u2b07 Raw files (.zip)</button>`);
-  acts.push(`<button class=gbtn onclick="openExportFor('${p.id}')">\\uD83D\\uDCCB LLM prompt</button>`);
+  if(p.done&&p.pdf_unlocked)acts.push(`<button onclick="resumeDownload('${p.id}')">\u2b07 Polished PDF</button>`);
+  if(p.done)acts.push(`<button class=gbtn onclick="resumeZip('${p.id}')">\u2b07 Raw files (.zip)</button>`);
+  acts.push(`<button class=gbtn onclick="openExportFor('${p.id}')">\uD83D\uDCCB LLM prompt</button>`);
   return `<div class=pcard><div class=pcard-main><div class=idea>${esc((p.idea||'Untitled').slice(0,90))}</div><div class=meta>${p.done?'Finished':'In progress'} · ${date}</div></div><div class=act>${acts.join('')}</div></div>`;
 }
 function resumeZip(id){SID=id;downloadZip();}                 // set the active plan, then reuse the existing exporters
@@ -1748,11 +1748,11 @@ function renderProfile(pd,key){
     body=`<div class=psec-head><h3>Projects</h3><button onclick=newPlan()>+ New plan</button></div>${rows}`;
   }else if(PROFILE_TAB==='files'){
     const rows=pd.plans.length?pd.plans.map(p=>fileCardHtml(p)).join(''):`<p class=empty>Nothing here yet. Build a plan and your files show up here.</p>`;
-    body=`<div class=psec-head><h3>My files</h3></div><p class=pnote>Re-download anything you\\u2019ve made. The raw export and the LLM hand-off prompt are always free; the polished PDF is here once you\\u2019ve unlocked it.</p>${rows}`;
+    body=`<div class=psec-head><h3>My files</h3></div><p class=pnote>Re-download anything you\u2019ve made. The raw export and the LLM hand-off prompt are always free; the polished PDF is here once you\u2019ve unlocked it.</p>${rows}`;
   }else if(PROFILE_TAB==='api'){
     body=!CFG.byokEnabled
-      ? `<p class=pnote>Bring-your-own-key isn\\u2019t enabled here.</p>`
-      : (key?`<p class=pnote>Running on your own <b>${esc(key.provider)}</b> key (\\u2022\\u2022\\u2022\\u2022${esc(key.last4)}).</p><div class=prow><button class=gbtn onclick=keyForm()>Replace key</button><button class=gbtn onclick=removeKey()>Remove key</button></div>`
+      ? `<p class=pnote>Bring-your-own-key isn\u2019t enabled here.</p>`
+      : (key?`<p class=pnote>Running on your own <b>${esc(key.provider)}</b> key (\u2022\u2022\u2022\u2022${esc(key.last4)}).</p><div class=prow><button class=gbtn onclick=keyForm()>Replace key</button><button class=gbtn onclick=removeKey()>Remove key</button></div>`
             :`<p class=pnote>No key yet. Add your own OpenRouter or Anthropic key to build plans and use every tool.</p><div class=prow><button onclick=keyForm()>Add a key</button></div>`);
   }else{
     body=`<div class=acct-block><div class=acct-lbl>Contact</div><p class=pcontact>${esc(pd.email||'')}</p></div>`+
@@ -1762,7 +1762,7 @@ function renderProfile(pd,key){
   }
   document.getElementById('profile').innerHTML=
     `<div class=profilewrap>`+
-    `<div class=prof-top><h2>Profile</h2><button class=link onclick=newPlan()>\\u2190 Back</button></div>`+
+    `<div class=prof-top><h2>Profile</h2><button class=link onclick=newPlan()>\u2190 Back</button></div>`+
     `<div class=ptabs2 role=tablist>${tabbar}</div>`+
     `<section class=psec>${body}</section>`+
     `</div>`;
@@ -1790,7 +1790,7 @@ async function resume(id){
 }
 function resumeDownload(id){SID=id;download();}
 async function deletePlan(id){
-  if(!await uiConfirm('Delete this plan?','This permanently removes the plan. It won\\'t free up a free build.','Delete'))return;
+  if(!await uiConfirm('Delete this plan?','This permanently removes the plan. It won\'t free up a free build.','Delete'))return;
   try{
     const r=await fetch('/api/plan/'+id+'/delete',{method:'POST',headers:authHeaders()});
     if(!r.ok){toast('Could not delete.','err');return;}
@@ -1810,13 +1810,13 @@ async function sharePlan(id){
 }
 function banner(msg){const b=document.getElementById('banner');b.textContent=msg;b.style.display='block';}
 function openDisclaimer(){
-  document.getElementById('modal-title').textContent='Just so we\\u2019re clear';
+  document.getElementById('modal-title').textContent='Just so we\u2019re clear';
   document.getElementById('modal-body').innerHTML=
     `<p>This is just for fun. Do your research, and talk to your lawyer, your family, or your local deity before you put any real time or money into a new business.</p>`+
     `<p><b>AI is great at being confidently wrong.</b> It will hand you a polished, sure-sounding plan whether or not the idea holds up. Treat everything here as a starting point to pressure-test, not as advice.</p>`+
     `<p>People have talked themselves into real trouble taking a chatbot too seriously. A few reads on that:</p>`+
     `<ul class=disclinks>`+
-    `<li><a href="https://www.google.com/search?q=%22AI+psychosis%22+chatbot+case+studies" target=_blank rel=noopener>Reported cases of \\u201cAI psychosis\\u201d</a></li>`+
+    `<li><a href="https://www.google.com/search?q=%22AI+psychosis%22+chatbot+case+studies" target=_blank rel=noopener>Reported cases of \u201cAI psychosis\u201d</a></li>`+
     `<li><a href="https://www.google.com/search?q=chatbot+reinforcing+delusions+mental+health" target=_blank rel=noopener>How chatbots can reinforce delusions</a></li>`+
     `</ul>`;
   document.getElementById('modal-actions').innerHTML=`<button type=button onclick="_closeModal()">Got it</button>`;
@@ -1840,9 +1840,9 @@ async function initAuth(){
 }
 function routeFromPath(){   // deep-link / bookmark / revisit / back-fwd for /plan/{id} and /account/<tab>
   const path=location.pathname||'';
-  let m=path.match(/^\\/plan\\/([a-z0-9]+)/i);
+  let m=path.match(/^\/plan\/([a-z0-9]+)/i);
   if(m&&m[1]){resume(m[1]);return;}
-  m=path.match(/^\\/account(?:\\/([a-z-]+))?\\/?$/i);
+  m=path.match(/^\/account(?:\/([a-z-]+))?\/?$/i);
   if(m){
     if(CFG.authEnabled&&!session){_bootDone();show('intake');renderBoardPick();gateIntake();authModal();return;}
     // render the profile first, THEN clear the boot overlay (no landing flash); replace: URL already set
@@ -1858,8 +1858,8 @@ window.addEventListener('popstate',routeFromPath);   // browser back/forward dri
 function maybeStepHint(){
   try{if(localStorage.getItem('filg_seen_stephint'))return;}catch(e){}
   const el=document.getElementById('stephint'); if(!el||el.classList.contains('show'))return;
-  el.innerHTML=`<div>Two ways forward from here: <b>I'm with you \\u2192</b> locks this part in and builds the next one. `+
-    `<b>\\u21bb Not feeling it</b> redraws this part (add a note to steer it). You can branch back to any earlier part from the plan tree.</div>`+
+  el.innerHTML=`<div>Two ways forward from here: <b>I'm with you \u2192</b> locks this part in and builds the next one. `+
+    `<b>\u21bb Not feeling it</b> redraws this part (add a note to steer it). You can branch back to any earlier part from the plan tree.</div>`+
     `<button type=button class=sh-got onclick=dismissStepHint()>Got it</button>`;
   el.classList.add('show');
 }
@@ -1878,13 +1878,13 @@ function dismissWelcome(){const el=document.getElementById('welcomepop');if(el)e
   const i=document.getElementById('idea'); if(i)i.focus();}
 // ── In-app product help chat (standard website help bubble; runs on the user's key) ──
 let HELP_MSGS=[];
-function helpBubble(m){return `<div class="help-msg ${m.role==='user'?'u':'a'}">${esc(m.content).replace(/\\n/g,'<br>')}</div>`;}
+function helpBubble(m){return `<div class="help-msg ${m.role==='user'?'u':'a'}">${esc(m.content).replace(/\n/g,'<br>')}</div>`;}
 function renderHelp(){const b=document.getElementById('help-body'); if(!b)return; b.innerHTML=HELP_MSGS.map(helpBubble).join(''); b.scrollTop=b.scrollHeight;}
 function toggleHelp(){
   const p=document.getElementById('helppanel'); if(!p)return;
   const open=p.classList.toggle('open');
   if(open){
-    if(!HELP_MSGS.length){HELP_MSGS.push({role:'assistant',content:"Hi! I can help you use FILG \\u2014 building a plan, the buttons, the board, exporting, or your key. What do you need?"});renderHelp();}
+    if(!HELP_MSGS.length){HELP_MSGS.push({role:'assistant',content:"Hi! I can help you use FILG \u2014 building a plan, the buttons, the board, exporting, or your key. What do you need?"});renderHelp();}
     setTimeout(()=>{const i=document.getElementById('help-input'); if(i)i.focus();},30);
   }
 }
@@ -1894,7 +1894,7 @@ async function sendHelp(){
   if(!CFG.freeTaste){if(!await requireKey())return;}    // no hosted free path → must use your own key
   i.value=''; HELP_MSGS.push({role:'user',content:msg}); renderHelp();
   const b=document.getElementById('help-body');
-  const wait=document.createElement('div'); wait.className='help-msg a'; wait.textContent='\\u2026'; if(b){b.appendChild(wait);b.scrollTop=b.scrollHeight;}
+  const wait=document.createElement('div'); wait.className='help-msg a'; wait.textContent='\u2026'; if(b){b.appendChild(wait);b.scrollTop=b.scrollHeight;}
   try{
     const r=await fetch('/api/help',{method:'POST',headers:{'Content-Type':'application/json',...authHeaders()},body:JSON.stringify({message:msg,history:HELP_MSGS.slice(-8)})});
     const d=await r.json(); wait.remove();

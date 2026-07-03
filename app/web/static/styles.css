@@ -564,8 +564,8 @@ html.route-plan #bootload{display:flex;align-items:center;justify-content:center
 .atask.done{opacity:.7}
 .ah{display:flex;align-items:center;gap:9px;width:100%;background:none;border:0;color:var(--ink);font:inherit;font-size:13px;font-weight:700;padding:8px 12px;cursor:pointer;text-align:left}
 .ah .astat{width:13px;flex:none;text-align:center;color:var(--warn)}
-.ah .astat::before{content:"\\25cf";font-size:10px}
-.atask.done .ah .astat::before{content:"\\2713";color:var(--ok);font-size:13px}
+.ah .astat::before{content:"\25cf";font-size:10px}
+.atask.done .ah .astat::before{content:"\2713";color:var(--ok);font-size:13px}
 .ah .alabel{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ah .caret{flex:none;font-size:11px;opacity:.6}
 .atask.collapsed .abody{display:none}
@@ -574,8 +574,8 @@ html.route-plan #bootload{display:flex;align-items:center;justify-content:center
 .aline.done{color:#444}
 .aline.active{color:var(--ink);font-weight:600}
 .aline .aglyph{width:12px;flex:none;text-align:center;color:var(--warn);margin-top:1px}
-.aline.active .aglyph::before{content:"\\203A";font-weight:800}
-.aline.done .aglyph::before{content:"\\2713";color:var(--ok)}
+.aline.active .aglyph::before{content:"\203A";font-weight:800}
+.aline.done .aglyph::before{content:"\2713";color:var(--ok)}
 .aline .atext{white-space:normal;overflow-wrap:anywhere;min-width:0}
 .authgate{margin:6px 0 2px}.authgate button{width:100%;margin-bottom:8px}
 .gbtn{display:flex;align-items:center;justify-content:center;gap:10px;background:#fff;color:var(--ink);border:1px solid #888;font-weight:700}
