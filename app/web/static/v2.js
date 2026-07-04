@@ -185,27 +185,38 @@ function setMode(m){
 async function sendPrompt(){
   const box=$('ws-box'), prompt=box.value.trim(); if(!prompt) return;
   $('ws-err').textContent='';
+  // an armed "Pivot from here" ghost: the input IS the pivot feedback — spread from that node directly
+  if(PIVOT_FROM){ const from=PIVOT_FROM; box.value=''; clearGhost();
+    toast('Pivoting from there.'); return pivotSpread(from,prompt); }
+  // browsing an earlier node? it rides along as context (a steer pivots from it, a question is about it)
+  const {t}=nodesOf(S);
+  const fromNode=(FOCUS&&FOCUS!==t.active)?FOCUS:null;
   const btn=$('ws-send'); btn.disabled=true;
   btn.innerHTML='<span class="spin sendspin" aria-hidden=true></span> Routing…';   // instant feedback
-  const {ok,d}=await api('POST',`/api/plan/${SID}/route`,{prompt,mode:MODE});
+  const body={prompt,mode:MODE}; if(fromNode)body.node=fromNode;
+  const {ok,d}=await api('POST',`/api/plan/${SID}/route`,body);
   btn.disabled=false; btn.textContent='Send →';
   if(!ok){ if(gateV2(d))return; $('ws-err').textContent=(d&&d.error)||'Could not route that.'; return; }
   box.value='';
   if(d.fork){ PENDING_FORK=d.fork; focusActive(true); return; }
   const dec=d.decision||{};
   toast(dec.say||'On it.');
-  await dispatch(dec);
+  await dispatch(dec,fromNode);
 }
-async function dispatch(dec){
+async function dispatch(dec,fromNode){
   switch(dec.intent){
     case 'commit':
       if(dec.confirm&&!confirm('Commit to the full research + build?'))return;
-      return commit();
-    case 'diverge': return reBrainstorm(S.idea);
-    case 'restart_keep': return reBrainstorm((dec.keep?dec.keep+' — ':'')+S.idea);
+      return commit(null,fromNode);
+    case 'diverge': return fromNode?pivotSpread(fromNode,S.idea):reBrainstorm(S.idea);
+    case 'restart_keep':
+      return fromNode?pivotSpread(fromNode,(dec.keep?dec.keep+' — ':'')+S.idea)
+                     :reBrainstorm((dec.keep?dec.keep+' — ':'')+S.idea);
     case 'restart_hard': if(confirm('Throw it all out and start fresh?')) v2newPlan(); return;
     case 'ask': setMode(['research','board','help'].includes(dec.target)?dec.target:'build'); return;
-    case 'steer': default: return steer(dec.steer||'');
+    case 'steer': default:
+      if(fromNode)return pivotSpread(fromNode,dec.steer||'');   // feedback on an earlier node = pivot from it
+      return steer(dec.steer||'');
   }
 }
 async function steer(note){
@@ -220,8 +231,10 @@ async function steer(note){
 // ── Funnel actions ───────────────────────────────────────────────────────────
 async function reBrainstorm(idea){
   if(SID){   // same tree: the new spread branches off the pivot point, the old branch stays visible
+    beginWip('Spreading new directions',{parent:pivotParent()});
     const {ok,d}=await api('POST',`/api/plan/${SID}/rebrainstorm`,{idea});
-    if(!ok){ if(gateV2(d))return; toast((d&&d.error)||'Could not re-spread.','err'); return; }
+    endWip();
+    if(!ok){ render(S); if(gateV2(d))return; toast((d&&d.error)||'Could not re-spread.','err'); return; }
     SEL=new Set(); PENDING_FORK=null; render(d); return;
   }
   const {ok,d}=await api('POST','/api/brainstorm',{idea,stack:STACK_CUR});
@@ -230,14 +243,28 @@ async function reBrainstorm(idea){
 }
 async function doMerge(){
   if(!SEL.size){toast('Pick at least one direction.','err');return;}
-  const {ok,d}=await api('POST',`/api/plan/${SID}/merge`,{options:[...SEL]});
+  const picks=[...SEL];
+  const {ok,d}=await api('POST',`/api/plan/${SID}/merge`,{options:picks});
   if(!ok){ if(gateV2(d))return; toast((d&&d.error)||'Could not merge.','err'); return; }
-  beginWip('Merging your picks + first-pass research'); poll();
+  beginWip('Merging your picks + first-pass research',{join:picks}); poll();
 }
-async function commit(thesis){
-  const {ok,d}=await api('POST',`/api/plan/${SID}/commit`,thesis?{thesis}:{});
+async function commit(thesis,fromNode){
+  const body={}; if(thesis)body.thesis=thesis; if(fromNode)body.node=fromNode;   // build out of THAT node
+  const {ok,d}=await api('POST',`/api/plan/${SID}/commit`,body);
   if(!ok){ if(gateV2(d))return; toast((d&&d.error)||'Could not start the build.','err'); return; }
-  beginWip('Deep research: pulling + grading sources'); poll();
+  beginWip('Deep research: pulling + grading sources',{parent:fromNode||(nodesOf(S).t||{}).active}); poll();
+}
+// ── Pivot-from-a-node: an armed ghost child ("enter feedback to pivot…") + the direct spread ──
+let PIVOT_FROM=null;
+function pivotFromHere(id){ PIVOT_FROM=id; FOCUS=null; BROWSING=true; renderGraph();
+  const b=$('ws-box'); if(b){b.placeholder='Your pivot: what should change from here?';b.focus();} }
+function clearGhost(){ PIVOT_FROM=null; const b=$('ws-box'); if(b)b.placeholder='Tell me what to change, or just talk to it…'; renderGraph(); }
+async function pivotSpread(fromNode,idea){
+  beginWip('Spreading new directions',{parent:pivotParent(fromNode)});
+  const {ok,d}=await api('POST',`/api/plan/${SID}/rebrainstorm`,{idea:idea+' — '+(S&&S.idea||''),node:fromNode});
+  endWip();
+  if(!ok){ render(S); if(gateV2(d))return; toast((d&&d.error)||'Could not pivot.','err'); return; }
+  SEL=new Set(); PENDING_FORK=null; render(d);
 }
 function commitFromBrainstorm(){
   if(!SEL.size){toast('Check a direction to build, or refine first.','err');return;}
@@ -246,7 +273,7 @@ function commitFromBrainstorm(){
 }
 async function keepGoing(){ await run(`/api/plan/${SID}/next`,{feedback:''},'Writing the next part'); }
 async function run(url,body,label){
-  beginWip(label);
+  beginWip(label,{parent:(nodesOf(S).t||{}).active});
   const {ok,d}=await api('POST',url,body);
   endWip();
   if(!ok){ render(S); if(gateV2(d))return; toast((d&&d.error)||'Something went wrong.','err'); return; }
@@ -268,14 +295,19 @@ const NW=190, NFOCUS=560, NH=58, COLW=225, ROWH=125, PADX=70, PADY=48;
 const WIP_BOX=210;   // an expanded working node's height — its row grows so children never sit under it
 let VIEW={x:0,y:0,k:1}, GSEEN=new Set(), FOCUS=null, BROWSING=false, LAST_ACTIVE=null, WAS_RESEARCHING=false;
 let WIP_LABEL=null, WIP_T0=null, WIPLOG=[], LANES=[], LANES_DONE=new Set(), PROG_N=0;
+let WIP_PENDING=null;   // {label,parent,join} — the node BEING BORN; rendered nodes never show loading
 const NODECACHE={}, NODELOG={};   // fetched past-node content · per-node build-log stash
 function resetGraph(){ GSEEN=new Set(); FOCUS=null; BROWSING=false; LAST_ACTIVE=null; WAS_RESEARCHING=false;
-  WIP_LABEL=null; WIPLOG=[]; LANES=[]; LANES_DONE=new Set(); PROG_N=0;
+  WIP_LABEL=null; WIP_PENDING=null; WIPLOG=[]; LANES=[]; LANES_DONE=new Set(); PROG_N=0;
   Object.keys(NODECACHE).forEach(k=>delete NODECACHE[k]); Object.keys(NODELOG).forEach(k=>delete NODELOG[k]);
   const gn=$('gnodes'); if(gn)gn.innerHTML=''; const ge=$('gedges'); if(ge)ge.innerHTML=''; }
-function beginWip(label){ WIP_LABEL=label; WIP_T0=Date.now(); WIPLOG=[]; LANES=[]; LANES_DONE=new Set();
-  LEAF_OPEN=new Set(); FOCUS=null; BROWSING=false; PREFOCUS_VIEW=null; renderGraph(); }   // content collapses back into the node, camera pulls out
-function endWip(){ WIP_LABEL=null; WIP_T0=null; }
+function beginWip(label,opts){ WIP_LABEL=label; WIP_T0=Date.now(); WIPLOG=[]; LANES=[]; LANES_DONE=new Set();
+  WIP_PENDING={label,parent:(opts&&opts.parent)||null,join:(opts&&opts.join)||null};
+  LEAF_OPEN=new Set(); FOCUS=null; BROWSING=false; PREFOCUS_VIEW=null; renderGraph(); }   // content collapses back, the pending node takes the stage
+function endWip(){ WIP_LABEL=null; WIP_T0=null; WIP_PENDING=null; }
+function pivotParent(id){   // where a re-spread visually grows from (mirrors the server's sibling rule)
+  const {m,t}=nodesOf(S); const a=m[id||t.active]||{};
+  return ['brainstorm','option'].includes(a.kind)?(a.parent||t.active):(a.id||t.active); }
 function nodesOf(s){const t=(s&&s.tree)||{};const m={};(t.nodes||[]).forEach(n=>m[n.id]=n);return {m,t};}
 function pathSetOf(m,active){const set={};let cur=active;
   while(cur!=null&&m[cur]){set[cur]=1;
@@ -289,9 +321,10 @@ function nodeLabel(n){
   if(n.kind==='brainstorm')return 'A few directions';
   if(n.kind==='refined')return 'Refined idea';
   if(n.kind==='fork')return 'Fork';
+  if(n.kind==='pivot')return n.title||'enter feedback to pivot…';
   return n.title||('Part '+((n.step||0)+1));
 }
-const KICON={idea:'◉',brainstorm:'✳',option:'◇',refined:'◆',fork:'⑂',section:'▤'};
+const KICON={idea:'◉',brainstorm:'✳',option:'◇',refined:'◆',fork:'⑂',pivot:'⑂',wip:'⚙',section:'▤'};
 function drainProgress(s){   // stream progress into the working node (sentinels drive the leaflets)
   const prog=s.progress||[];
   for(let i=PROG_N;i<prog.length;i++){
@@ -310,7 +343,7 @@ function layoutGraph(m,wip){
   // a refined node with `selected` is a JOIN of those option branches: it sits BELOW the options it
   // merged, centered between them, with edges from each — not a sibling branch off the brainstorm.
   const joins={};
-  Object.values(m).forEach(n=>{ if(n.kind==='refined'&&Array.isArray(n.selected)){
+  Object.values(m).forEach(n=>{ if(Array.isArray(n.selected)){
     const sel=n.selected.filter(id=>m[id]); if(sel.length)joins[n.id]=sel; }});
   const depth={},pos={};
   const dq=[...roots]; roots.forEach(r=>depth[r]=0);
@@ -338,7 +371,15 @@ function layoutGraph(m,wip){
 function renderGraph(){
   const s=S; const gn=$('gnodes'), ge=$('gedges'); if(!s||!gn)return;
   const {m,t}=nodesOf(s); const active=t.active;
-  const wip=(WIP_LABEL||s.status==='researching')?active:null;
+  if(PIVOT_FROM&&m[PIVOT_FROM])m._ghost={id:'_ghost',parent:PIVOT_FROM,kind:'pivot',
+    title:'enter feedback to pivot…',step:0};   // the armed pivot: a blank child awaiting your words
+  const working=!!(WIP_LABEL||s.status==='researching');
+  if(working&&!WIP_PENDING)WIP_PENDING={label:WIP_LABEL||'Working',parent:active,join:null};   // e.g. reload mid-build
+  if(!working)WIP_PENDING=null;
+  if(WIP_PENDING)m._wip={id:'_wip',kind:'wip',step:0,title:WIP_PENDING.label,
+    parent:WIP_PENDING.join?null:(WIP_PENDING.parent||active),
+    selected:WIP_PENDING.join||undefined};   // the node being born — loading lives HERE
+  const wip=WIP_PENDING?'_wip':null;
   const {pos,kids,joins}=layoutGraph(m,wip);
   const onPath=pathSetOf(m,active);
   // nodes: keyed divs, moved (CSS transition) or created (.enter → fade in)
@@ -352,26 +393,27 @@ function renderGraph(){
     // selection state on options: green rim = picked (checked now, or joined by a refined node);
     // red-dimmed rim = passed over once its siblings were decided (merge running or join landed)
     const isOpt=n.kind==='option';
-    const sel=isOpt&&(JOINSEL.has(n.id)||(SEL.has(n.id)&&(wip===n.parent||S.stage==='brainstorm')));
-    const decided=isOpt&&(Object.values(m).some(x=>x.kind==='refined'&&x.parent===n.parent||joins[x.id]&&m[x.id].parent===n.parent)
-      ||(wip===n.parent&&SEL.size>0)||JOINSEL.size>0);
+    const sel=isOpt&&(JOINSEL.has(n.id)||(SEL.has(n.id)&&S.stage==='brainstorm'));
+    const decided=isOpt&&(Object.values(m).some(x=>x.kind==='refined'&&x.parent===n.parent)||JOINSEL.size>0);
     const rej=decided&&!sel&&!onPath[n.id];
     let el=gn.querySelector(`.gnode[data-id="${n.id}"]`);
     const fresh=!el;
     if(fresh){ el=document.createElement('div'); el.dataset.id=n.id; el.classList.add('enter');
       el.addEventListener('click',e=>{ if(!e.target.closest('.nbody'))gNodeClick(n.id); }); gn.appendChild(el); }
-    el.className='gnode'+(fresh?' enter':'')+(n.id===active?' on':'')+(onPath[n.id]?' path':'')+(sel?' sel':'')+(rej?' rej':'')+(isWip?' wip':'')+(isFocus?' focus':'');
+    el.className='gnode'+(n.id==='_ghost'?' ghost':'')+(fresh?' enter':'')+(n.id===active?' on':'')+(onPath[n.id]?' path':'')+(sel?' sel':'')+(rej?' rej':'')+(isWip?' wip':'')+(isFocus?' focus':'');
     const w=isFocus?FW:(isWip?250:NW);
     el.style.width=isFocus?FW+'px':''; el.style.maxHeight=isFocus?FH+'px':'';
     el.style.left=(p.x-(w-NW)/2)+'px'; el.style.top=p.y+'px';
     el.title=isFocus?'':((n.feedback?('↳ '+n.feedback+'\n'):'')+nodeLabel(n));
-    let inner=`<div class=nk><span aria-hidden=true>${KICON[n.kind]||'▤'}</span>${esc(n.kind||'part')}</div>`+
-      `<div class=nt>${esc(nodeLabel(n))}</div>`;
-    if(isWip){   // the node's own processing: spinner + label + elapsed + the live receipt tail
+    let inner;
+    if(isWip){   // the node being born: spinner + label + elapsed + the live receipt tail
       const secs=WIP_T0?Math.round((Date.now()-WIP_T0)/1000)+'s':'';
-      inner+=`<div class="nk wipl" style="margin-top:6px"><span class=spin aria-hidden=true></span>`+
-        `${esc(WIP_LABEL||'Working')} · <span id=wiptime>${secs}</span></div>`;
+      inner=`<div class="nk wipl"><span class=spin aria-hidden=true></span>`+
+        `${esc(WIP_PENDING.label||'Working')} · <span id=wiptime>${secs}</span></div>`;
       inner+=`<div class=nspew>`+(WIPLOG.length?WIPLOG.map(l=>`<div>${esc(l)}</div>`).join(''):'<div>warming up…</div>')+`</div>`;
+    } else {
+      inner=`<div class=nk><span aria-hidden=true>${KICON[n.kind]||'▤'}</span>${esc(n.kind||'part')}</div>`+
+        `<div class=nt>${esc(nodeLabel(n))}</div>`;
     }
     if(isFocus)inner+=`<div class=nbody>${nodeBody(n)}</div>`;
     el.innerHTML=inner;
@@ -472,11 +514,10 @@ function initGraphInput(){
   },{passive:false});
 }
 function gNodeClick(id){
-  const {t}=nodesOf(S);
-  const wip=(S&&S.status==='researching'||WIP_LABEL)?t.active:null;
-  if(id===wip)return;                             // the working node isn't readable yet
+  if(id==='_ghost'){ const b=$('ws-box'); if(b)b.focus(); return; }   // the ghost wants your words
+  if(id==='_wip')return;                          // the node being born isn't readable yet
   if(FOCUS===id)return;                           // already reading it
-  focusNode(id);                                  // browsing past nodes works even while it builds
+  focusNode(id);                                  // browsing rendered nodes works even while it builds
 }
 function focusActive(force){ const {t}=nodesOf(S); BROWSING=false; if(force)FOCUS=null; focusNode(t.active); }
 function focusNode(id){
@@ -498,7 +539,7 @@ function nodeBody(n){
   const {t}=nodesOf(S);
   let body;
   if(n.id===t.active){ const surf=stageSurface(S); body=surf?surf.html:''; }
-  else body=pastBody(n);
+  else body=pastBody(n)+`<div class=ctarow><button class="stage-cta secondary" onclick="pivotFromHere('${n.id}')">⑂ Pivot from here</button></div>`;
   const log=NODELOG[n.id];
   if(log&&log.length)body+=`<details class=nhist><summary>⚙ how this was built</summary><div class=nspew>`+
     log.map(l=>`<div>${esc(l)}</div>`).join('')+`</div></details>`;
@@ -596,7 +637,7 @@ function render(s){
   const {t}=nodesOf(S);
   if(WAS_RESEARCHING&&!researching){          // a build just finished → stash its log on the node it made
     if(WIPLOG.length)NODELOG[t.active]=WIPLOG.slice();
-    WIPLOG=[]; LANES=[]; LANES_DONE=new Set(); WIP_LABEL=null; WIP_T0=null;
+    WIPLOG=[]; LANES=[]; LANES_DONE=new Set(); WIP_LABEL=null; WIP_T0=null; WIP_PENDING=null;
   }
   WAS_RESEARCHING=researching;
   paintMeter(S);
@@ -634,7 +675,7 @@ function toolBody(mode){
 }
 
 // ── boot ─────────────────────────────────────────────────────────────────────
-document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeModal();unfocus();}});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeModal();unfocus();if(PIVOT_FROM)clearGhost();}});
 // Enter submits (Shift+Enter for a newline) — both the chat box and the landing box
 document.addEventListener('keydown',e=>{
   if(e.key!=='Enter'||e.shiftKey)return;

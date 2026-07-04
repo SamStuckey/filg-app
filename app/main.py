@@ -873,11 +873,34 @@ def _deep_build(sid: str, thesis: str, user: str) -> None:
         store.plan_save(sid, status="error", error=_humanize_error(e)[0])
 
 
-def _route_context(s: dict) -> str:
-    """A compact summary of what the user is looking at, so the router reads their prompt in context."""
+def _node_snippet(n: dict) -> str:
+    """One line describing a node, for router context."""
+    k = _kind(n)
+    if k == "refined":
+        return "the refined idea: " + (n.get("thesis") or "")[:200]
+    if k == "option":
+        d = n.get("direction") or {}
+        return "the direction '" + (d.get("title") or "")[:80] + "': " + (d.get("one_liner") or "")[:160]
+    if k == "idea":
+        return "the original idea: " + (n.get("draft") or "")[:160]
+    if k == "brainstorm":
+        return "the fork where a few directions were offered"
+    body = (n.get("files") or {}).get(next(iter(n.get("files") or {}), ""), "") or n.get("draft") or ""
+    return "the '" + (n.get("title") or "part") + "' section of the plan: " + str(body)[:200]
+
+
+def _route_context(s: dict, node_id: str | None = None) -> str:
+    """A compact summary of what the user is looking at, so the router reads their prompt in context.
+    `node_id` (the node the user has OPEN, when it isn't the active one) takes over the frame — a
+    question like 'how did we make this decision' is about THAT node, and a pivot grows from it."""
     parts = []
     t = s.get("tree") or {}
-    a = (t.get("nodes") or {}).get(t.get("active")) or {}
+    nodes = t.get("nodes") or {}
+    opened = nodes.get(node_id) if node_id else None
+    if opened and node_id != t.get("active"):
+        parts.append("The user is looking at an EARLIER node of their build: " + _node_snippet(opened))
+        parts.append("A steer/pivot should grow from that node; a question is about it")
+    a = nodes.get(t.get("active")) or {}
     if _kind(a) == "refined" and a.get("thesis"):
         parts.append("Refined idea: " + a["thesis"])
     elif (s.get("shaped") or {}).get("thesis"):
@@ -887,7 +910,7 @@ def _route_context(s: dict) -> str:
     p = s.get("proposal") or {}
     if p.get("title"):
         parts.append("Currently on the '" + p["title"] + "' part of the plan")
-    return " · ".join(parts)[:500]
+    return " · ".join(parts)[:700]
 
 
 @app.post("/api/plan/start")
@@ -1003,9 +1026,10 @@ async def api_plan_rebrainstorm(sid: str, request: Request):
     _meter_bg(s.get("user"), _provider_for(s.get("user")), cost, toks)
     tree = s.get("tree") or {"nodes": {}, "active": None}
     nodes = tree.get("nodes") or {}
-    active = nodes.get(tree.get("active")) or {}
+    # the pivot point: an explicitly named node (the one the user had open) beats the active one
+    at = nodes.get((body.get("node") or "").strip()) or nodes.get(tree.get("active")) or {}
     # a re-spread from a fork/option lands as a SIBLING fork; from anywhere else, under the pivot node
-    parent = active.get("parent") if _kind(active) in ("brainstorm", "option") else active.get("id")
+    parent = at.get("parent") if _kind(at) in ("brainstorm", "option") else at.get("id")
     new_nodes, bid = _diverge_tree(d, parent)
     nodes.update(new_nodes)
     if parent and nodes.get(parent):
@@ -1043,8 +1067,16 @@ async def api_plan_commit(sid: str, request: Request):
         return JSONResponse({"error": "unknown session"}, status_code=404)
     body = await request.json()
     thesis = (body.get("thesis") or "").strip()
+    tree = s.get("tree") or {}
+    nodes = tree.get("nodes") or {}
+    # building from an explicitly named node (the one the user had open) jumps the active pointer
+    # there first, so the deep build grows out of THAT node
+    at_id = (body.get("node") or "").strip()
+    if at_id and nodes.get(at_id):
+        tree["active"] = at_id
+        store.plan_save(sid, tree=tree)
+    a = nodes.get(tree.get("active")) or {}
     if not thesis:
-        a = ((s.get("tree") or {}).get("nodes") or {}).get((s.get("tree") or {}).get("active")) or {}
         if _kind(a) == "refined":
             thesis = a.get("thesis") or ""
         elif _kind(a) == "option":
@@ -1071,13 +1103,14 @@ async def api_plan_route(sid: str, request: Request):
     if not prompt:
         return JSONResponse({"error": "Type something."}, status_code=400)
     mode = body.get("mode") or "build"
+    node_id = (body.get("node") or "").strip() or None   # the node the user has open (browse context)
     stage = s.get("stage") or ("building" if s.get("proposal") else "plan")
     rstage = {"brainstorm": "brainstorm", "merging": "merge", "refined": "refined",
               "building": "plan", "done": "plan"}.get(stage, "plan")
     try:
         with _run_slot(s.get("user"), s.get("stack")):
             decision, cost = router.route(prompt, stage=rstage, mode=mode,
-                                          context=_route_context(s), mock=MOCK)
+                                          context=_route_context(s, node_id), mock=MOCK)
             fork = None
             if decision["intent"] == "steer" and rstage == "plan" and decision.get("steer"):
                 idea = planner._working_idea(s)

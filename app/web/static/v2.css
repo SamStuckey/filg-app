@@ -81,6 +81,7 @@ textarea:focus{border-color:var(--accent)}
 .gnode.dim{opacity:.42}
 .gnode.sel{border-color:var(--green);box-shadow:0 0 0 1px color-mix(in srgb,var(--green) 45%,transparent)}
 .gnode.rej{border-color:color-mix(in srgb,var(--red) 45%,var(--line));opacity:.45}
+.gnode.ghost{border-style:dashed;border-color:var(--accent);color:var(--muted);animation:gpulse 1.6s ease-in-out infinite}
 .gnode.enter{opacity:0;transform:translateY(-10px)}
 .gnode.wip{width:250px;border-color:var(--accent);animation:gpulse 1.6s ease-in-out infinite;cursor:default}
 @keyframes gpulse{0%,100%{box-shadow:0 0 0 0 color-mix(in srgb,var(--accent) 34%,transparent)}
@@ -191,13 +192,15 @@ textarea:focus{border-color:var(--accent)}
 }
 .jokecard{border:1px solid var(--line);border-radius:12px;padding:16px;margin-top:16px;text-align:left}
 
-/* ── Model-crew chip + session meter ── */
-.left-sub{display:flex;align-items:center;gap:8px;margin-top:-4px}
+/* ── Model-crew chip + session meter + profile ── */
 .stackchip{display:inline-flex;align-items:center;gap:7px;font-size:12px;padding:4px 10px;white-space:nowrap}
 .pips{display:inline-flex;gap:2px}
 .pips i{width:5px;height:5px;border-radius:50%;background:var(--line);display:inline-block}
 .pips i.on{background:var(--accent)}
-.meter{font-size:12px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:3px 10px;white-space:nowrap;margin-left:auto}
+.meter{font-size:12px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:3px 10px;white-space:nowrap}
+.profile{width:30px;height:30px;border-radius:50%;border:1px solid var(--line);background:var(--card);
+  color:var(--muted);display:inline-flex;align-items:center;justify-content:center;padding:0}
+.profile:hover{color:var(--fg)}
 .sktile{display:block;width:100%;text-align:left;background:var(--card);border:1px solid var(--line);
   border-radius:10px;padding:10px 12px;margin-bottom:8px;color:var(--fg)}
 .sktile.on{border-color:var(--accent)}
@@ -206,7 +209,7 @@ textarea:focus{border-color:var(--accent)}
 .sktile .sk-desc{font-size:12.5px;color:var(--muted)}
 
 /* ── Key indicator + modal ── */
-.lt-right{display:flex;align-items:center;gap:8px}
+.lt-right{display:flex;align-items:center;gap:8px;margin-left:auto}
 .keydot{font-size:12px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:2px 9px;white-space:nowrap}
 .keydot.byok{color:var(--green);border-color:var(--green)}
 .keydot.off{opacity:.5}

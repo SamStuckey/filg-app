@@ -29,13 +29,12 @@ __FILG_HEAD__
     <div class=left-top>
       <button type=button class=logo onclick="v2newPlan()">FILG</button>
       <div class=lt-right>
-        <span class=keydot id=keydot title="which key this run uses">on: FILG key</span>
-        <button type=button class=ghost small onclick="keyModal()">🔑</button>
+        <button id=stackchip-w class="ghost stackchip" type=button onclick="stackModal()" title="Pick your model crew"></button>
+        <span class=meter id=meter title="tokens + $ this session">0 tok · $0.00</span>
+        <button type=button class=profile onclick="keyModal()" aria-label="Account" title="Account · API key">
+          <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="8.2" r="3.6"/><path d="M4.5 19.5c1.3-3.4 4.2-5 7.5-5s6.2 1.6 7.5 5"/></svg>
+        </button>
       </div>
-    </div>
-    <div class=left-sub>
-      <button id=stackchip-w class="ghost stackchip" type=button onclick="stackModal()" title="Pick your model crew"></button>
-      <span class=meter id=meter title="tokens + $ this session">0 tok · $0.00</span>
     </div>
     <div class="promptwrap" id=ws-wrap>
       <div class=modechips id=modechips>
