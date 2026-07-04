@@ -1015,19 +1015,23 @@ async def api_plan_rebrainstorm(sid: str, request: Request):
     idea = (body.get("idea") or s.get("idea") or "").strip()
     if len(idea) < 12:
         return JSONResponse({"error": "Tell me a bit more about the idea."}, status_code=400)
+    tree = s.get("tree") or {"nodes": {}, "active": None}
+    nodes = tree.get("nodes") or {}
+    # the pivot point: an explicitly named node (the one the user had open) beats the active one
+    at = nodes.get((body.get("node") or "").strip()) or nodes.get(tree.get("active")) or {}
+    # the pivot node's own content rides into the spread, so 'pivot from here' actually pivots
+    # FROM here — the new directions react to what this node says, not just the raw idea
+    div_input = idea + ((f"\n\nPIVOTING FROM {_node_snippet(at)} — the new directions should be a "
+                         f"genuine change of course from that.") if at else "")
     try:
         with _run_slot(s.get("user"), s.get("stack")):
-            d, cost = brainstorm.diverge(idea, mock=MOCK)
+            d, cost = brainstorm.diverge(div_input, mock=MOCK)
             toks = pipeline.LEDGER.tokens()
     except BusyError as be:
         return _busy_response(be)
     except Exception as e:  # noqa: BLE001
         return _engine_error(e)
     _meter_bg(s.get("user"), _provider_for(s.get("user")), cost, toks)
-    tree = s.get("tree") or {"nodes": {}, "active": None}
-    nodes = tree.get("nodes") or {}
-    # the pivot point: an explicitly named node (the one the user had open) beats the active one
-    at = nodes.get((body.get("node") or "").strip()) or nodes.get(tree.get("active")) or {}
     # a re-spread from a fork/option lands as a SIBLING fork; from anywhere else, under the pivot node
     parent = at.get("parent") if _kind(at) in ("brainstorm", "option") else at.get("id")
     new_nodes, bid = _diverge_tree(d, parent)

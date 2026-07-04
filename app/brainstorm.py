@@ -61,8 +61,10 @@ def diverge(idea: str, mock: bool = False) -> tuple[dict, float]:
     """Spread a raw prompt into 1-3 distinct, vetted-SHAPE directions. Pure LLM, no web, cheap.
     Returns (result, cost) where result = {spread, directions:[{title, one_liner, mold, leans_on}]}."""
     if mock:
-        return {"spread": _MOCK_DIVERGE["spread"],
-                "directions": [dict(d) for d in _MOCK_DIVERGE["directions"]]}, 0.0
+        dirs = [dict(d) for d in _MOCK_DIVERGE["directions"]]
+        # echo what we heard, so mock UX runs SHOW the input plumbing (pivot feedback etc.) working
+        dirs[0]["one_liner"] = f"[mock — heard: \u201c{idea[:56]}\u201d] " + dirs[0]["one_liner"]
+        return {"spread": _MOCK_DIVERGE["spread"], "directions": dirs}, 0.0
     from pipeline import LEDGER, call, extract_json, SONNET  # heavy; real mode only
     start = len(LEDGER.rows)
     out = call("diverge", SONNET, max_tokens=700, system=skills.system("diverge"), cache=True,

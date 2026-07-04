@@ -263,7 +263,12 @@ async function pivotSpread(fromNode,idea){
   beginWip('Spreading new directions',{parent:pivotParent(fromNode)});
   const {ok,d}=await api('POST',`/api/plan/${SID}/rebrainstorm`,{idea:idea+' — '+(S&&S.idea||''),node:fromNode});
   endWip();
-  if(!ok){ render(S); if(gateV2(d))return; toast((d&&d.error)||'Could not pivot.','err'); return; }
+  if(!ok){   // fail LOUD: restore the feedback + re-arm the ghost, never quietly show the old fork
+    render(S);
+    const b=$('ws-box'); if(b&&!b.value)b.value=idea;
+    if(fromNode){PIVOT_FROM=fromNode;renderView();}
+    $('ws-err').textContent=(d&&d.error)||'The pivot failed — feedback restored, try again.';
+    if(gateV2(d))return; toast((d&&d.error)||'Could not pivot.','err'); return; }
   SEL=new Set(); PENDING_FORK=null; render(d);
 }
 function commitFromBrainstorm(){
