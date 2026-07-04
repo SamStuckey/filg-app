@@ -663,6 +663,7 @@ def _active_node_view(s: dict) -> dict | None:
     view = {"id": a["id"], "kind": k, "title": a.get("title")}
     if k == "brainstorm":
         view["spread"] = a.get("spread")
+        view["feedback"] = a.get("feedback")   # the pivot ask this spread answers (if any)
         view["options"] = [{"id": c, "direction": ((t["nodes"].get(c) or {}).get("direction"))}
                            for c in a.get("children", []) if _kind(t["nodes"].get(c) or {}) == "option"]
     elif k == "option":
@@ -1078,7 +1079,11 @@ async def api_plan_rebrainstorm(sid: str, request: Request):
     _meter_bg(s.get("user"), _provider_for(s.get("user")), cost, toks)
     # every node is branchable: the new spread is a CHILD of the pivot node itself, always
     parent = at.get("id")
+    # permanent evidence line — pivots are core IP, every hop must be verifiable in the server log
+    print(f"[pivot] sid={sid} node_in={(body.get('node') or None)!r} resolved={at.get('id')}/"
+          f"{_kind(at) if at else None} parent={parent} feedback={feedback[:80]!r}")
     new_nodes, bid = _diverge_tree(d, parent)
+    new_nodes[bid]["feedback"] = feedback or idea[:120]   # the pivot ask, visible on the fork forever
     nodes.update(new_nodes)
     if parent and nodes.get(parent):
         nodes[parent].setdefault("children", []).append(bid)
@@ -1211,6 +1216,7 @@ async def api_plan_node(sid: str, nid: str, request: Request):
             out[f] = n.get(f)
     elif k == "brainstorm":
         out["spread"] = n.get("spread")
+        out["feedback"] = n.get("feedback")   # the pivot ask this spread was answering (if any)
         # the fork's story, self-contained: every direction offered + which were picked (a pick =
         # named in any join's `selected` anywhere in the tree)
         nodes = (s.get("tree") or {}).get("nodes") or {}

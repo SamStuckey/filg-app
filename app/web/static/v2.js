@@ -303,6 +303,7 @@ let WIP_LABEL=null, WIP_T0=null, WIPLOG=[], LANES=[], LANES_DONE=new Set(), PROG
 let WIP_PENDING=null;   // {label,parent,join} — the node BEING BORN; rendered nodes never show loading
 const NODECACHE={}, NODELOG={};   // fetched past-node content · per-node build-log stash
 function resetGraph(){ GSEEN=new Set(); FOCUS=null; BROWSING=false; LAST_ACTIVE=null; WAS_RESEARCHING=false;
+  PIVOT_FROM=null;
   WIP_LABEL=null; WIP_PENDING=null; WIPLOG=[]; LANES=[]; LANES_DONE=new Set(); PROG_N=0;
   Object.keys(NODECACHE).forEach(k=>delete NODECACHE[k]); Object.keys(NODELOG).forEach(k=>delete NODELOG[k]);
   const gn=$('gnodes'); if(gn)gn.innerHTML=''; const ge=$('gedges'); if(ge)ge.innerHTML=''; }
@@ -364,6 +365,16 @@ function layoutGraph(m,wip){
   function placeUnder(id,x){X[id]=x;const ks=kids[id]||[];ks.forEach((c,i)=>placeUnder(c,x+(i-(ks.length-1)/2)));}
   Object.keys(joins).forEach(id=>{ const xs=joins[id].map(s=>X[s]||0);
     placeUnder(id,xs.reduce((a,b)=>a+b,0)/xs.length); });
+  // collision pass: within each row, sweep left→right and push overlapping nodes apart (fractional
+  // positions from joins/ghost children can land on top of slot-packed neighbors)
+  const rows={};
+  Object.keys(m).forEach(id=>{const d0=depth[id]||0;(rows[d0]=rows[d0]||[]).push(id);});
+  Object.values(rows).forEach(ids=>{
+    ids.sort((a,b)=>(X[a]||0)-(X[b]||0));
+    for(let i=1;i<ids.length;i++){
+      if((X[ids[i]]||0)-(X[ids[i-1]]||0)<0.95)X[ids[i]]=(X[ids[i-1]]||0)+0.95;
+    }
+  });
   // per-row y: the WIP row grows so an expanded working node (+ its leaflets) never covers children
   const maxDepth=Math.max(0,...Object.values(depth));
   const rowY={}; let y=PADY;
@@ -562,7 +573,8 @@ function pastBody(n){
       return `<div class="opt${o.picked?' sel':''}" style="cursor:default"><div>`+
         `<h3>${o.picked?'✓ ':''}${esc(x.title||'')}</h3><p>${esc(x.one_liner||'')}</p>`+
         `${x.mold?`<span class=mold>${esc(x.mold)}</span>`:''}</div></div>`;}).join('');
-    return `<p class=eyebrow>${d.spread==='tight'?'Your idea, sharpened':'The directions offered'}</p>`+
+    const piv=d.feedback?`<p class=react style="font-size:14px">↳ Pivoting on: “${esc(d.feedback)}”</p>`:'';
+    return piv+`<p class=eyebrow>${d.spread==='tight'?'Your idea, sharpened':'The directions offered'}</p>`+
       `<div class=optgrid>${opts}</div>`+
       ((d.options||[]).some(o=>o.picked)?`<p class=thinking>✓ = what you picked and carried forward.</p>`
         :`<p class=thinking>Nothing picked from this fork yet.</p>`);
@@ -592,7 +604,8 @@ function brainstormHtml(s){
     return `<label class="opt${on?' sel':''}"><input type=checkbox ${on?'checked':''} onchange="toggleSel('${o.id}')">`+
       `<div><h3>${esc(d.title||'Direction')}</h3><p>${esc(d.one_liner||'')}</p>`+
       `${d.mold?`<span class=mold>${esc(d.mold)}</span>`:''}</div></label>`;}).join('');
-  return `<p class=eyebrow>Pick what clicks</p><div class=optgrid>${cards}</div>`+
+  const piv=(s.activeNode&&s.activeNode.feedback)?`<p class=react style="font-size:14px">↳ Pivoting on: “${esc(s.activeNode.feedback)}”</p>`:'';
+  return piv+`<p class=eyebrow>Pick what clicks</p><div class=optgrid>${cards}</div>`+
     `<div class=ctarow><button class=stage-cta onclick=doMerge()>Let's try it →</button>`+
     `<button class="stage-cta secondary" onclick=commitFromBrainstorm()>I'm sold, build the plan</button></div>`+
     `<p class=thinking>Or just type in the box, it always wins.</p>`;

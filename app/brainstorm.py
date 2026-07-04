@@ -62,8 +62,11 @@ def diverge(idea: str, mock: bool = False) -> tuple[dict, float]:
     Returns (result, cost) where result = {spread, directions:[{title, one_liner, mold, leans_on}]}."""
     if mock:
         dirs = [dict(d) for d in _MOCK_DIVERGE["directions"]]
-        # echo what we heard, so mock UX runs SHOW the input plumbing (pivot feedback etc.) working
-        dirs[0]["one_liner"] = f"[mock — heard: \u201c{idea[:56]}\u201d] " + dirs[0]["one_liner"]
+        # echo what we heard, so mock UX runs SHOW the input plumbing working. A pivot input leads
+        # with the preamble line — echo the FEEDBACK line (line 2), not the preamble.
+        lines = idea.splitlines()
+        head = (lines[1] if idea.startswith("THE OPERATOR IS PIVOTING") and len(lines) > 1 else idea)[:56]
+        dirs[0]["one_liner"] = f"[mock — heard: \u201c{head}\u201d] " + dirs[0]["one_liner"]
         return {"spread": _MOCK_DIVERGE["spread"], "directions": dirs}, 0.0
     from pipeline import LEDGER, call, extract_json, SONNET  # heavy; real mode only
     start = len(LEDGER.rows)
