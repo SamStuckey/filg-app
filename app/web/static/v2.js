@@ -35,12 +35,16 @@ function v2login(){ toast('Login is stubbed locally — identity is your FILG_DE
 function chatSay(role,html){const log=$('chatlog'); if(!log)return null;
   const m=document.createElement('div'); m.className='cmsg '+role; m.innerHTML=html;
   log.appendChild(m); log.scrollTop=log.scrollHeight; return m;}
-function chatUser(t){return chatSay('user',esc(t));}
-function chatBot(t){return chatSay('bot',esc(t));}
-function chatErr(t){return chatSay('err',esc(t));}
-function chatStatus(t){return chatSay('status',esc(t));}
+function chatPush(role,text){ if(SID)api('POST',`/api/plan/${SID}/chatlog`,{role,content:text}); }   // fire-and-forget: the record survives a reload
+function chatUser(t){chatPush('user',t);return chatSay('user',esc(t));}
+function chatBot(t){chatPush('bot',t);return chatSay('bot',esc(t));}
+function chatErr(t){return chatSay('err',esc(t));}   // transient — errors aren't part of the durable record
+function chatStatus(t){chatPush('status',t);return chatSay('status',esc(t));}
+function replayChat(list){ const log=$('chatlog'); if(!log)return; log.innerHTML='';
+  (list||[]).forEach(m=>chatSay(m.role==='user'?'user':(m.role==='status'?'status':'bot'),esc(m.content||''))); }
 // An in-chat check instead of a native confirm(): a bot bubble with Go / Not yet.
 function chatConfirm(text,goLabel){return new Promise(res=>{
+  chatPush('bot',text);
   const m=chatSay('bot',esc(text)+
     `<div class=cbtns><button type=button class=go>${esc(goLabel||'Go')}</button>`+
     `<button type=button class=nah>Not yet</button></div>`);
@@ -194,7 +198,18 @@ function seedGraph(idea){   // a placeholder working node while the first spread
   VIEW={x:r.width/2-(PADX+NW/2),y:r.height*0.30-PADY,k:1}; applyView(false);
 }
 function v2newPlan(){ location.href='/v2'; }
-function adoptPlan(d){ SID=d.id; SEL=new Set(); PENDING_FORK=null; resetGraph(); }
+function adoptPlan(d){ SID=d.id; SEL=new Set(); PENDING_FORK=null; resetGraph();
+  history.replaceState(null,'','/v2/plan/'+SID); }   // the plan gets a real URL — reload restores it
+async function restorePlan(id){   // boot straight into an existing plan: graph + docs + conversation
+  const {ok,d}=await api('GET',`/api/plan/${id}?touch=1`);
+  if(!ok||!d||!d.id){ history.replaceState(null,'','/v2'); return; }   // unknown → the landing
+  $('landing').hidden=true; $('workspace').hidden=false;
+  SID=d.id; SEL=new Set(); PENDING_FORK=null; resetGraph();
+  replayChat(d.chat);
+  render(d);
+  if(d.status==='researching')poll();   // a run was mid-flight — pick the poll back up
+  focusActive(true);
+}
 
 // ── Prompt box + modes ───────────────────────────────────────────────────────
 function setMode(m){
@@ -286,6 +301,7 @@ async function commit(thesis,fromNode){
 let PIVOT_FROM=null;
 function pivotFromHere(id){ PIVOT_FROM=id; FOCUS=null; BROWSING=true; renderGraph();
   const b=$('ws-box'); if(b){b.placeholder='Your pivot: what should change from here?';b.focus();} }
+function pivotActive(){ const {t}=nodesOf(S); pivotFromHere(t.active); }   // the step view's Pivot button: arm the ghost off THIS step
 function clearGhost(){ PIVOT_FROM=null; const b=$('ws-box'); if(b)b.placeholder='Tell me what to change, or just talk to it…'; renderGraph(); }
 async function pivotSpread(fromNode,feedback){
   beginWip('Spreading new directions',{parent:pivotParent(fromNode)});
@@ -666,13 +682,15 @@ function firstPageHtml(s){
   return `<p class=eyebrow>Is this serious?</p>`+verdict+mt+
     `<p class=react>${esc(v.reaction||R.title||"Here's your idea, graded.")}</p>`+
     `<ul class=keypoints>${points}</ul>`+
-    `<div class=ctarow><button class=stage-cta onclick=keepGoing()>Keep going →</button></div>`+
+    `<div class=ctarow><button class=stage-cta onclick=keepGoing()>Keep going →</button>`+
+    `<button class="stage-cta secondary" onclick=pivotActive()>⑂ Pivot</button></div>`+
     `<p class=thinking>Comment or steer in the box anytime, it wins.</p>`;
 }
 function chapterHtml(s){
   const p=s.proposal||{};
   return `<p class=eyebrow>Part ${(s.step||0)+1} of ${s.total}</p><div class=draft>${mdToHtml(p.draft||'')}</div>`+
-    `<div class=ctarow><button class=stage-cta onclick=keepGoing()>Keep going →</button></div>`+
+    `<div class=ctarow><button class=stage-cta onclick=keepGoing()>Keep going →</button>`+
+    `<button class="stage-cta secondary" onclick=pivotActive()>⑂ Pivot</button></div>`+
     `<p class=thinking>Comment or steer in the box anytime, it wins.</p>`;
 }
 function doneHtml(s){
@@ -780,5 +798,6 @@ document.addEventListener('keydown',e=>{
 initGraphInput();
 loadKey();   // paint the key indicator (hosted vs BYOK) on load
 renderStackChips();   // the model-crew chips (landing + workspace)
+{ const m=location.pathname.match(/^\/v2\/plan\/([A-Za-z0-9]+)/); if(m)restorePlan(m[1]); }   // deep link → skip the landing
 // the working node's elapsed clock — keeps the build feeling alive even between progress lines
 setInterval(()=>{const el=$('wiptime');if(el&&WIP_T0)el.textContent=Math.round((Date.now()-WIP_T0)/1000)+'s';},1000);

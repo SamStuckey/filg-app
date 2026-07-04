@@ -38,6 +38,7 @@ import markdown
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool  # long engine calls must not block the event loop
 
 # import the engine + guardrail (prototype/) and the app-side skill/persona/board layer (app/).
 _APP_DIR = Path(__file__).resolve().parent
@@ -1016,10 +1017,12 @@ async def api_brainstorm(request: Request):
     sid = uuid.uuid4().hex[:12]
     store.plan_create(sid, user, idea, directors=directors)
     store.plan_save(sid, stack=provider.stack_name(body.get("stack")))
-    try:
+    def _work():   # off the event loop: other requests (node reads, polls) stay live while this thinks
         with _run_slot(user, body.get("stack")):
             d, cost = brainstorm.diverge(idea, mock=MOCK)
-            toks = pipeline.LEDGER.tokens()
+            return d, cost, pipeline.LEDGER.tokens()
+    try:
+        d, cost, toks = await run_in_threadpool(_work)
     except BusyError as be:
         return _busy_response(be)
     except Exception as e:  # noqa: BLE001
@@ -1068,10 +1071,12 @@ async def api_plan_rebrainstorm(sid: str, request: Request):
     else:
         div_input = (f"{idea}\n\nCOMMITTED PATH (root \u2192 the pivot point; treat each item as "
                      f"chosen context):\n{path_block}")
-    try:
+    def _work():
         with _run_slot(s.get("user"), s.get("stack")):
             d, cost = brainstorm.diverge(div_input, mock=MOCK)
-            toks = pipeline.LEDGER.tokens()
+            return d, cost, pipeline.LEDGER.tokens()
+    try:
+        d, cost, toks = await run_in_threadpool(_work)
     except BusyError as be:
         return _busy_response(be)
     except Exception as e:  # noqa: BLE001
@@ -1166,7 +1171,7 @@ async def api_plan_route(sid: str, request: Request):
     stage = s.get("stage") or ("building" if s.get("proposal") else "plan")
     rstage = {"brainstorm": "brainstorm", "merging": "merge", "refined": "refined",
               "building": "plan", "done": "plan"}.get(stage, "plan")
-    try:
+    def _work():
         with _run_slot(s.get("user"), s.get("stack")):
             decision, cost = router.route(prompt, stage=rstage, mode=mode,
                                           context=_route_context(s, node_id), mock=MOCK)
@@ -1179,7 +1184,9 @@ async def api_plan_route(sid: str, request: Request):
                 if not ic["integrable"]:
                     fork = {"clash": ic["clash"], "skeptic_say": ic["skeptic_say"],
                             "steer": decision["steer"]}
-            toks = pipeline.LEDGER.tokens()
+            return decision, fork, cost, pipeline.LEDGER.tokens()
+    try:
+        decision, fork, cost, toks = await run_in_threadpool(_work)
     except BusyError as be:
         return _busy_response(be)
     except Exception as e:  # noqa: BLE001
@@ -1189,6 +1196,25 @@ async def api_plan_route(sid: str, request: Request):
     if fork:
         out["fork"] = fork
     return out
+
+
+@app.post("/api/plan/{sid}/chatlog")
+async def api_plan_chatlog(sid: str, request: Request):
+    """Append one message to the session's conversation record (the v2 left-panel chat). Pure logging,
+    no AI call — the client posts what it rendered so the conversation survives a reload. Distinct from
+    /chat (the v1 advisor, which generates a reply)."""
+    s = store.plan_get(sid)
+    if not s or not _owns(request, s):
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    body = await request.json()
+    role = body.get("role")
+    content = str(body.get("content") or "").strip()[:2000]
+    if role not in ("user", "bot", "status") or not content:
+        return JSONResponse({"error": "role must be user/bot/status, content required"}, status_code=400)
+    chat = list(s.get("chat") or [])
+    chat.append({"role": role, "content": content})
+    store.plan_save(sid, chat=chat[-400:])   # a long session stays bounded
+    return {"ok": True}
 
 
 @app.get("/api/plan/{sid}/node/{nid}")
@@ -1378,7 +1404,7 @@ async def api_plan_next(sid: str, request: Request):
     active = tree["nodes"][tree["active"]]
     if active["step"] >= planner.N:
         return JSONResponse({"error": "This plan is already complete."}, status_code=409)
-    try:
+    def _work():
         with _run_slot(s.get("user"), s.get("stack")):
             if killed:   # forced past the gate with no substance → waste-of-time mode (comedic, skips research → ~$0)
                 child, cost = planner.wod_forward(active)
@@ -1387,7 +1413,9 @@ async def api_plan_next(sid: str, request: Request):
                                               directors=s.get("directors") or None,
                                               founder=planner._founder(s), mock=MOCK,
                                               extra_personas=s.get("custom_directors"))
-            toks = pipeline.LEDGER.tokens()
+            return child, cost, pipeline.LEDGER.tokens()
+    try:
+        child, cost, toks = await run_in_threadpool(_work)
     except BusyError as be:
         return _busy_response(be)
     except Exception as e:  # noqa: BLE001
@@ -1504,12 +1532,14 @@ async def api_plan_redraft(sid: str, request: Request):
     active = tree["nodes"][tree["active"]]
     if active["step"] >= planner.N:
         return JSONResponse({"error": "This plan is already complete."}, status_code=409)
-    try:
+    def _work():
         with _run_slot(s.get("user"), s.get("stack")):
             sib, cost = planner.rebranch(planner._working_idea(s), s["research"], active, feedback,
                                          founder=planner._founder(s), mock=MOCK)
-            regrade, cost = _regrade_setup(s, sib, cost)   # setup reframed → re-grade the verdict on the new angle
-            toks = pipeline.LEDGER.tokens()
+            regrade, cost2 = _regrade_setup(s, sib, cost)   # setup reframed → re-grade the verdict on the new angle
+            return sib, regrade, cost2, pipeline.LEDGER.tokens()
+    try:
+        sib, regrade, cost, toks = await run_in_threadpool(_work)
     except BusyError as be:
         return _busy_response(be)
     except Exception as e:  # noqa: BLE001
@@ -2128,6 +2158,13 @@ async def v2():
     """The UX-overhaul surface: the unified two-panel build (left = prompt box + tree + tools, right =
     the decision graph). Wired to the funnel routes (/api/brainstorm → /merge → /commit) + /route.
     Served alongside the live app so the new experience can be built + shown without destabilizing it."""
+    return V2_PAGE.replace("__FILG_HEAD__", _page_head())
+
+
+@app.get("/v2/plan/{sid}", response_class=HTMLResponse)
+async def v2_plan(sid: str):
+    """Deep link into a v2 plan: same shell, the frontend reads the id from the path and restores the
+    session — graph, documents, and the conversation log."""
     return V2_PAGE.replace("__FILG_HEAD__", _page_head())
 
 
