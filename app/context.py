@@ -158,6 +158,29 @@ def journey(s: dict) -> str:
     return "\n".join(lines)[:JOURNEY_CAP]
 
 
+def situation(s: dict, node_id: str | None = None, working: str | None = None) -> str:
+    """Where the operator IS right now, for the advisor: what's mid-flight, which node they have
+    open, and that node's standing (committed path / picked / passed over). Without this the advisor
+    coaches forward from nowhere — prescribing next steps while the user is reading history."""
+    nodes, active = _nodes(s)
+    parts = []
+    if working:
+        parts.append(f"A build step is MID-FLIGHT right now ({working[:80]}). The machine is already "
+                     "working — do not prescribe new work or next steps.")
+    elif s.get("status") == "researching":
+        parts.append("Deep research is MID-FLIGHT right now. The machine is already working — do not "
+                     "prescribe new work or next steps.")
+    opened = nodes.get(node_id) if (node_id and node_id != active) else None
+    if opened:
+        on_path = {n["id"] for n in _chain(nodes, active)}
+        chosen = _picked_ids(nodes, on_path)
+        standing = ("on the committed path" if opened["id"] in on_path
+                    else "PICKED and carried forward" if opened["id"] in chosen
+                    else "PASSED OVER / abandoned — they are reading history, not asking to change course")
+        parts.append("The operator is READING an earlier node (" + standing + "): " + snippet(opened))
+    return "\n".join(parts)
+
+
 def evidence(s: dict) -> tuple[str, str]:
     """The gate-graded research as two prompt blocks: (cited, flagged). The labels ARE the product —
     a consumer must never re-merge these into one unlabeled list."""
@@ -193,6 +216,12 @@ if __name__ == "__main__":  # self-test: the four 2026-07-04 drops, each pinned 
     assert "✓ PICKED] 'Redemption Bakery Series'" in j and "passed over] 'Corporate gift boxes'" in j
     # drop 4 (class): a browsed node frames the router's read
     assert "EARLIER node" in screen(S, "o2") and "Corporate gift boxes" in screen(S, "o2")
+    # drop 5 (class): the advisor must know WHERE the operator is — an abandoned node being read is
+    # history, not an invitation to coach forward; a mid-flight build means no new prescriptions
+    sit = situation(S, "o2")
+    assert "READING" in sit and "PASSED OVER" in sit and "Corporate gift boxes" in sit
+    assert "MID-FLIGHT" in situation(S, None, "Writing the next part")
+    assert situation(S) == ""
     # evidence keeps the labels split
     c, f = evidence({"research": {"rows": [{"mark": "ok", "text": "a", "url": "u"},
                                            {"mark": "warn", "text": "b", "url": "v"}]}})

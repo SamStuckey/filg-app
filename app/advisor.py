@@ -54,10 +54,11 @@ def _convo(history: list, limit: int = 12) -> str:
 
 
 def chat_reply(session: dict, message: str, history: list | None = None,
-               mock: bool = False, journey: str = "") -> tuple[str, float]:
+               mock: bool = False, journey: str = "", situation: str = "") -> tuple[str, float]:
     """Answer `message` about the plan in `session`. `history` is the prior chat thread; `journey`
-    is the decision-tree digest (the path walked + options offered/picked at every fork) — the v2
-    funnel state that the plan files alone don't carry. Returns (reply, cost)."""
+    is the decision-tree digest (the path walked + options offered/picked at every fork); `situation`
+    is where the operator is RIGHT NOW (a mid-flight build, an earlier node being read) — it decides
+    whether the reply may coach forward at all. Returns (reply, cost)."""
     idea = planner._working_idea(session)
     edge = planner._founder(session) or "(not captured)"
     vet = session.get("vetting") or {}
@@ -65,20 +66,27 @@ def chat_reply(session: dict, message: str, history: list | None = None,
 
     if mock:
         picked = journey.count("✓ PICKED")
-        return (f"On “{message.strip()[:80]}”: grounded in your plan for {idea}"
+        aware = (" (I can see you're reading an earlier node — answering in place.)" if "READING" in situation
+                 else " (A build is running — answering without adding work.)" if "MID-FLIGHT" in situation
+                 else "")
+        base = (f"On “{message.strip()[:80]}”: grounded in your plan for {idea}"
                 + (f" (journey: {picked} picked direction{'s' if picked != 1 else ''} in view)" if journey else "")
                 + f", the straight read is to lead with your edge ({edge}) and pressure-test the "
-                f"riskiest assumption ({vet.get('biggest_risk') or 'your main assumption'}) before "
-                f"scaling. Next step: {vet.get('first_test') or 'run one cheap test this week'}. (mock)"), 0.0
+                f"riskiest assumption ({vet.get('biggest_risk') or 'your main assumption'}) before scaling.")
+        nxt = ("" if situation else
+               f" Next step: {vet.get('first_test') or 'run one cheap test this week'}.")
+        return base + nxt + aware + " (mock)", 0.0
 
     from pipeline import LEDGER, call, SONNET  # heavy; real mode only
     start = len(LEDGER.rows)
     cited, flagged = _research_blocks(session)
     journey_block = (f"THE JOURNEY SO FAR (the decision tree they walked — every fork lists the "
                      f"directions offered and which they PICKED):\n{journey}\n\n") if journey else ""
+    situation_block = (f"WHERE THEY ARE RIGHT NOW (this decides whether you may coach forward at "
+                       f"all — see rule 5):\n{situation}\n\n") if situation else ""
     prompt = (
         f"THE PLAN (the operator's finished business plan for: {idea}):\n{plan_text}\n\n"
-        f"{journey_block}"
+        f"{journey_block}{situation_block}"
         f"GRADED RESEARCH — CITED:\n{cited}\n\nFLAGGED (vendor) CLAIMS:\n{flagged}\n\n"
         f"KILL-GATE: verdict={vet.get('verdict', 'n/a')} · biggest_risk={vet.get('biggest_risk', 'n/a')} "
         f"· cheapest_first_test={vet.get('first_test', 'n/a')}\n\n"

@@ -263,7 +263,7 @@ async function dispatch(dec,fromNode,prompt){
       SEL=new Set(ids); renderView();
       return doMerge();
     }
-    case 'ask': return askInChat(prompt||dec.steer||'',dec.target);   // a question gets an ANSWER, in the chat
+    case 'ask': return askInChat(prompt||dec.steer||'',dec.target,fromNode);   // a question gets an ANSWER, in the chat
     case 'steer': default:
       if(fromNode){ chatStatus('Pivoting from '+pivotSrcLabel(fromNode));
         return pivotSpread(fromNode,dec.steer||''); }   // feedback on an earlier node = pivot from it
@@ -272,12 +272,14 @@ async function dispatch(dec,fromNode,prompt){
 }
 // A routed question: product questions go to /api/help, everything else to the plan-grounded
 // advisor. The reply lands as a chat bubble — a question must never die in a tool drawer.
-async function askInChat(q,target){
+async function askInChat(q,target,fromNode){
   if(!q)return;
   if(target==='research')return lookupInChat(q);   // research mode = a real web lookup, graded by the gate
   const th=chatSay('status','thinking…');
   const url=(target==='help')?'/api/help':`/api/plan/${SID}/chat`;
-  const body=(target==='help')?{message:q}:{message:q,log_user:false};
+  // the advisor answers WHERE the user is: the node they're reading + any build in flight
+  const body=(target==='help')?{message:q}:{message:q,log_user:false,
+    node:fromNode||undefined,working:WIP_LABEL||undefined};
   const {ok,d}=await api('POST',url,body);
   if(th)th.remove();
   if(!ok){ if(gateV2(d))return; chatErr((d&&d.error)||'Could not answer that.'); return; }

@@ -155,6 +155,21 @@ def test_lookup_requires_a_question(client):
     assert client.post(f"/api/plan/{s['id']}/lookup", json={"message": ""}).status_code == 400
 
 
+def test_chat_answers_in_place_when_browsing_an_old_node(client):
+    # the advisor gets WHERE the user is: reading a passed-over node → no next-step coaching
+    # (mock replies echo the awareness + drop their 'Next step:' tail when a situation is set)
+    s = _brainstorm(client)
+    sid = s["id"]
+    opts = s["activeNode"]["options"]
+    client.post(f"/api/plan/{sid}/merge", json={"options": [opts[0]["id"]]})
+    wait_status(client, sid)
+    r = client.post(f"/api/plan/{sid}/chat",
+                    json={"message": "why did we pass on this?", "node": opts[1]["id"]})
+    assert r.status_code == 200
+    reply = r.json()["reply"]
+    assert "reading an earlier node" in reply and "Next step:" not in reply
+
+
 def test_finished_plan_lands_on_stage_done(client):
     # the off-ramp: when the terminal node lands, stage must flip to done (not stay 'building'
     # forever, which rendered 'Part 8 of 7' + Keep going — 2026-07-04)

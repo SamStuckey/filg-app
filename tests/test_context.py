@@ -73,6 +73,22 @@ def test_journey_marks_picked_and_passed():
     assert "drop the branded cookie delivery" in j   # fork steers ride along
 
 
+# ── drop #5 (class): the advisor must know WHERE the operator is ─────────────
+def test_situation_frames_a_read_abandoned_node():
+    sit = context.situation(_session(), "o2")
+    assert "READING" in sit and "PASSED OVER" in sit and "Corporate gift boxes" in sit
+
+
+def test_situation_flags_a_midflight_build():
+    assert "MID-FLIGHT" in context.situation(_session(), None, "Writing the next part")
+    s = dict(_session(), status="researching")
+    assert "MID-FLIGHT" in context.situation(s)
+
+
+def test_situation_is_empty_at_an_idle_frontier():
+    assert context.situation(_session()) == ""
+
+
 # ── the moat's labels survive every view ─────────────────────────────────────
 def test_evidence_keeps_cited_and_flagged_split():
     cited, flagged = context.evidence({"research": {"rows": [

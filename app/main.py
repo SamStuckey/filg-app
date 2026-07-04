@@ -1841,10 +1841,13 @@ async def api_plan_chat(sid: str, request: Request):
                                    and (history[-1].get("content") or "") == message) else history)
 
     journey = _journey_digest(s)   # the decision tree — options, picks, pivots — else the advisor is blind to it
+    situation = context.situation(s, (body.get("node") or "").strip() or None,
+                                  (str(body.get("working") or "").strip() or None))
 
     def _work():
         with _run_slot(s.get("user"), s.get("stack")):
-            reply, cost = advisor.chat_reply(s, message, history=hist_model, mock=MOCK, journey=journey)
+            reply, cost = advisor.chat_reply(s, message, history=hist_model, mock=MOCK,
+                                             journey=journey, situation=situation)
             return reply, cost, pipeline.LEDGER.tokens()
     try:
         reply, cost, toks = await run_in_threadpool(_work)
