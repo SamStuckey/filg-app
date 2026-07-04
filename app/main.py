@@ -1825,8 +1825,9 @@ async def api_plan_chat(sid: str, request: Request):
     s = store.plan_get(sid)
     if not s or not _owns(request, s):
         return JSONResponse({"error": "unknown session"}, status_code=404)
-    if s["status"] in ("researching", "error"):
-        return JSONResponse({"error": "Finish building the plan first."}, status_code=409)
+    if s["status"] == "error":
+        return JSONResponse({"error": "This plan hit an error — start over or re-run it first."},
+                            status_code=409)
     if (wall := _key_wall(s)):
         return wall
     body = await request.json()
@@ -1835,17 +1836,27 @@ async def api_plan_chat(sid: str, request: Request):
         return JSONResponse({"error": "Ask a question."}, status_code=400)
     if len(message) > 2000:
         return JSONResponse({"error": "Keep it under 2000 characters."}, status_code=400)
+    # v2 logs the user's bubble itself via /chatlog before routing here — log_user=false stops the
+    # double entry, and the trailing duplicate is trimmed from what the model sees
+    echo_user = bool(body.get("log_user", True))
     history = list(s.get("chat") or [])
-    try:
+    hist_model = (history[:-1] if (not echo_user and history
+                                   and (history[-1].get("content") or "") == message) else history)
+
+    def _work():
         with _run_slot(s.get("user"), s.get("stack")):
-            reply, cost = advisor.chat_reply(s, message, history=history, mock=MOCK)
-            toks = pipeline.LEDGER.tokens()
+            reply, cost = advisor.chat_reply(s, message, history=hist_model, mock=MOCK)
+            return reply, cost, pipeline.LEDGER.tokens()
+    try:
+        reply, cost, toks = await run_in_threadpool(_work)
     except BusyError as be:
         return _busy_response(be)
     except Exception as e:  # noqa: BLE001
         traceback.print_exc()
         return JSONResponse({"error": str(e)}, status_code=500)
-    history += [{"role": "user", "content": message}, {"role": "assistant", "content": reply}]
+    history = list(store.plan_get(sid).get("chat") or [])   # re-read: a run may have logged mid-flight
+    history += (([{"role": "user", "content": message}] if echo_user else [])
+                + [{"role": "assistant", "content": reply}])
     _meter(s.get("user"), cost)  # FILG-key chat counts toward the daily kill switch; BYOK is the user's spend
     nc, nt = _fold_usage(sid, s, cost, toks, chat=history)
     return {"reply": reply, "messages": history, "cost": nc, "tokens": nt}

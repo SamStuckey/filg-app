@@ -242,9 +242,9 @@ async function sendPrompt(){
   // when an in-chat check follows immediately, the check IS the reply — skip the say bubble
   const checks=(dec.intent==='commit'&&dec.confirm)||dec.intent==='restart_hard';
   if(!checks)chatBot(dec.say||'On it.');
-  await dispatch(dec,fromNode);
+  await dispatch(dec,fromNode,prompt);
 }
-async function dispatch(dec,fromNode){
+async function dispatch(dec,fromNode,prompt){
   switch(dec.intent){
     case 'commit':
       if(dec.confirm&&!(await chatConfirm('Commit to the full research + build?',"Let's go")))return;
@@ -263,12 +263,26 @@ async function dispatch(dec,fromNode){
       SEL=new Set(ids); renderView();
       return doMerge();
     }
-    case 'ask': setMode(['research','board','help'].includes(dec.target)?dec.target:'build'); return;
+    case 'ask': return askInChat(prompt||dec.steer||'',dec.target);   // a question gets an ANSWER, in the chat
     case 'steer': default:
       if(fromNode){ chatStatus('Pivoting from '+pivotSrcLabel(fromNode));
         return pivotSpread(fromNode,dec.steer||''); }   // feedback on an earlier node = pivot from it
       return steer(dec.steer||'');
   }
+}
+// A routed question: product questions go to /api/help, everything else to the plan-grounded
+// advisor. The reply lands as a chat bubble — a question must never die in a tool drawer.
+async function askInChat(q,target){
+  if(!q)return;
+  const th=chatSay('status','thinking…');
+  const url=(target==='help')?'/api/help':`/api/plan/${SID}/chat`;
+  const body=(target==='help')?{message:q}:{message:q,log_user:false};
+  const {ok,d}=await api('POST',url,body);
+  if(th)th.remove();
+  if(!ok){ if(gateV2(d))return; chatErr((d&&d.error)||'Could not answer that.'); return; }
+  const reply=(d&&d.reply)||'';
+  chatSay('bot',mdToHtml(reply));
+  if(target==='help')chatPush('bot',reply);   // the advisor endpoint logs its own turn; /api/help doesn't
 }
 async function steer(note){
   if(!note) return;
@@ -358,10 +372,13 @@ let VIEW={x:0,y:0,k:1}, GSEEN=new Set(), FOCUS=null, BROWSING=false, LAST_ACTIVE
 let WIP_LABEL=null, WIP_T0=null, WIPLOG=[], LANES=[], LANES_DONE=new Set(), PROG_N=0;
 let WIP_PENDING=null;   // {label,parent,join} — the node BEING BORN; rendered nodes never show loading
 const NODECACHE={}, NODELOG={};   // fetched past-node content · per-node build-log stash
+let HIST_OPEN=new Set();   // which nodes' "how this was built" is expanded (survives re-renders)
+function histKeep(id,el){ if(el.open)HIST_OPEN.add(id); else HIST_OPEN.delete(id); }
 function resetGraph(){ GSEEN=new Set(); FOCUS=null; BROWSING=false; LAST_ACTIVE=null; WAS_RESEARCHING=false;
   PIVOT_FROM=null;
   WIP_LABEL=null; WIP_PENDING=null; WIPLOG=[]; LANES=[]; LANES_DONE=new Set(); PROG_N=0;
   Object.keys(NODECACHE).forEach(k=>delete NODECACHE[k]); Object.keys(NODELOG).forEach(k=>delete NODELOG[k]);
+  HIST_OPEN=new Set();
   const gn=$('gnodes'); if(gn)gn.innerHTML=''; const ge=$('gedges'); if(ge)ge.innerHTML=''; }
 function beginWip(label,opts){ WIP_LABEL=label; WIP_T0=Date.now(); WIPLOG=[]; LANES=[]; LANES_DONE=new Set();
   WIP_PENDING={label,parent:(opts&&opts.parent)||null,join:(opts&&opts.join)||null};
@@ -436,7 +453,7 @@ function layoutGraph(m,wip){
   const maxDepth=Math.max(0,...Object.values(depth));
   const rowY={}; let y=PADY;
   for(let d=0;d<=maxDepth;d++){ rowY[d]=y;
-    y+=ROWH+((wip!=null&&depth[wip]===d)?(WIP_BOX-NH):0); }   // leaves fan out SIDEWAYS, no extra row
+    y+=ROWH+((wip!=null&&depth[wip]===d)?(WIP_BOX-NH+LANES.length*30):0); }   // the leaf stack grows the WIP row
   Object.keys(m).forEach(id=>{pos[id]={x:PADX+(X[id]||0)*COLW, y:rowY[depth[id]||0]};});
   return {pos,kids,joins};
 }
@@ -478,10 +495,11 @@ function renderGraph(){
     el.style.left=(p.x-(w-NW)/2)+'px'; el.style.top=p.y+'px';
     el.title=isFocus?'':((n.feedback?('↳ '+n.feedback+'\n'):'')+nodeLabel(n));
     let inner;
-    if(isWip){   // the node being born: spinner + label + elapsed + the live receipt tail
+    if(isWip){   // the node being born: spinner + label + elapsed + the leaf stack + the live receipt tail
       const secs=WIP_T0?Math.round((Date.now()-WIP_T0)/1000)+'s':'';
       inner=`<div class="nk wipl"><span class=spin aria-hidden=true></span>`+
         `${esc(WIP_PENDING.label||'Working')} · <span id=wiptime>${secs}</span></div>`;
+      inner+=leafStackHtml();   // research lanes live INSIDE the node, stacked; green as each resolves
       inner+=`<div class=nspew>`+(WIPLOG.length?WIPLOG.map(l=>`<div>${esc(l)}</div>`).join(''):'<div>warming up…</div>')+`</div>`;
     } else {
       inner=`<div class=nk><span aria-hidden=true>${KICON[n.kind]||'▤'}</span>${esc(n.kind||'part')}</div>`+
@@ -491,7 +509,8 @@ function renderGraph(){
     el.innerHTML=inner;
     if(fresh)requestAnimationFrame(()=>requestAnimationFrame(()=>el.classList.remove('enter')));
   });
-  renderLeaves(gn,pos,wip);
+  gn.querySelectorAll(':scope > .gleaf').forEach(el=>el.remove());   // legacy fanned leaves (now in-node)
+  if(!wip&&LEAF_OPEN.size)LEAF_OPEN=new Set();
   // edges: parent→child, except a refined JOIN which draws from each option it merged
   let maxX=0,maxY=0; Object.values(pos).forEach(p=>{maxX=Math.max(maxX,p.x+NFOCUS);maxY=Math.max(maxY,p.y+ROWH);});
   ge.setAttribute('width',maxX+PADX); ge.setAttribute('height',maxY+PADY+WIP_BOX);
@@ -511,29 +530,18 @@ function renderGraph(){
   pill(!wip && stageSurface(S) && FOCUS!==active);
 }
 let LEAF_OPEN=new Set();   // expanded leaflets (click a leaf to read its full research question)
-function renderLeaves(gn,pos,wip){   // research leaflets: labeled sub-nodes fanning out of the working node
-  const want=(wip&&LANES.length)?LANES.length:0;
-  gn.querySelectorAll('.gleaf').forEach((el,i)=>{ if(i>=want)el.remove(); });
-  if(!want){ if(LEAF_OPEN.size)LEAF_OPEN=new Set(); return; }
-  const p=pos[wip];
-  for(let i=0;i<want;i++){
-    let el=gn.querySelector(`.gleaf[data-i="${i}"]`);
-    if(!el){ el=document.createElement('div'); el.dataset.i=i; el.className='gleaf enter';
-      el.addEventListener('click',e=>{ e.stopPropagation();
-        if(LEAF_OPEN.has(i))LEAF_OPEN.delete(i); else LEAF_OPEN.add(i); renderGraph(); });
-      gn.appendChild(el); requestAnimationFrame(()=>requestAnimationFrame(()=>el.classList.remove('enter'))); }
+function leafToggle(i){ if(LEAF_OPEN.has(i))LEAF_OPEN.delete(i); else LEAF_OPEN.add(i); renderView(); }
+function leafStackHtml(){   // research lanes as a stack INSIDE the working node: click to expand, ✓ green when done
+  if(!LANES.length)return '';
+  return `<div class=leafstack>`+LANES.map((q0,i)=>{
     const done=LANES_DONE.has(i), open=LEAF_OPEN.has(i);
-    const q=LANES[i]||('lane '+(i+1));
-    el.classList.toggle('done',done); el.classList.toggle('open',open);
-    el.innerHTML=`<span class=lfic aria-hidden=true>🍃</span>`+
-      `<span class=lftxt>${esc(open?q:(q.length>30?q.slice(0,30)+'…':q))}</span>`+
-      (done?`<span class=lfok aria-hidden=true>✓</span>`:`<span class="spin lfspin" aria-hidden=true></span>`);
-    el.title=open?'':q;
-    // offshoots, not steps: hug the working node's right flank, stacked + slightly staggered,
-    // so they never read as belonging to the children below
-    el.style.left=(p.x+NW/2+128+(i%2)*14)+'px';
-    el.style.top=(p.y+26+i*36)+'px';
-  }
+    const q=q0||('lane '+(i+1));
+    return `<div class="gleaf inrow${done?' done':''}${open?' open':''}" title="${open?'':esc(q)}" `+
+      `onclick="event.stopPropagation();leafToggle(${i})">`+
+      `<span class=lfic aria-hidden=true>🍃</span>`+
+      `<span class=lftxt>${esc(open?q:(q.length>34?q.slice(0,34)+'…':q))}</span>`+
+      (done?`<span class=lfok aria-hidden=true>✓</span>`:`<span class="spin lfspin" aria-hidden=true></span>`)+
+      `</div>`;}).join('')+`</div>`;
 }
 function centerOn(p,w,k,yFrac){   // ease the camera so node at p (width w) sits centered, yFrac down
   const r=$('right').getBoundingClientRect();
@@ -615,7 +623,10 @@ function nodeBody(n){
   if(n.id===t.active){ const surf=stageSurface(S); body=surf?surf.html:''; }
   else body=pastBody(n)+`<div class=ctarow><button class="stage-cta secondary" onclick="pivotFromHere('${n.id}')">⑂ Pivot from here</button></div>`;
   const log=NODELOG[n.id];
-  if(log&&log.length)body+=`<details class=nhist><summary>⚙ how this was built</summary><div class=nspew>`+
+  // the open state survives re-renders — the WIP poll rebuilds this HTML every tick, and an
+  // unremembered <details> flashes open then collapses
+  if(log&&log.length)body+=`<details class=nhist${HIST_OPEN.has(n.id)?' open':''} `+
+    `ontoggle="histKeep('${n.id}',this)"><summary>⚙ how this was built</summary><div class=nspew>`+
     log.map(l=>`<div>${esc(l)}</div>`).join('')+`</div></details>`;
   return body;
 }

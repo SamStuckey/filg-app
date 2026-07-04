@@ -142,6 +142,10 @@ textarea:focus{border-color:var(--accent)}
 .gleaf.open{width:260px;border-radius:12px;z-index:6;color:var(--fg)}
 .gleaf.open .lftxt{white-space:normal}
 .gleaf.enter{opacity:0;transform:translateY(-8px)}
+/* the in-node stack: lanes live inside the working node, one row each, stretch the node to fit */
+.leafstack{display:flex;flex-direction:column;gap:5px;margin:8px 0 2px}
+.gleaf.inrow{position:static;width:auto;transition:opacity .4s}
+.gleaf.inrow.open{width:auto}
 #vtabs{position:absolute;top:12px;left:16px;z-index:9;display:flex;gap:6px}
 #vtabs button{border:1px solid var(--line);background:var(--card);border-radius:999px;padding:4px 14px;font-size:12px;color:var(--muted)}
 #vtabs button.on{color:var(--fg);border-color:var(--fg)}
