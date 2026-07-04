@@ -337,6 +337,7 @@ function resetGraph(){ GSEEN=new Set(); FOCUS=null; BROWSING=false; LAST_ACTIVE=
   const gn=$('gnodes'); if(gn)gn.innerHTML=''; const ge=$('gedges'); if(ge)ge.innerHTML=''; }
 function beginWip(label,opts){ WIP_LABEL=label; WIP_T0=Date.now(); WIPLOG=[]; LANES=[]; LANES_DONE=new Set();
   WIP_PENDING={label,parent:(opts&&opts.parent)||null,join:(opts&&opts.join)||null};
+  if(VIEWMODE==='docs')DOCTAB='_wip';   // docs view rolls forward like the tree: the new step gets its own tab
   LEAF_OPEN=new Set(); FOCUS=null; BROWSING=false; PREFOCUS_VIEW=null; renderView(); }   // content collapses back, the pending node takes the stage
 function endWip(){ WIP_LABEL=null; WIP_T0=null; WIP_PENDING=null; }
 function pivotParent(id){   // THE PIVOT CONTRACT: a pivot branches off the pivot node ITSELF, always
@@ -696,18 +697,21 @@ function renderDocs(){
   const dt=$('dtabs'), pane=$('docpane'); if(!dt||!S)return;
   const {m,t}=nodesOf(S);
   const chain=[]; let cur=t.active; while(cur&&m[cur]){chain.unshift(m[cur]);cur=m[cur].parent;}
-  if(!DOCTAB||!chain.some(n=>n.id===DOCTAB))DOCTAB=t.active;
   const working=WIP_LABEL||S.status==='researching';
+  if(DOCTAB==='_wip'&&!working)DOCTAB=t.active;   // the step landed → roll onto the new doc
+  if(!DOCTAB||(DOCTAB!=='_wip'&&!chain.some(n=>n.id===DOCTAB)))DOCTAB=t.active;
   dt.innerHTML=chain.map(n=>
     `<button type=button role=tab aria-selected="${n.id===DOCTAB}" class="dtab${n.id===DOCTAB?' on':''}${n.id===t.active?' cur':''}" onclick="pickDoc('${n.id}')">`+
     `<span aria-hidden=true>${KICON[n.kind]||'▤'}</span>${esc(nodeLabel(n))}</button>`).join('')+
-    (working?`<span class="dtab wipdt"><span class=spin aria-hidden=true></span>${esc((WIP_PENDING&&WIP_PENDING.label)||WIP_LABEL||'Working')}</span>`:'');
+    (working?`<button type=button role=tab aria-selected="${DOCTAB==='_wip'}" class="dtab wipdt${DOCTAB==='_wip'?' on':''}" onclick="pickDoc('_wip')">`+
+      `<span class=spin aria-hidden=true></span>${esc((WIP_PENDING&&WIP_PENDING.label)||WIP_LABEL||'Working')}</button>`:'');
+  if(DOCTAB==='_wip'){   // the step in flight rides its OWN tab — settled docs keep their pages
+    pane.innerHTML=`<div class=docsheet><p class=eyebrow>⚙ ${esc((WIP_PENDING&&WIP_PENDING.label)||'Working')}</p>`+
+      `<div class=nspew style="max-height:220px">`+(WIPLOG.length?WIPLOG.map(l=>`<div>${esc(l)}</div>`).join(''):'<div>warming up…</div>')+`</div></div>`;
+    return;
+  }
   const n=m[DOCTAB]; if(!n){pane.innerHTML='';return;}
-  let body;
-  if(working&&DOCTAB===t.active){   // the step in flight: its receipts, right in the reader
-    body=`<p class=eyebrow>⚙ ${esc((WIP_PENDING&&WIP_PENDING.label)||'Working')}</p>`+
-      `<div class=nspew style="max-height:220px">`+(WIPLOG.length?WIPLOG.map(l=>`<div>${esc(l)}</div>`).join(''):'<div>warming up…</div>')+`</div>`;
-  } else body=nodeBody(n);
+  const body=nodeBody(n);
   if(n.id!==t.active&&!NODECACHE[n.id])
     api('GET',`/api/plan/${SID}/node/${n.id}`).then(({ok,d})=>{ if(ok){NODECACHE[n.id]=d;
       if(VIEWMODE==='docs'&&DOCTAB===n.id)renderDocs();} });
