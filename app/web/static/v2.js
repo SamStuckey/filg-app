@@ -212,7 +212,7 @@ function resetGraph(){ GSEEN=new Set(); FOCUS=null; BROWSING=false; LAST_ACTIVE=
   Object.keys(NODECACHE).forEach(k=>delete NODECACHE[k]); Object.keys(NODELOG).forEach(k=>delete NODELOG[k]);
   const gn=$('gnodes'); if(gn)gn.innerHTML=''; const ge=$('gedges'); if(ge)ge.innerHTML=''; }
 function beginWip(label){ WIP_LABEL=label; WIP_T0=Date.now(); WIPLOG=[]; LANES=[]; LANES_DONE=new Set();
-  FOCUS=null; BROWSING=false; renderGraph(); }   // content collapses back into the node, camera pulls out
+  LEAF_OPEN=new Set(); FOCUS=null; BROWSING=false; renderGraph(); }   // content collapses back into the node, camera pulls out
 function endWip(){ WIP_LABEL=null; WIP_T0=null; }
 function nodesOf(s){const t=(s&&s.tree)||{};const m={};(t.nodes||[]).forEach(n=>m[n.id]=n);return {m,t};}
 function pathSetOf(m,active){const set={};let cur=active;
@@ -268,7 +268,7 @@ function layoutGraph(m,wip){
   const maxDepth=Math.max(0,...Object.values(depth));
   const rowY={}; let y=PADY;
   for(let d=0;d<=maxDepth;d++){ rowY[d]=y;
-    y+=ROWH+((wip!=null&&depth[wip]===d)?(WIP_BOX-NH)+(LANES.length?54:0):0); }
+    y+=ROWH+((wip!=null&&depth[wip]===d)?(WIP_BOX-NH)+(LANES.length?66:0):0); }
   Object.keys(m).forEach(id=>{pos[id]={x:PADX+(X[id]||0)*COLW, y:rowY[depth[id]||0]};});
   return {pos,kids,joins};
 }
@@ -324,20 +324,28 @@ function renderGraph(){
   }
   pill(!wip && stageSurface(S) && FOCUS!==active);
 }
-function renderLeaves(gn,pos,wip){   // research leaflets: sub-nodes fanning out of the working node
+let LEAF_OPEN=new Set();   // expanded leaflets (click a leaf to read its full research question)
+function renderLeaves(gn,pos,wip){   // research leaflets: labeled sub-nodes fanning out of the working node
   const want=(wip&&LANES.length)?LANES.length:0;
   gn.querySelectorAll('.gleaf').forEach((el,i)=>{ if(i>=want)el.remove(); });
-  if(!want)return;
+  if(!want){ if(LEAF_OPEN.size)LEAF_OPEN=new Set(); return; }
   const p=pos[wip];
   for(let i=0;i<want;i++){
     let el=gn.querySelector(`.gleaf[data-i="${i}"]`);
-    if(!el){ el=document.createElement('div'); el.dataset.i=i; el.className='gleaf enter'; el.textContent='🍃';
+    if(!el){ el=document.createElement('div'); el.dataset.i=i; el.className='gleaf enter';
+      el.addEventListener('click',e=>{ e.stopPropagation();
+        if(LEAF_OPEN.has(i))LEAF_OPEN.delete(i); else LEAF_OPEN.add(i); renderGraph(); });
       gn.appendChild(el); requestAnimationFrame(()=>requestAnimationFrame(()=>el.classList.remove('enter'))); }
+    const done=LANES_DONE.has(i), open=LEAF_OPEN.has(i);
+    const q=LANES[i]||('lane '+(i+1));
+    el.classList.toggle('done',done); el.classList.toggle('open',open);
+    el.innerHTML=`<span class=lfic aria-hidden=true>🍃</span>`+
+      `<span class=lftxt>${esc(open?q:(q.length>34?q.slice(0,34)+'…':q))}</span>`+
+      (done?`<span class=lfok aria-hidden=true>✓</span>`:`<span class="spin lfspin" aria-hidden=true></span>`);
+    el.title=open?'':q;
     const spread=(i-(want-1)/2);
-    el.style.left=(p.x+NW/2+spread*44-15)+'px';
+    el.style.left=(p.x+NW/2+spread*195-92)+'px';
     el.style.top=(p.y+WIP_BOX-4)+'px';   // in the reserved gap under the working node, above its children
-    el.title=LANES[i]||('lane '+(i+1));
-    el.classList.toggle('done',LANES_DONE.has(i));
   }
 }
 function centerOn(p,w,k,yFrac){   // ease the camera so node at p (width w) sits centered, yFrac down

@@ -107,12 +107,21 @@ textarea:focus{border-color:var(--accent)}
 .nhist{margin-top:12px;border-top:1px solid var(--line);padding-top:8px}
 .nhist summary{cursor:pointer;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
 .nhist .nspew{max-height:150px;display:block;overflow:auto}
-/* research leaflets: mini sub-nodes fanning out of a working node, resolving green then folding away */
-.gleaf{position:absolute;width:30px;height:30px;border-radius:50%;background:var(--card);
-  border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:14px;
-  filter:grayscale(1);opacity:.65;z-index:2;transition:left .5s ease,top .5s ease,opacity .4s,filter .4s,transform .4s}
-.gleaf.done{filter:none;opacity:1;border-color:var(--green);transform:scale(.82)}
-.gleaf.enter{opacity:0;transform:scale(.3)}
+/* research leaflets: labeled sub-nodes fanning out of a working node — the lane's question + a
+   spinner while it digs, ✓ when it resolves. Click one to read the full question. */
+.gleaf{position:absolute;width:184px;background:var(--card);border:1px solid var(--line);
+  border-radius:999px;padding:4px 10px;display:flex;align-items:center;gap:6px;cursor:pointer;
+  font-size:11px;color:var(--muted);opacity:.9;z-index:2;
+  transition:left .5s ease,top .5s ease,opacity .4s,width .25s ease}
+.gleaf .lfic{filter:grayscale(1);flex:none}
+.gleaf .lftxt{overflow:hidden;white-space:nowrap;text-overflow:ellipsis;flex:1}
+.gleaf .lfspin{width:9px;height:9px;border-width:1.5px;flex:none}
+.gleaf .lfok{color:var(--green);font-weight:700;flex:none}
+.gleaf.done{border-color:var(--green);color:var(--fg)}
+.gleaf.done .lfic{filter:none}
+.gleaf.open{width:260px;border-radius:12px;z-index:6;color:var(--fg)}
+.gleaf.open .lftxt{white-space:normal}
+.gleaf.enter{opacity:0;transform:translateY(-8px)}
 #gpill{position:absolute;bottom:18px;left:50%;transform:translateX(-50%);z-index:8;
   background:var(--accent);color:#fff;border:none;border-radius:999px;padding:9px 18px;font-weight:600;
   box-shadow:0 6px 20px color-mix(in srgb,var(--accent) 40%,transparent)}
