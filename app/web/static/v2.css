@@ -130,3 +130,25 @@ textarea:focus{border-color:var(--accent)}
   .right{max-width:none}
 }
 .jokecard{border:1px solid var(--line);border-radius:12px;padding:16px;margin-top:16px;text-align:left}
+
+/* ── Key indicator + modal ── */
+.lt-right{display:flex;align-items:center;gap:8px}
+.keydot{font-size:12px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:2px 9px;white-space:nowrap}
+.keydot.byok{color:var(--green);border-color:var(--green)}
+.keydot.off{opacity:.5}
+.modalback{position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:30;display:none}
+.modalback.show{display:block}
+.modal{position:fixed;z-index:31;top:50%;left:50%;transform:translate(-50%,-50%);width:min(460px,92vw);
+  background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px 20px;box-shadow:0 20px 60px rgba(0,0,0,.3)}
+.modal-h{display:flex;justify-content:space-between;align-items:center;font-weight:700;margin-bottom:12px}
+.modal-body{font-size:14px}
+.modal-acts{display:flex;gap:10px;justify-content:flex-end;margin-top:16px}
+.modal-acts button{border:1px solid var(--line);background:var(--card);color:var(--fg);border-radius:8px;padding:8px 16px}
+.modal-acts .primary{background:var(--accent);color:#fff;border:none}
+.provsw{display:flex;gap:6px;margin:6px 0 12px}
+.provsw button{flex:1;border:1px solid var(--line);background:var(--card);color:var(--muted);border-radius:8px;padding:7px}
+.provsw button.on{border-color:var(--fg);color:var(--fg)}
+.modal input{width:100%;border:1px solid var(--line);border-radius:8px;padding:9px 11px;background:var(--card);color:var(--fg);font:inherit}
+.modal .muted{color:var(--muted);font-size:13px;margin:0 0 10px}
+.modal .err{min-height:16px}
+.modal a{color:var(--accent)}

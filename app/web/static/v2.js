@@ -23,7 +23,64 @@ async function api(method,url,body){
   let d={}; try{d=await r.json();}catch(e){}
   return {ok:r.ok,status:r.status,d};
 }
-function v2login(){ toast('Login lands later — everything runs unlocked for now.'); }
+function v2login(){ toast('Login is stubbed locally — identity is your FILG_DEV_EMAIL. Use the 🔑 to switch keys.'); }
+
+// ── The API-key hierarchy: hosted (FILG's key) vs BYOK (your own). Same /api/key endpoints as the
+// legacy page. Auth is stubbed, so identity is the server's FILG_DEV_EMAIL; adding/removing a key here
+// flips that identity between hosted and BYOK, which is exactly the switch _provider_for makes. ──
+let BYOK_ON=false, HAS_KEY=false, KEY_META=null, KEY_PROV='openrouter';
+async function loadKey(){
+  const {ok,d}=await api('GET','/api/key');
+  BYOK_ON=!!(ok&&d&&d.enabled); HAS_KEY=!!(ok&&d&&d.key); KEY_META=(d&&d.key)||null;
+  keyIndicator();
+}
+function keyIndicator(){
+  const dot=$('keydot'), lbl=$('landing-keylbl');
+  let txt='on: FILG key', cls='keydot';
+  if(!BYOK_ON){ txt='BYOK off'; cls='keydot off'; }
+  else if(HAS_KEY){ txt='on: your key ••'+(KEY_META.last4||'????'); cls='keydot byok'; }
+  if(dot){ dot.textContent=txt; dot.className=cls; }
+  if(lbl){ lbl.textContent=HAS_KEY?'Your key':'Key'; }
+}
+function openModal(title){ $('modal-title').textContent=title; $('v2modal').hidden=false; $('modalback').classList.add('show'); }
+function closeModal(){ $('v2modal').hidden=true; $('modalback').classList.remove('show'); }
+async function keyModal(){
+  await loadKey();
+  if(!BYOK_ON){ toast('BYOK is off — set FILG_KEY_SECRET to enable the key store.','err'); return; }
+  if(HAS_KEY){
+    $('modal-body').innerHTML=`<p class=muted>Running on your own <b>${esc(KEY_META.provider)}</b> key (••${esc(KEY_META.last4||'')}). Remove it to fall back to FILG's hosted key.</p>`;
+    $('modal-acts').innerHTML=`<button onclick="keyForm()">Replace</button><button onclick="removeKey()">Remove key</button><button class=primary onclick="closeModal()">Done</button>`;
+    openModal('Your API key');
+  } else { keyForm(); }
+}
+function setKeyProv(p){ KEY_PROV=(p==='anthropic')?'anthropic':'openrouter';
+  document.querySelectorAll('#provsw button').forEach(b=>b.classList.toggle('on',b.dataset.p===KEY_PROV));
+  const inp=$('keyinput'); if(inp)inp.placeholder=(KEY_PROV==='anthropic')?'sk-ant-…':'sk-or-v1-…'; }
+function keyPrefixDetect(v){ v=(v||'').trim(); if(v.indexOf('sk-ant-')===0)setKeyProv('anthropic'); else if(v.indexOf('sk-or-')===0)setKeyProv('openrouter'); }
+function keyForm(){
+  $('modal-body').innerHTML=
+    `<p class=muted>Paste your own OpenRouter or Anthropic key. We validate it, store it encrypted, and this identity's runs switch to it. Remove it any time to go back to the hosted key.</p>`+
+    `<div class=provsw id=provsw><button type=button data-p=openrouter onclick="setKeyProv('openrouter')">OpenRouter</button><button type=button data-p=anthropic onclick="setKeyProv('anthropic')">Anthropic</button></div>`+
+    `<input id=keyinput type=password autocomplete=off spellcheck=false placeholder="sk-or-v1-…" oninput="keyPrefixDetect(this.value)">`+
+    `<div class=err id=keyerr></div>`;
+  $('modal-acts').innerHTML=`<button onclick="closeModal()">Cancel</button><button class=primary id=keysave onclick="saveKey()">Save &amp; validate</button>`;
+  openModal('Bring your own key'); setKeyProv(KEY_PROV);
+  setTimeout(()=>{const i=$('keyinput');if(i)i.focus();},40);
+}
+async function saveKey(){
+  const inp=$('keyinput'), er=$('keyerr'), btn=$('keysave');
+  const key=(inp.value||'').trim(); er.textContent='';
+  if(key.length<8){er.textContent='That does not look like a key.';return;}
+  btn.disabled=true; btn.textContent='Validating…';
+  const {ok,d}=await api('POST','/api/key',{provider:KEY_PROV,key});
+  if(!ok){ er.textContent=(d&&d.error)||'Could not save the key.'; btn.disabled=false; btn.textContent='Save & validate'; return; }
+  await loadKey(); closeModal(); toast('Key saved — runs now use your key. ✓');
+}
+async function removeKey(){
+  const {ok,d}=await api('POST','/api/key/remove',{});
+  if(!ok){ toast((d&&d.error)||'Could not remove the key.','err'); return; }
+  await loadKey(); closeModal(); toast('Key removed — back on the hosted FILG key.');
+}
 
 // ── Landing ─────────────────────────────────────────────────────────────────
 let LANDING_HELP=false;
@@ -312,4 +369,6 @@ function toolBody(mode){
   return '<p>Type your idea on the landing page, then watch it spread into a few directions, merge the ones you like, and research + build the plan. The prompt box always wins: steer, jump ahead, or start over from it anytime. It runs on us to start.</p>';
 }
 
-// boot: if we ever deep-link a plan, could load it; for now the landing drives everything.
+// boot
+document.addEventListener('keydown',e=>{if(e.key==='Escape')closeModal();});
+loadKey();   // paint the key indicator (hosted vs BYOK) on load

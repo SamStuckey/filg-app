@@ -6,7 +6,7 @@ __FILG_HEAD__
 </head><body>
 <!-- ── Landing: one box, a help toggle, a login button. Nothing else. ── -->
 <div id=landing class=landing>
-  <div class=topbar><button id=loginbtn class=ghost type=button onclick="v2login()">Log in</button></div>
+  <div class=topbar><button id=landing-key class=ghost type=button onclick="keyModal()">🔑 <span id=landing-keylbl>Key</span></button><button id=loginbtn class=ghost type=button onclick="v2login()">Log in</button></div>
   <div class=landing-mid>
     <h1 id=landing-head>Let's build your business.</h1>
     <p id=landing-sub>Drop in an idea, even if it's vague, about what you're good at, what you want to
@@ -26,7 +26,10 @@ __FILG_HEAD__
   <aside class=left id=left>
     <div class=left-top>
       <button type=button class=logo onclick="v2newPlan()">FILG</button>
-      <button type=button class=ghost small id=ws-login onclick="v2login()">Log in</button>
+      <div class=lt-right>
+        <span class=keydot id=keydot title="which key this run uses">on: FILG key</span>
+        <button type=button class=ghost small onclick="keyModal()">🔑</button>
+      </div>
     </div>
     <div class="promptwrap" id=ws-wrap>
       <div class=modechips id=modechips>
@@ -53,6 +56,12 @@ __FILG_HEAD__
     <div class=spine id=spine></div>
     <div class=stagewrap id=stagewrap></div>
   </main>
+</div>
+<div class=modalback id=modalback onclick="closeModal()"></div>
+<div class=modal id=v2modal role=dialog aria-modal=true hidden>
+  <div class=modal-h><span id=modal-title>Key</span><button type=button class=ghost small onclick="closeModal()">✕</button></div>
+  <div class=modal-body id=modal-body></div>
+  <div class=modal-acts id=modal-acts></div>
 </div>
 <div class=toasts id=toasts></div>
 <script src="/static/v2.js"></script>
