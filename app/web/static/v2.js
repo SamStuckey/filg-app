@@ -30,6 +30,25 @@ async function api(method,url,body){
   return {ok:r.ok,status:r.status,d};
 }
 function v2login(){ toast('Login is stubbed locally — identity is your FILG_DEV_EMAIL.'); }
+
+// ── The chat log: the conversation IS the left panel; every exchange leaves a bubble ──
+function chatSay(role,html){const log=$('chatlog'); if(!log)return null;
+  const m=document.createElement('div'); m.className='cmsg '+role; m.innerHTML=html;
+  log.appendChild(m); log.scrollTop=log.scrollHeight; return m;}
+function chatUser(t){return chatSay('user',esc(t));}
+function chatBot(t){return chatSay('bot',esc(t));}
+function chatErr(t){return chatSay('err',esc(t));}
+function chatStatus(t){return chatSay('status',esc(t));}
+// An in-chat check instead of a native confirm(): a bot bubble with Go / Not yet.
+function chatConfirm(text,goLabel){return new Promise(res=>{
+  const m=chatSay('bot',esc(text)+
+    `<div class=cbtns><button type=button class=go>${esc(goLabel||'Go')}</button>`+
+    `<button type=button class=nah>Not yet</button></div>`);
+  if(!m){res(confirm(text));return;}   // no log mounted → native fallback
+  const done=yes=>{m.classList.add('asked');
+    chatStatus(yes?(goLabel||'Go')+' ✓':'Not yet — carrying on as is.'); res(yes);};
+  m.querySelector('.go').onclick=()=>done(true);
+  m.querySelector('.nah').onclick=()=>done(false);});}
 // Central handler for a gated API error (the prod wall): needKey → the key modal; fairUse → the
 // allowance message. Returns true if it handled the response.
 function gateV2(d){
@@ -159,6 +178,8 @@ async function startFromLanding(){
     $('landing-err').textContent=(d&&d.error)||'Something went wrong.'; return;
   }
   adoptPlan(d); render(d);
+  chatUser(idea);
+  chatBot('Spread that into a few directions — pick what clicks on the graph, or just keep typing.');
 }
 function seedGraph(idea){   // a placeholder working node while the first spread thinks
   const gn=$('gnodes'), ge=$('gedges'); if(!gn)return;
@@ -185,9 +206,10 @@ function setMode(m){
 async function sendPrompt(){
   const box=$('ws-box'), prompt=box.value.trim(); if(!prompt) return;
   $('ws-err').textContent='';
+  chatUser(prompt);
   // an armed "Pivot from here" ghost: the input IS the pivot feedback — spread from that node directly
   if(PIVOT_FROM){ const from=PIVOT_FROM; box.value=''; clearGhost();
-    toast('Pivoting from there.'); return pivotSpread(from,prompt); }
+    chatStatus('Pivoting from that node'); return pivotSpread(from,prompt); }
   // browsing an earlier node? it rides along as context (a steer pivots from it, a question is about it)
   const {t}=nodesOf(S);
   const fromNode=(FOCUS&&FOCUS!==t.active)?FOCUS:null;
@@ -196,23 +218,29 @@ async function sendPrompt(){
   const body={prompt,mode:MODE}; if(fromNode)body.node=fromNode;
   const {ok,d}=await api('POST',`/api/plan/${SID}/route`,body);
   btn.disabled=false; btn.textContent='Send →';
-  if(!ok){ if(gateV2(d))return; $('ws-err').textContent=(d&&d.error)||'Could not route that.'; return; }
+  if(!ok){ if(gateV2(d))return; chatErr((d&&d.error)||'Could not route that.'); return; }
   box.value='';
-  if(d.fork){ PENDING_FORK=d.fork; focusActive(true); return; }
+  if(d.fork){ PENDING_FORK=d.fork;
+    chatBot(d.fork.clash||'That pulls against the committed idea — pick a path on the graph.');
+    focusActive(true); return; }
   const dec=d.decision||{};
-  toast(dec.say||'On it.');
+  // when an in-chat check follows immediately, the check IS the reply — skip the say bubble
+  const checks=(dec.intent==='commit'&&dec.confirm)||dec.intent==='restart_hard';
+  if(!checks)chatBot(dec.say||'On it.');
   await dispatch(dec,fromNode);
 }
 async function dispatch(dec,fromNode){
   switch(dec.intent){
     case 'commit':
-      if(dec.confirm&&!confirm('Commit to the full research + build?'))return;
+      if(dec.confirm&&!(await chatConfirm('Commit to the full research + build?',"Let's go")))return;
       return commit(null,fromNode);
     case 'diverge': return fromNode?pivotSpread(fromNode,S.idea):reBrainstorm(S.idea);
     case 'restart_keep':
       return fromNode?pivotSpread(fromNode,(dec.keep?dec.keep+' — ':'')+S.idea)
                      :reBrainstorm((dec.keep?dec.keep+' — ':'')+S.idea);
-    case 'restart_hard': if(confirm('Throw it all out and start fresh?')) v2newPlan(); return;
+    case 'restart_hard':
+      if(await chatConfirm('Throw it all out and start fresh?','Start fresh')) v2newPlan();
+      return;
     case 'ask': setMode(['research','board','help'].includes(dec.target)?dec.target:'build'); return;
     case 'steer': default:
       if(fromNode)return pivotSpread(fromNode,dec.steer||'');   // feedback on an earlier node = pivot from it
@@ -234,24 +262,24 @@ async function reBrainstorm(idea){
     beginWip('Spreading new directions',{parent:pivotParent()});
     const {ok,d}=await api('POST',`/api/plan/${SID}/rebrainstorm`,{idea});
     endWip();
-    if(!ok){ render(S); if(gateV2(d))return; toast((d&&d.error)||'Could not re-spread.','err'); return; }
+    if(!ok){ render(S); if(gateV2(d))return; chatErr((d&&d.error)||'Could not re-spread.'); return; }
     SEL=new Set(); PENDING_FORK=null; render(d); return;
   }
   const {ok,d}=await api('POST','/api/brainstorm',{idea,stack:STACK_CUR});
-  if(!ok){ if(gateV2(d))return; toast((d&&d.error)||'Could not re-spread.','err'); return; }
+  if(!ok){ if(gateV2(d))return; chatErr((d&&d.error)||'Could not re-spread.'); return; }
   adoptPlan(d); render(d);
 }
 async function doMerge(){
   if(!SEL.size){toast('Pick at least one direction.','err');return;}
   const picks=[...SEL];
   const {ok,d}=await api('POST',`/api/plan/${SID}/merge`,{options:picks});
-  if(!ok){ if(gateV2(d))return; toast((d&&d.error)||'Could not merge.','err'); return; }
+  if(!ok){ if(gateV2(d))return; chatErr((d&&d.error)||'Could not merge.'); return; }
   beginWip('Merging your picks + first-pass research',{join:picks}); poll();
 }
 async function commit(thesis,fromNode){
   const body={}; if(thesis)body.thesis=thesis; if(fromNode)body.node=fromNode;   // build out of THAT node
   const {ok,d}=await api('POST',`/api/plan/${SID}/commit`,body);
-  if(!ok){ if(gateV2(d))return; toast((d&&d.error)||'Could not start the build.','err'); return; }
+  if(!ok){ if(gateV2(d))return; chatErr((d&&d.error)||'Could not start the build.'); return; }
   beginWip('Deep research: pulling + grading sources',{parent:fromNode||(nodesOf(S).t||{}).active}); poll();
 }
 // ── Pivot-from-a-node: an armed ghost child ("enter feedback to pivot…") + the direct spread ──
@@ -267,8 +295,8 @@ async function pivotSpread(fromNode,feedback){
     render(S);
     const b=$('ws-box'); if(b&&!b.value)b.value=feedback;
     if(fromNode){PIVOT_FROM=fromNode;renderView();}
-    $('ws-err').textContent=(d&&d.error)||'The pivot failed — feedback restored, try again.';
-    if(gateV2(d))return; toast((d&&d.error)||'Could not pivot.','err'); return; }
+    chatErr((d&&d.error)||'The pivot failed — feedback restored, try again.');
+    if(gateV2(d))return; return; }
   SEL=new Set(); PENDING_FORK=null; render(d);
 }
 function commitFromBrainstorm(){
@@ -281,7 +309,7 @@ async function run(url,body,label){
   beginWip(label,{parent:(nodesOf(S).t||{}).active});
   const {ok,d}=await api('POST',url,body);
   endWip();
-  if(!ok){ render(S); if(gateV2(d))return; toast((d&&d.error)||'Something went wrong.','err'); return; }
+  if(!ok){ render(S); if(gateV2(d))return; chatErr((d&&d.error)||'Something went wrong.'); return; }
   render(d);
 }
 async function poll(){

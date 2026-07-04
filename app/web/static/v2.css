@@ -46,7 +46,7 @@ textarea:focus{border-color:var(--accent)}
 /* ── Workspace split ── */
 .workspace{display:flex;height:100%;overflow:hidden}
 .left{width:360px;min-width:300px;border-right:1px solid var(--line);padding:14px;display:flex;
-  flex-direction:column;gap:12px;overflow:auto;position:relative;z-index:10}   /* stays live above the tool backdrop — the box works in tool mode */
+  flex-direction:column;gap:12px;overflow:hidden;position:relative;z-index:10}   /* the chatlog scrolls, the box stays pinned; panel sits above the tool backdrop */
 @media (min-width:1100px){.left{width:33.333vw}}   /* a third of the screen on big displays */
 .left-top{display:flex;justify-content:space-between;align-items:center}
 .logo{background:none;border:none;font-weight:800;font-size:18px;color:var(--accent)}
@@ -57,6 +57,18 @@ textarea:focus{border-color:var(--accent)}
 .mchip[data-mode=board].on{border-color:var(--red);color:var(--red)}
 .mchip[data-mode=help].on{border-color:var(--blue);color:var(--blue)}
 #ws-send{margin-top:8px;width:100%}
+
+/* ── The chat: the conversation IS the left panel; the box stays pinned below it ── */
+.chatlog{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:8px;padding:4px 2px;min-height:40px}
+.cmsg{max-width:92%;border-radius:12px;padding:8px 12px;font-size:13.5px;line-height:1.45}
+.cmsg.user{align-self:flex-end;background:color-mix(in srgb,var(--accent) 14%,var(--card));border:1px solid color-mix(in srgb,var(--accent) 35%,var(--line))}
+.cmsg.bot{align-self:flex-start;background:var(--card);border:1px solid var(--line)}
+.cmsg.err{align-self:flex-start;background:var(--card);border:1px solid var(--red);color:var(--red)}
+.cmsg.status{align-self:center;background:none;border:none;color:var(--muted);font-size:12px;padding:2px}
+.cmsg .cbtns{display:flex;gap:8px;margin-top:8px}
+.cmsg .cbtns button{border-radius:7px;padding:6px 14px;font-size:13px;border:1px solid var(--line);background:var(--card);color:var(--fg)}
+.cmsg .cbtns .go{background:var(--accent);color:#fff;border:none;font-weight:600}
+.cmsg.asked .cbtns{display:none}   /* answered → buttons fold away, the bubble stays as history */
 
 /* ── Right: the decision graph IS the panel ── */
 .right{flex:1;position:relative;overflow:hidden;background:
