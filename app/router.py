@@ -83,7 +83,9 @@ def _mock_route(prompt: str, stage: str, mode: str) -> dict:
             return {"intent": "pick", "target": "current", "keep": None, "steer": None, "picks": picks,
                     "confirm": False, "say": "Taking direction" + ("s " if len(picks) > 1 else " ") +
                     " + ".join(map(str, picks)) + " and merging."}
-    if p.strip().endswith("?") or p.startswith(("what", "why", "how", "who", "when", "does", "can ")):
+    if (p.strip().endswith("?") or p.startswith(("what", "why", "how", "who", "when", "does", "can ",
+                                                  "which", "where", "tell me", "show me", "remind me"))
+            or any(k in p for k in _INFO_ASK)):
         tgt = mode if mode in ("research", "board", "help") else "plan"
         return {"intent": "ask", "target": tgt, "keep": None, "steer": None,
                 "confirm": False, "say": "Answering that."}
@@ -93,6 +95,10 @@ def _mock_route(prompt: str, stage: str, mode: str) -> dict:
                 "confirm": False, "say": "Answering from " + mode + "."}
     return {"intent": "steer", "target": "current", "keep": None, "steer": prompt,
             "confirm": False, "say": "Working that into this part."}
+
+
+_INFO_ASK = ("tell me", "show me", "remind me", "which node", "which step", "which section",
+             "where am i", "what am i looking", "what node")
 
 
 def _clean(decision: dict, prompt: str, mode: str) -> dict:
@@ -106,6 +112,13 @@ def _clean(decision: dict, prompt: str, mode: str) -> dict:
     if (intent == "ask" and str(d.get("target", "")).lower() == "help" and mode == "build"
             and len(prompt) > 40 and not prompt.strip().endswith("?")):
         intent, d = "steer", {**d, "target": "current", "steer": d.get("steer") or prompt}
+    # THE HARD BACKSTOP for say/intent divergence (2026-07-04: 'tell me which node i'm on' routed as
+    # a steer → spread a garbage pivot): an imperative info request wants WORDS BACK, not a change
+    # made. It is never a steer — steers carry an instruction to change the work.
+    if intent in ("steer", "next", "commit") and any(k in prompt.lower() for k in _INFO_ASK):
+        intent = "ask"
+        d = {**d, "steer": None,
+             "target": (mode if mode in ("research", "board", "help") else "plan")}
     picks = None
     if intent == "pick":   # 1-based indices of on-screen directions; junk/empty → it was really a steer
         try:
@@ -218,6 +231,13 @@ if __name__ == "__main__":  # self-test (mock, no API)
     # a pick with no parsable indices normalizes back to a steer
     assert _clean({"intent": "pick", "picks": []}, "go with the good one", "build")["intent"] == "steer"
     assert route("what does this cost?", mode="build", mock=True)[0]["intent"] == "ask"
+    # imperative info requests are asks even with no question mark — never a steer/pivot (2026-07-04)
+    assert route("tell me which node i'm currently looking at", mock=True)[0]["intent"] == "ask"
+    assert route("sorry i just want you to tell me which node i've focused on (last click)",
+                 mock=True)[0]["intent"] == "ask"
+    assert _clean({"intent": "steer", "say": "Telling you which node you're on."},
+                  "tell me which node i'm on", "build")["intent"] == "ask"
+    assert _clean({"intent": "steer"}, "make the pricing simpler", "build")["intent"] == "steer"
     # mode as a prior: an ambiguous prompt inside research is a research question
     assert route("cheaper competitors", mode="research", mock=True)[0]["target"] == "research"
     # ...but a global break-out wins over the mode

@@ -57,6 +57,11 @@ Hard rules that override everything above:
 - "not quite …", "instead …", "what if we …", "I'd rather …", or ANY message that
   proposes a different version of the idea is a `steer` (or `restart_keep` when they
   say to start over) — NEVER `ask`. Feedback is not a question.
+- The mirror rule: an imperative INFORMATION request — "tell me…", "show me…",
+  "remind me…", "which node am I on", "where am I" — is an `ask` even with no
+  question mark. If the message wants WORDS BACK rather than a CHANGE MADE, it is
+  never a steer. A steer must contain an instruction to change the work; your `say`
+  and your intent must describe the same action.
 - `help` is ONLY for questions about using FILG itself (how it works, what it costs,
   keys, exporting). If the message mentions their business idea at all, it is not help.
 - When WHAT THEY'RE LOOKING AT lists numbered directions and the message names,

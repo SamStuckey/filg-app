@@ -70,16 +70,46 @@ def diverge(idea: str, mock: bool = False) -> tuple[dict, float]:
         return {"spread": _MOCK_DIVERGE["spread"], "directions": dirs}, 0.0
     from pipeline import LEDGER, call, extract_json, SONNET  # heavy; real mode only
     start = len(LEDGER.rows)
-    out = call("diverge", SONNET, max_tokens=700, system=skills.system("diverge"), cache=True,
-               prompt=f"The operator typed this in plain text:\n\n{idea}\n\nSpread it into directions now.")
-    data = extract_json(out)
-    data = data if isinstance(data, dict) else {}
-    spread = str(data.get("spread", "loose")).lower().strip()
-    if spread not in ("tight", "loose"):
-        spread = "loose"
+    is_pivot = idea.startswith("THE OPERATOR IS PIVOTING")
+    feedback = ""
+    directions, spread = [], "loose"
+    for _ in range(2):   # generate -> validate -> reprompt once (the research-lane seam contract)
+        out = call("diverge", SONNET, max_tokens=700, system=skills.system("diverge"), cache=True,
+                   prompt=f"The operator typed this in plain text:\n\n{idea}\n\n"
+                          f"Spread it into directions now.{feedback}")
+        data = extract_json(out)
+        data = data if isinstance(data, dict) else {}
+        s = str(data.get("spread", "loose")).lower().strip()
+        spread = s if s in ("tight", "loose") else "loose"
+        directions = _clean_directions(data.get("directions"))
+        if directions:
+            break
+        feedback = ("\n\nYour previous reply had no usable directions — it either echoed the "
+                    "instructions/scaffolding back as a direction, or returned nothing parseable. "
+                    "Reply with ONLY the JSON described, each direction a REAL business direction.")
+    if not directions:
+        if is_pivot:   # never launder scaffold or an unusable pivot into a rendered fork — fail LOUD
+            raise RuntimeError("That pivot didn't spread into real directions — try rephrasing what "
+                               "should change.")
+        directions = [{"title": idea.strip()[:60] or "Your idea", "one_liner": idea.strip()[:160],
+                       "mold": "", "leans_on": ""}]   # a plain idea may pass through; scaffold may not
+    return {"spread": spread, "directions": directions}, round(LEDGER.cost_slice(start), 4)
+
+
+# prompt scaffolding must NEVER render as product — a direction echoing it is invalid at the seam
+# (2026-07-04: a garbage pivot produced an option card titled "THE OPERATOR IS PIVOTING...")
+_SCAFFOLD = ("operator is pivoting", "pivot instruction", "outweighs everything", "committed path",
+             "steered by:", "spread it into directions")
+
+
+def _clean_directions(raw) -> list[dict]:
+    """The diverge seam's schema validator: real titles, no scaffold echo, max 3."""
     directions = []
-    for d in (data.get("directions") or [])[:3]:
+    for d in (raw or [])[:3]:
         if not isinstance(d, dict) or not (d.get("title") or "").strip():
+            continue
+        blob = ((d.get("title") or "") + " " + (d.get("one_liner") or "")).lower()
+        if any(s in blob for s in _SCAFFOLD):
             continue
         directions.append({
             "title": (d.get("title") or "").strip(),
@@ -87,10 +117,7 @@ def diverge(idea: str, mock: bool = False) -> tuple[dict, float]:
             "mold": (d.get("mold") or "").strip(),
             "leans_on": (d.get("leans_on") or "").strip(),
         })
-    if not directions:   # never return an empty spread — fall back to a single pass-through direction
-        directions = [{"title": idea.strip()[:60] or "Your idea", "one_liner": idea.strip()[:160],
-                       "mold": "", "leans_on": ""}]
-    return {"spread": spread, "directions": directions}, round(LEDGER.cost_slice(start), 4)
+    return directions
 
 
 def _reconcile(idea: str, directions: list[dict], mock: bool = False) -> tuple[dict, float]:

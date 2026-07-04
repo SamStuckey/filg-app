@@ -155,6 +155,28 @@ def test_lookup_requires_a_question(client):
     assert client.post(f"/api/plan/{s['id']}/lookup", json={"message": ""}).status_code == 400
 
 
+def test_info_requests_never_pivot(client):
+    # 'tell me which node i'm on' routed as a steer and spread a garbage fork (2026-07-04, twice).
+    # An imperative info request is an ask — at every stage, browsing or not.
+    s = _brainstorm(client)
+    sid = s["id"]
+    opt = s["activeNode"]["options"][0]
+    for prompt in ("tell me which node i'm currently looking at",
+                   "sorry i just want you to tell me which node i've focused on (last click)"):
+        r = client.post(f"/api/plan/{sid}/route",
+                        json={"prompt": prompt, "mode": "build", "node": opt["id"]})
+        assert r.json()["decision"]["intent"] == "ask", prompt
+
+
+def test_scaffold_never_renders_as_a_direction():
+    import brainstorm
+    echo = [{"title": "THE OPERATOR IS PIVOTING. Their pivot instruction OUTWEIGHS",
+             "one_liner": "THE OPERATOR IS PIVOTING. Their pivot instruction OUTWEIGHS everything"}]
+    assert brainstorm._clean_directions(echo) == []
+    real = [{"title": "Wholesale gift boxes", "one_liner": "Sell to cafes."}]
+    assert len(brainstorm._clean_directions(real)) == 1
+
+
 def test_keep_going_routes_to_next_not_commit(client):
     # 'keep going' means the ONE next step at every stage — never the whole-build commit (2026-07-04)
     s = _brainstorm(client)
