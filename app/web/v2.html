@@ -42,10 +42,6 @@ __FILG_HEAD__
       <button type=button class=send id=ws-send onclick="sendPrompt()">Send →</button>
       <div class=err id=ws-err></div>
     </div>
-    <div class=treewrap id=treewrap>
-      <div class=treehd><span>Decision tree</span></div>
-      <div class=tree id=tree></div>
-    </div>
   </aside>
   <div class=drawerback id=drawerback onclick="closeTool()"></div>
   <aside class=tooldrawer id=tooldrawer hidden>
@@ -53,8 +49,12 @@ __FILG_HEAD__
     <div class=tool-body id=tool-body></div>
   </aside>
   <main class=right id=right>
-    <div class=spine id=spine></div>
-    <div class=stagewrap id=stagewrap></div>
+    <!-- The decision graph IS the right side. Documents and steps live INSIDE the nodes: the camera
+         zooms into the node that's ready (its content expands in place), zooms out when you prompt
+         (content collapses back into the node), and follows the build as lines + nodes draw in real
+         time. Research leaflets fan out of a working node and resolve. Drag to pan, wheel to zoom. -->
+    <div id=graph><div id=gview><svg id=gedges xmlns="http://www.w3.org/2000/svg"></svg><div id=gnodes></div></div></div>
+    <button id=gpill type=button hidden onclick="focusActive()">▣ Current step</button>
   </main>
 </div>
 <div class=modalback id=modalback onclick="closeModal()"></div>
