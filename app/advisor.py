@@ -59,25 +59,31 @@ def _convo(history: list, limit: int = 12) -> str:
 
 
 def chat_reply(session: dict, message: str, history: list | None = None,
-               mock: bool = False) -> tuple[str, float]:
-    """Answer `message` about the plan in `session`. `history` is the prior chat thread. Returns
-    (reply, cost)."""
+               mock: bool = False, journey: str = "") -> tuple[str, float]:
+    """Answer `message` about the plan in `session`. `history` is the prior chat thread; `journey`
+    is the decision-tree digest (the path walked + options offered/picked at every fork) — the v2
+    funnel state that the plan files alone don't carry. Returns (reply, cost)."""
     idea = planner._working_idea(session)
     edge = planner._founder(session) or "(not captured)"
     vet = session.get("vetting") or {}
     plan_text = planner.bundle_markdown(idea, session.get("files") or {})
 
     if mock:
-        return (f"On “{message.strip()[:80]}”: grounded in your plan for {idea}, the straight read is to "
-                f"lead with your edge ({edge}) and pressure-test the riskiest assumption "
-                f"({vet.get('biggest_risk') or 'your main assumption'}) before scaling. "
-                f"Next step: {vet.get('first_test') or 'run one cheap test this week'}. (mock)"), 0.0
+        picked = journey.count("✓ PICKED")
+        return (f"On “{message.strip()[:80]}”: grounded in your plan for {idea}"
+                + (f" (journey: {picked} picked direction{'s' if picked != 1 else ''} in view)" if journey else "")
+                + f", the straight read is to lead with your edge ({edge}) and pressure-test the "
+                f"riskiest assumption ({vet.get('biggest_risk') or 'your main assumption'}) before "
+                f"scaling. Next step: {vet.get('first_test') or 'run one cheap test this week'}. (mock)"), 0.0
 
     from pipeline import LEDGER, call, SONNET  # heavy; real mode only
     start = len(LEDGER.rows)
     cited, flagged = _research_blocks(session)
+    journey_block = (f"THE JOURNEY SO FAR (the decision tree they walked — every fork lists the "
+                     f"directions offered and which they PICKED):\n{journey}\n\n") if journey else ""
     prompt = (
         f"THE PLAN (the operator's finished business plan for: {idea}):\n{plan_text}\n\n"
+        f"{journey_block}"
         f"GRADED RESEARCH — CITED:\n{cited}\n\nFLAGGED (vendor) CLAIMS:\n{flagged}\n\n"
         f"KILL-GATE: verdict={vet.get('verdict', 'n/a')} · biggest_risk={vet.get('biggest_risk', 'n/a')} "
         f"· cheapest_first_test={vet.get('first_test', 'n/a')}\n\n"

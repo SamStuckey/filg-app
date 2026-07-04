@@ -927,6 +927,39 @@ def _path_snippets(nodes: dict, at_id: str | None) -> list[str]:
     return [_node_snippet(n) for n in reversed(chain)]
 
 
+def _journey_digest(s: dict) -> str:
+    """The decision-tree journey, written out for the advisor: the committed path root→active one
+    line per node, and at each fork every direction offered with ✓ on the ones the operator picked.
+    Without this the advisor only sees the v1 surface (idea/vetting/files) and knows nothing about
+    options, picks, or pivots — it literally can't answer 'which option did I pick?'."""
+    t = s.get("tree") or {}
+    nodes = t.get("nodes") or {}
+    active = t.get("active")
+    if not nodes or not active:
+        return ""
+    chain = []
+    cur = active
+    while cur and nodes.get(cur):
+        chain.append(nodes[cur])
+        cur = nodes[cur].get("parent")
+    chain.reverse()
+    on_path = {n["id"] for n in chain}
+    chosen = set(on_path)
+    for x in nodes.values():
+        chosen.update(x.get("selected") or [])   # a pick = named in any join's `selected`
+    lines = []
+    for n in chain:
+        lines.append("- " + _node_snippet(n))
+        if _kind(n) == "brainstorm":
+            for c in (nodes.get(i) for i in (n.get("children") or [])):
+                if c and _kind(c) == "option":
+                    d = c.get("direction") or {}
+                    mark = "✓ PICKED" if c["id"] in chosen else "passed over"
+                    lines.append(f"    · [{mark}] '{(d.get('title') or '')[:70]}': "
+                                 f"{(d.get('one_liner') or '')[:140]}")
+    return "\n".join(lines)
+
+
 def _route_context(s: dict, node_id: str | None = None) -> str:
     """A compact summary of what the user is looking at, so the router reads their prompt in context.
     `node_id` (the node the user has OPEN, when it isn't the active one) takes over the frame — a
@@ -1888,9 +1921,11 @@ async def api_plan_chat(sid: str, request: Request):
     hist_model = (history[:-1] if (not echo_user and history
                                    and (history[-1].get("content") or "") == message) else history)
 
+    journey = _journey_digest(s)   # the decision tree — options, picks, pivots — else the advisor is blind to it
+
     def _work():
         with _run_slot(s.get("user"), s.get("stack")):
-            reply, cost = advisor.chat_reply(s, message, history=hist_model, mock=MOCK)
+            reply, cost = advisor.chat_reply(s, message, history=hist_model, mock=MOCK, journey=journey)
             return reply, cost, pipeline.LEDGER.tokens()
     try:
         reply, cost, toks = await run_in_threadpool(_work)

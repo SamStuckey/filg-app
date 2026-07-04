@@ -155,6 +155,20 @@ def test_lookup_requires_a_question(client):
     assert client.post(f"/api/plan/{s['id']}/lookup", json={"message": ""}).status_code == 400
 
 
+def test_journey_digest_names_picked_options(client):
+    # the advisor's grounding must carry the tree: options offered + which were picked — without it
+    # 'which option did I pick?' gets 'I don't see which option you picked' (the 2026-07-04 bug)
+    from app import main as m
+    s = _brainstorm(client)
+    sid = s["id"]
+    opt = s["activeNode"]["options"][0]
+    client.post(f"/api/plan/{sid}/merge", json={"options": [opt["id"]]})
+    wait_status(client, sid)
+    digest = m._journey_digest(m.store.plan_get(sid))
+    assert "✓ PICKED" in digest and "passed over" in digest
+    assert (opt["direction"]["title"] or "")[:30] in digest
+
+
 def test_route_context_lists_brainstorm_options():
     from app import main as m
     s = {"tree": {"active": "b1", "nodes": {
