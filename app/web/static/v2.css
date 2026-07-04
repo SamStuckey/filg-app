@@ -130,6 +130,17 @@ textarea:focus{border-color:var(--accent)}
 .gleaf.open{width:260px;border-radius:12px;z-index:6;color:var(--fg)}
 .gleaf.open .lftxt{white-space:normal}
 .gleaf.enter{opacity:0;transform:translateY(-8px)}
+#vtabs{position:absolute;top:12px;left:16px;z-index:9;display:flex;gap:6px}
+#vtabs button{border:1px solid var(--line);background:var(--card);border-radius:999px;padding:4px 14px;font-size:12px;color:var(--muted)}
+#vtabs button.on{color:var(--fg);border-color:var(--fg)}
+#docs{position:absolute;inset:0;padding:56px 26px 22px;overflow:auto}
+#dtabs{display:flex;gap:6px;overflow-x:auto;padding-bottom:10px;border-bottom:1px solid var(--line);margin-bottom:16px}
+.dtab{border:1px solid var(--line);background:var(--card);border-radius:8px;padding:6px 12px;font-size:12.5px;
+  color:var(--muted);white-space:nowrap;display:inline-flex;gap:6px;align-items:center;cursor:pointer}
+.dtab.on{color:var(--fg);border-color:var(--accent)}
+.dtab.cur::after{content:'●';color:var(--accent);font-size:8px}
+.dtab.wipdt{color:var(--accent);border-color:var(--accent);cursor:default}
+.docsheet{max-width:760px;margin:0 auto;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px 24px}
 #gpill{position:absolute;bottom:18px;left:50%;transform:translateX(-50%);z-index:8;
   background:var(--accent);color:#fff;border:none;border-radius:999px;padding:9px 18px;font-weight:600;
   box-shadow:0 6px 20px color-mix(in srgb,var(--accent) 40%,transparent)}

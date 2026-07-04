@@ -303,7 +303,7 @@ function resetGraph(){ GSEEN=new Set(); FOCUS=null; BROWSING=false; LAST_ACTIVE=
   const gn=$('gnodes'); if(gn)gn.innerHTML=''; const ge=$('gedges'); if(ge)ge.innerHTML=''; }
 function beginWip(label,opts){ WIP_LABEL=label; WIP_T0=Date.now(); WIPLOG=[]; LANES=[]; LANES_DONE=new Set();
   WIP_PENDING={label,parent:(opts&&opts.parent)||null,join:(opts&&opts.join)||null};
-  LEAF_OPEN=new Set(); FOCUS=null; BROWSING=false; PREFOCUS_VIEW=null; renderGraph(); }   // content collapses back, the pending node takes the stage
+  LEAF_OPEN=new Set(); FOCUS=null; BROWSING=false; PREFOCUS_VIEW=null; renderView(); }   // content collapses back, the pending node takes the stage
 function endWip(){ WIP_LABEL=null; WIP_T0=null; WIP_PENDING=null; }
 function pivotParent(id){   // where a re-spread visually grows from (mirrors the server's sibling rule)
   const {m,t}=nodesOf(S); const a=m[id||t.active]||{};
@@ -591,7 +591,7 @@ function brainstormHtml(s){
     `<button class="stage-cta secondary" onclick=commitFromBrainstorm()>I'm sold, build the plan</button></div>`+
     `<p class=thinking>Or just type in the box, it always wins.</p>`;
 }
-function toggleSel(id){ if(SEL.has(id))SEL.delete(id); else SEL.add(id); renderGraph(); }
+function toggleSel(id){ if(SEL.has(id))SEL.delete(id); else SEL.add(id); renderView(); }
 function refinedHtml(s){
   const a=s.activeNode||{};
   const kept=(a.kept||[]).map(k=>`<li>${esc(k)}</li>`).join('');
@@ -633,6 +633,40 @@ function doneHtml(s){
     `<div class=ctarow><a class=stage-cta href="/api/plan/${SID}/download">⬇ Raw files (.zip)</a></div>`;
 }
 
+// ── Two projections of the same tree: the decision graph, and a left-to-right document reader ──
+let VIEWMODE='graph', DOCTAB=null;
+function setView(v){
+  VIEWMODE=(v==='docs')?'docs':'graph';
+  document.querySelectorAll('#vtabs button').forEach(b=>b.classList.toggle('on',b.dataset.v===VIEWMODE));
+  $('graph').hidden=VIEWMODE!=='graph';
+  $('docs').hidden=VIEWMODE!=='docs';
+  if(VIEWMODE!=='graph')pill(false);
+  renderView();
+}
+function renderView(){ if(VIEWMODE==='docs')renderDocs(); else renderGraph(); }
+function pickDoc(id){ DOCTAB=id; renderDocs(); }
+function renderDocs(){
+  const dt=$('dtabs'), pane=$('docpane'); if(!dt||!S)return;
+  const {m,t}=nodesOf(S);
+  const chain=[]; let cur=t.active; while(cur&&m[cur]){chain.unshift(m[cur]);cur=m[cur].parent;}
+  if(!DOCTAB||!chain.some(n=>n.id===DOCTAB))DOCTAB=t.active;
+  const working=WIP_LABEL||S.status==='researching';
+  dt.innerHTML=chain.map(n=>
+    `<button type=button role=tab aria-selected="${n.id===DOCTAB}" class="dtab${n.id===DOCTAB?' on':''}${n.id===t.active?' cur':''}" onclick="pickDoc('${n.id}')">`+
+    `<span aria-hidden=true>${KICON[n.kind]||'▤'}</span>${esc(nodeLabel(n))}</button>`).join('')+
+    (working?`<span class="dtab wipdt"><span class=spin aria-hidden=true></span>${esc((WIP_PENDING&&WIP_PENDING.label)||WIP_LABEL||'Working')}</span>`:'');
+  const n=m[DOCTAB]; if(!n){pane.innerHTML='';return;}
+  let body;
+  if(working&&DOCTAB===t.active){   // the step in flight: its receipts, right in the reader
+    body=`<p class=eyebrow>⚙ ${esc((WIP_PENDING&&WIP_PENDING.label)||'Working')}</p>`+
+      `<div class=nspew style="max-height:220px">`+(WIPLOG.length?WIPLOG.map(l=>`<div>${esc(l)}</div>`).join(''):'<div>warming up…</div>')+`</div>`;
+  } else body=nodeBody(n);
+  if(n.id!==t.active&&!NODECACHE[n.id])
+    api('GET',`/api/plan/${SID}/node/${n.id}`).then(({ok,d})=>{ if(ok){NODECACHE[n.id]=d;
+      if(VIEWMODE==='docs'&&DOCTAB===n.id)renderDocs();} });
+  pane.innerHTML=`<div class=docsheet>${body}</div>`;
+}
+
 // ── Render choreography ──────────────────────────────────────────────────────
 function render(s){
   if(s&&s.id)S=s;
@@ -655,7 +689,8 @@ function render(s){
       promptFocus(); }   // the next step is ready → zoom in, hands back on the keyboard
     else if(FOCUS==null&&!BROWSING){ FOCUS=t.active; }
   }
-  renderGraph();
+  if(!researching&&VIEWMODE==='docs')DOCTAB=t.active;   // the reader follows the build
+  renderView();
 }
 function promptFocus(){   // put the cursor back in the chat box so the user can just start typing
   const a=document.activeElement;

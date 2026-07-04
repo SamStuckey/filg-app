@@ -58,7 +58,12 @@ __FILG_HEAD__
          zooms into the node that's ready (its content expands in place), zooms out when you prompt
          (content collapses back into the node), and follows the build as lines + nodes draw in real
          time. Research leaflets fan out of a working node and resolve. Drag to pan, wheel to zoom. -->
+    <div id=vtabs role=tablist>
+      <button type=button data-v=graph class=on role=tab onclick="setView('graph')">Decision graph</button>
+      <button type=button data-v=docs role=tab onclick="setView('docs')">Documents</button>
+    </div>
     <div id=graph><div id=gview><svg id=gedges xmlns="http://www.w3.org/2000/svg"></svg><div id=gnodes></div></div></div>
+    <div id=docs hidden><div id=dtabs role=tablist></div><div id=docpane></div></div>
     <button id=gpill type=button hidden onclick="focusActive()">▣ Current step</button>
   </main>
 </div>
