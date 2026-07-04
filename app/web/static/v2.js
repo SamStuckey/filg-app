@@ -107,14 +107,32 @@ async function startFromLanding(){
   const idea=$('landing-box').value.trim();
   $('landing-err').textContent='';
   if(idea.length<12){$('landing-err').textContent='Tell me a bit more about the idea.';return;}
-  const btn=$('landing-start'); btn.disabled=true; btn.classList.add('busy'); btn.textContent='Spreading your idea';
+  // Slide straight into the workspace: the landing collapses toward the sidebar and the canvas shows
+  // a seed node working immediately — the tree starts building in front of you, not behind a spinner.
+  $('landing').classList.add('shrink');
+  $('workspace').hidden=false;
+  setTimeout(()=>{$('landing').hidden=true;},500);
+  requestAnimationFrame(()=>seedGraph(idea));
   const {ok,d}=await api('POST','/api/brainstorm',{idea});
-  btn.disabled=false; btn.classList.remove('busy'); btn.textContent='Start →';
-  if(d&&d.gibberish){ $('landing-joke').innerHTML=`<div class=jokecard><h3>${esc(d.title||"That's not an idea yet.")}</h3><div>${mdToHtml(d.body||'')}</div></div>`; return; }
-  if(!ok){ if(gateV2(d))return; $('landing-err').textContent=(d&&d.error)||'Something went wrong.'; return; }
-  adoptPlan(d);
-  $('landing').hidden=true; $('workspace').hidden=false;
-  requestAnimationFrame(()=>render(d));   // first layout after the panel is visible (it needs real sizes)
+  if(!ok||(d&&d.gibberish)){   // rejected → slide back to the landing and say why
+    $('landing').hidden=false; $('landing').classList.remove('shrink'); $('workspace').hidden=true;
+    if(d&&d.gibberish){ $('landing-joke').innerHTML=`<div class=jokecard><h3>${esc(d.title||"That's not an idea yet.")}</h3><div>${mdToHtml(d.body||'')}</div></div>`; return; }
+    if(gateV2(d))return;
+    $('landing-err').textContent=(d&&d.error)||'Something went wrong.'; return;
+  }
+  adoptPlan(d); render(d);
+}
+function seedGraph(idea){   // a placeholder working node while the first spread thinks
+  const gn=$('gnodes'), ge=$('gedges'); if(!gn)return;
+  if(ge)ge.innerHTML='';
+  WIP_T0=Date.now();
+  gn.innerHTML=`<div class="gnode wip" style="left:${PADX}px;top:${PADY}px">`+
+    `<div class=nk><span aria-hidden=true>◉</span>idea</div><div class=nt>${esc(idea.slice(0,70))}</div>`+
+    `<div class="nk wipl" style="margin-top:6px"><span class=spin aria-hidden=true></span>`+
+    `Spreading into directions · <span id=wiptime>0s</span></div>`+
+    `<div class=nspew><div>reading what you've got…</div></div></div>`;
+  const r=$('right').getBoundingClientRect();
+  VIEW={x:r.width/2-(PADX+NW/2),y:r.height*0.30-PADY,k:1}; applyView(false);
 }
 function v2newPlan(){ location.href='/v2'; }
 function adoptPlan(d){ SID=d.id; SEL=new Set(); PENDING_FORK=null; resetGraph(); }
@@ -130,8 +148,9 @@ async function sendPrompt(){
   const box=$('ws-box'), prompt=box.value.trim(); if(!prompt) return;
   $('ws-err').textContent='';
   const btn=$('ws-send'); btn.disabled=true;
+  btn.innerHTML='<span class="spin sendspin" aria-hidden=true></span> Routing…';   // instant feedback
   const {ok,d}=await api('POST',`/api/plan/${SID}/route`,{prompt,mode:MODE});
-  btn.disabled=false;
+  btn.disabled=false; btn.textContent='Send →';
   if(!ok){ if(gateV2(d))return; $('ws-err').textContent=(d&&d.error)||'Could not route that.'; return; }
   box.value='';
   if(d.fork){ PENDING_FORK=d.fork; focusActive(true); return; }
@@ -162,6 +181,11 @@ async function steer(note){
 
 // ── Funnel actions ───────────────────────────────────────────────────────────
 async function reBrainstorm(idea){
+  if(SID){   // same tree: the new spread branches off the pivot point, the old branch stays visible
+    const {ok,d}=await api('POST',`/api/plan/${SID}/rebrainstorm`,{idea});
+    if(!ok){ if(gateV2(d))return; toast((d&&d.error)||'Could not re-spread.','err'); return; }
+    SEL=new Set(); PENDING_FORK=null; render(d); return;
+  }
   const {ok,d}=await api('POST','/api/brainstorm',{idea});
   if(!ok){ if(gateV2(d))return; toast((d&&d.error)||'Could not re-spread.','err'); return; }
   adoptPlan(d); render(d);
@@ -212,7 +236,7 @@ function resetGraph(){ GSEEN=new Set(); FOCUS=null; BROWSING=false; LAST_ACTIVE=
   Object.keys(NODECACHE).forEach(k=>delete NODECACHE[k]); Object.keys(NODELOG).forEach(k=>delete NODELOG[k]);
   const gn=$('gnodes'); if(gn)gn.innerHTML=''; const ge=$('gedges'); if(ge)ge.innerHTML=''; }
 function beginWip(label){ WIP_LABEL=label; WIP_T0=Date.now(); WIPLOG=[]; LANES=[]; LANES_DONE=new Set();
-  LEAF_OPEN=new Set(); FOCUS=null; BROWSING=false; renderGraph(); }   // content collapses back into the node, camera pulls out
+  LEAF_OPEN=new Set(); FOCUS=null; BROWSING=false; PREFOCUS_VIEW=null; renderGraph(); }   // content collapses back into the node, camera pulls out
 function endWip(){ WIP_LABEL=null; WIP_T0=null; }
 function nodesOf(s){const t=(s&&s.tree)||{};const m={};(t.nodes||[]).forEach(n=>m[n.id]=n);return {m,t};}
 function pathSetOf(m,active){const set={};let cur=active;
@@ -223,12 +247,13 @@ function pathSetOf(m,active){const set={};let cur=active;
     cur=n.parent;}
   return set;}
 function nodeLabel(n){
+  if(n.kind==='idea')return n.title||'Your idea';
   if(n.kind==='brainstorm')return 'A few directions';
   if(n.kind==='refined')return 'Refined idea';
   if(n.kind==='fork')return 'Fork';
   return n.title||('Part '+((n.step||0)+1));
 }
-const KICON={brainstorm:'✳',option:'◇',refined:'◆',fork:'⑂',section:'▤'};
+const KICON={idea:'◉',brainstorm:'✳',option:'◇',refined:'◆',fork:'⑂',section:'▤'};
 function drainProgress(s){   // stream progress into the working node (sentinels drive the leaflets)
   const prog=s.progress||[];
   for(let i=PROG_N;i<prog.length;i++){
@@ -268,7 +293,7 @@ function layoutGraph(m,wip){
   const maxDepth=Math.max(0,...Object.values(depth));
   const rowY={}; let y=PADY;
   for(let d=0;d<=maxDepth;d++){ rowY[d]=y;
-    y+=ROWH+((wip!=null&&depth[wip]===d)?(WIP_BOX-NH)+(LANES.length?66:0):0); }
+    y+=ROWH+((wip!=null&&depth[wip]===d)?(WIP_BOX-NH):0); }   // leaves fan out SIDEWAYS, no extra row
   Object.keys(m).forEach(id=>{pos[id]={x:PADX+(X[id]||0)*COLW, y:rowY[depth[id]||0]};});
   return {pos,kids,joins};
 }
@@ -281,16 +306,25 @@ function renderGraph(){
   // nodes: keyed divs, moved (CSS transition) or created (.enter → fade in)
   const live=new Set(Object.keys(m));
   gn.querySelectorAll('.gnode').forEach(el=>{ if(!live.has(el.dataset.id)) el.remove(); });
+  const rrect=$('right').getBoundingClientRect();
+  const FW=focusW(rrect), FH=rrect.height-120;   // open-doc box: panel-fit, margin on every side
+  const JOINSEL=new Set(); Object.values(joins).forEach(a=>a.forEach(id=>JOINSEL.add(id)));
   Object.values(m).forEach(n=>{
     const p=pos[n.id]; const isWip=n.id===wip, isFocus=n.id===FOCUS&&!isWip;
-    // an option dims once a refined join exists that did NOT include it (a path not taken)
-    const dim=n.kind==='option'&&!onPath[n.id]&&(kids[n.parent]||[]).concat(Object.keys(joins)).some(id=>m[id]&&m[id].kind==='refined');
+    // selection state on options: green rim = picked (checked now, or joined by a refined node);
+    // red-dimmed rim = passed over once its siblings were decided (merge running or join landed)
+    const isOpt=n.kind==='option';
+    const sel=isOpt&&(JOINSEL.has(n.id)||(SEL.has(n.id)&&(wip===n.parent||S.stage==='brainstorm')));
+    const decided=isOpt&&(Object.values(m).some(x=>x.kind==='refined'&&x.parent===n.parent||joins[x.id]&&m[x.id].parent===n.parent)
+      ||(wip===n.parent&&SEL.size>0)||JOINSEL.size>0);
+    const rej=decided&&!sel&&!onPath[n.id];
     let el=gn.querySelector(`.gnode[data-id="${n.id}"]`);
     const fresh=!el;
     if(fresh){ el=document.createElement('div'); el.dataset.id=n.id; el.classList.add('enter');
       el.addEventListener('click',e=>{ if(!e.target.closest('.nbody'))gNodeClick(n.id); }); gn.appendChild(el); }
-    el.className='gnode'+(fresh?' enter':'')+(n.id===active?' on':'')+(onPath[n.id]?' path':'')+(dim?' dim':'')+(isWip?' wip':'')+(isFocus?' focus':'');
-    const w=isFocus?NFOCUS:(isWip?250:NW);
+    el.className='gnode'+(fresh?' enter':'')+(n.id===active?' on':'')+(onPath[n.id]?' path':'')+(sel?' sel':'')+(rej?' rej':'')+(isWip?' wip':'')+(isFocus?' focus':'');
+    const w=isFocus?FW:(isWip?250:NW);
+    el.style.width=isFocus?FW+'px':''; el.style.maxHeight=isFocus?FH+'px':'';
     el.style.left=(p.x-(w-NW)/2)+'px'; el.style.top=p.y+'px';
     el.title=isFocus?'':((n.feedback?('↳ '+n.feedback+'\n'):'')+nodeLabel(n));
     let inner=`<div class=nk><span aria-hidden=true>${KICON[n.kind]||'▤'}</span>${esc(n.kind||'part')}</div>`+
@@ -340,12 +374,13 @@ function renderLeaves(gn,pos,wip){   // research leaflets: labeled sub-nodes fan
     const q=LANES[i]||('lane '+(i+1));
     el.classList.toggle('done',done); el.classList.toggle('open',open);
     el.innerHTML=`<span class=lfic aria-hidden=true>🍃</span>`+
-      `<span class=lftxt>${esc(open?q:(q.length>34?q.slice(0,34)+'…':q))}</span>`+
+      `<span class=lftxt>${esc(open?q:(q.length>30?q.slice(0,30)+'…':q))}</span>`+
       (done?`<span class=lfok aria-hidden=true>✓</span>`:`<span class="spin lfspin" aria-hidden=true></span>`);
     el.title=open?'':q;
-    const spread=(i-(want-1)/2);
-    el.style.left=(p.x+NW/2+spread*195-92)+'px';
-    el.style.top=(p.y+WIP_BOX-4)+'px';   // in the reserved gap under the working node, above its children
+    // offshoots, not steps: hug the working node's right flank, stacked + slightly staggered,
+    // so they never read as belonging to the children below
+    el.style.left=(p.x+NW/2+128+(i%2)*14)+'px';
+    el.style.top=(p.y+26+i*36)+'px';
   }
 }
 function centerOn(p,w,k,yFrac){   // ease the camera so node at p (width w) sits centered, yFrac down
@@ -355,12 +390,16 @@ function centerOn(p,w,k,yFrac){   // ease the camera so node at p (width w) sits
   VIEW.y=r.height*yFrac-p.y*k;
   applyView(true);
 }
-function focusCam(p){   // a focused node fills ~3/4 of the panel: zoom auto-adjusts to the space
+let PREFOCUS_VIEW=null;   // the camera as it was BEFORE a doc opened — closing restores it exactly
+function focusW(r){ return Math.min(860,Math.max(460,r.width-170)); }   // doc width: panel minus margins
+function focusCam(p){   // an open doc reads at NATURAL scale (k=1), panel-fit with margin all around
+  if(!PREFOCUS_VIEW)PREFOCUS_VIEW={...VIEW};
   const r=$('right').getBoundingClientRect();
-  const k=Math.min(1.35,Math.max(0.55,(r.width*0.75)/NFOCUS));
-  VIEW.k=k;
-  VIEW.x=r.width/2-(p.x+NW/2)*k;   // the expanded box is centered on the node's slot
-  VIEW.y=r.height*0.07-p.y*k;
+  const el=$('gnodes')&&$('gnodes').querySelector('.gnode.focus');
+  const h=(el&&el.offsetHeight)||360;
+  VIEW.k=1;                                   // never zoom the content — words stay their real size
+  VIEW.x=r.width/2-(p.x+NW/2);
+  VIEW.y=(r.height-h)/2-p.y;                  // centered; max-height guarantees the click-out margin
   applyView(true);
 }
 function applyView(ease){ const v=$('gview'); if(!v)return;
@@ -411,7 +450,9 @@ function focusNode(id){
   }
   renderGraph();
 }
-function unfocus(){ if(FOCUS==null&&!BROWSING)return; FOCUS=null; BROWSING=true; renderGraph(); }
+function unfocus(){ if(FOCUS==null&&!BROWSING)return; FOCUS=null; BROWSING=true;
+  if(PREFOCUS_VIEW){ VIEW={...PREFOCUS_VIEW}; PREFOCUS_VIEW=null; applyView(true); }   // same alignment as before the doc opened
+  renderGraph(); }
 function pill(show){ const p=$('gpill'); if(p)p.hidden=!show; }
 
 // ── What lives INSIDE a focused node ─────────────────────────────────────────
@@ -432,6 +473,7 @@ function pastBody(n){
   if(d.kind==='option'){ const x=d.direction||{}; return `<p>${esc(x.one_liner||'')}</p>${x.mold?`<span class=mold>${esc(x.mold)}</span>`:''}`; }
   if(d.kind==='refined')return `<p class=react>${esc(d.thesis||'')}</p>`+(d.mold?`<span class=mold>${esc(d.mold)}</span>`:'');
   if(d.kind==='brainstorm')return `<p class=thinking>The fork where the directions were offered.</p>`;
+  if(d.kind==='idea')return `<p>${esc(d.draft||'')}</p><p class=thinking>Where it all started. Every spread and pivot branches from here.</p>`;
   return '';
 }
 function stageOptions(){ return (S&&S.activeNode&&S.activeNode.options)||[]; }
@@ -520,10 +562,16 @@ function render(s){
   }
   WAS_RESEARCHING=researching;
   if(!researching){
-    if(t.active!==LAST_ACTIVE){ LAST_ACTIVE=t.active; FOCUS=t.active; BROWSING=false; }   // the next step is ready → zoom in
+    if(t.active!==LAST_ACTIVE){ LAST_ACTIVE=t.active; FOCUS=t.active; BROWSING=false; PREFOCUS_VIEW=null;
+      promptFocus(); }   // the next step is ready → zoom in, hands back on the keyboard
     else if(FOCUS==null&&!BROWSING){ FOCUS=t.active; }
   }
   renderGraph();
+}
+function promptFocus(){   // put the cursor back in the chat box so the user can just start typing
+  const a=document.activeElement;
+  if(a&&(a.tagName==='INPUT'||a.tagName==='TEXTAREA')&&a.id!=='ws-box')return;   // don't steal a real field
+  const b=$('ws-box'); if(b&&!$('workspace').hidden)b.focus();
 }
 
 // ── Tool drawers (research / board / help) — one box, colored context ────────
@@ -548,6 +596,12 @@ function toolBody(mode){
 
 // ── boot ─────────────────────────────────────────────────────────────────────
 document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeModal();unfocus();}});
+// Enter submits (Shift+Enter for a newline) — both the chat box and the landing box
+document.addEventListener('keydown',e=>{
+  if(e.key!=='Enter'||e.shiftKey)return;
+  if(e.target&&e.target.id==='ws-box'){ e.preventDefault(); sendPrompt(); }
+  else if(e.target&&e.target.id==='landing-box'){ e.preventDefault(); startFromLanding(); }
+});
 initGraphInput();
 loadKey();   // paint the key indicator (hosted vs BYOK) on load
 // the working node's elapsed clock — keeps the build feeling alive even between progress lines

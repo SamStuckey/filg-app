@@ -18,7 +18,10 @@ textarea:focus{border-color:var(--accent)}
 .err{color:var(--red);font-size:13px;margin-top:6px;min-height:1px}
 
 /* ── Landing ── */
-.landing{min-height:100%;display:flex;flex-direction:column}
+.landing{min-height:100%;display:flex;flex-direction:column;position:absolute;inset:0;z-index:12;
+  background:var(--bg);transition:transform .5s cubic-bezier(.4,0,.2,1),opacity .5s ease;
+  transform-origin:left top}
+.landing.shrink{transform:translate(-26vw,-8vh) scale(.5);opacity:0;pointer-events:none}
 .topbar{display:flex;align-items:center;padding:14px 18px}
 .brand{font-weight:800;font-size:19px;color:var(--accent);letter-spacing:.02em}
 .topbar #loginbtn{margin-left:auto}   /* login pins right even if other topbar children change */
@@ -44,6 +47,7 @@ textarea:focus{border-color:var(--accent)}
 .workspace{display:flex;height:100%;overflow:hidden}
 .left{width:360px;min-width:300px;border-right:1px solid var(--line);padding:14px;display:flex;
   flex-direction:column;gap:12px;overflow:auto;position:relative;z-index:10}   /* stays live above the tool backdrop — the box works in tool mode */
+@media (min-width:1100px){.left{width:33.333vw}}   /* a third of the screen on big displays */
 .left-top{display:flex;justify-content:space-between;align-items:center}
 .logo{background:none;border:none;font-weight:800;font-size:18px;color:var(--accent)}
 .modechips{display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap}
@@ -75,6 +79,8 @@ textarea:focus{border-color:var(--accent)}
 .gnode.path{border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}
 .gnode.on{border-color:var(--accent);box-shadow:0 4px 18px color-mix(in srgb,var(--accent) 25%,transparent)}
 .gnode.dim{opacity:.42}
+.gnode.sel{border-color:var(--green);box-shadow:0 0 0 1px color-mix(in srgb,var(--green) 45%,transparent)}
+.gnode.rej{border-color:color-mix(in srgb,var(--red) 45%,var(--line));opacity:.45}
 .gnode.enter{opacity:0;transform:translateY(-10px)}
 .gnode.wip{width:250px;border-color:var(--accent);animation:gpulse 1.6s ease-in-out infinite;cursor:default}
 @keyframes gpulse{0%,100%{box-shadow:0 0 0 0 color-mix(in srgb,var(--accent) 34%,transparent)}
@@ -89,15 +95,16 @@ textarea:focus{border-color:var(--accent)}
 .wipl{color:var(--accent)!important}
 .spin{width:11px;height:11px;border-radius:50%;border:2px solid color-mix(in srgb,var(--accent) 30%,transparent);
   border-top-color:var(--accent);display:inline-block;animation:gspin .8s linear infinite;flex:none}
+.sendspin{border-color:rgba(255,255,255,.35);border-top-color:#fff;vertical-align:-1px}
 @keyframes gspin{to{transform:rotate(360deg)}}
 #landing-start.busy::after{content:'';display:inline-block;width:1.2em;text-align:left;animation:ell 1.2s steps(1) infinite}
 @keyframes ell{0%{content:''}25%{content:'.'}50%{content:'..'}75%{content:'...'}}
 
 /* ── Zoomed-in node: the document/step expands IN PLACE inside the node ── */
 #gview.ease{transition:transform .6s cubic-bezier(.22,.8,.3,1)}
-.gnode.focus{width:560px;max-height:640px;overflow:auto;z-index:7;cursor:default;
+.gnode.focus{overflow:auto;z-index:7;cursor:default;
   border-color:var(--accent);box-shadow:0 26px 80px rgba(0,0,0,.35);padding:14px 18px 18px;
-  overscroll-behavior:contain}   /* height in world px (not vh) so the auto-zoom fit is deterministic */
+  overscroll-behavior:contain}   /* width/max-height set inline: panel-fit at natural scale (k=1) */
 .gnode.focus .nt{-webkit-line-clamp:unset;font-size:15px}
 .nbody{margin-top:10px;font-size:14px;cursor:auto}
 .nbody .draft h3{font-size:15px}

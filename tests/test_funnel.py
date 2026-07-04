@@ -133,6 +133,48 @@ def test_node_content_unknown_node_404(client):
     assert r.status_code == 404
 
 
+# ── the base node + in-tree re-spread (pivots never orphan the old branch) ───
+def test_brainstorm_roots_at_a_base_idea_node(client):
+    s = _brainstorm(client)
+    kinds = {n["kind"] for n in s["tree"]["nodes"]}
+    assert "idea" in kinds
+    base = next(n for n in s["tree"]["nodes"] if n["kind"] == "idea")
+    fork = next(n for n in s["tree"]["nodes"] if n["kind"] == "brainstorm")
+    assert base["parent"] is None and fork["parent"] == base["id"]
+
+
+def test_rebrainstorm_branches_off_the_pivot_point_keeping_the_old_tree(client):
+    s = _brainstorm(client)
+    sid = s["id"]
+    client.post(f"/api/plan/{sid}/commit", json={"thesis": "A done-for-you SaaS onboarding service"})
+    s = wait_status(client, sid)
+    old_ids = {n["id"] for n in s["tree"]["nodes"]}
+    old_sections = [n for n in s["tree"]["nodes"] if n["kind"] == "section"]
+    assert old_sections
+    pivot_point = s["tree"]["active"]
+    r = client.post(f"/api/plan/{sid}/rebrainstorm", json={"idea": "keep the onboarding angle but sell to agencies instead"})
+    assert r.status_code == 200
+    s2 = r.json()
+    new_ids = {n["id"] for n in s2["tree"]["nodes"]}
+    assert old_ids <= new_ids                                # nothing orphaned — the old branch survives
+    assert s2["stage"] == "brainstorm"
+    forks = [n for n in s2["tree"]["nodes"] if n["kind"] == "brainstorm"]
+    assert len(forks) == 2                                   # the original + the pivot's new spread
+    new_fork = next(n for n in forks if n["id"] not in old_ids)
+    assert new_fork["parent"] == pivot_point                 # it grows out of where you pivoted
+    assert s2["tree"]["active"] == new_fork["id"]
+
+
+def test_rebrainstorm_from_a_fork_lands_as_its_sibling(client):
+    s = _brainstorm(client)
+    sid = s["id"]
+    fork = next(n for n in s["tree"]["nodes"] if n["kind"] == "brainstorm")
+    r = client.post(f"/api/plan/{sid}/rebrainstorm", json={"idea": "totally different direction please"})
+    s2 = r.json()
+    new_fork = next(n for n in s2["tree"]["nodes"] if n["kind"] == "brainstorm" and n["id"] != fork["id"])
+    assert new_fork["parent"] == fork["parent"]              # siblings under the shared base node
+
+
 # ── the v2 two-panel surface shell + assets serve ────────────────────────────
 def test_v2_shell_and_assets_serve(client):
     page = client.get("/v2")

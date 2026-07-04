@@ -967,9 +967,52 @@ async def api_brainstorm(request: Request):
     except Exception as e:  # noqa: BLE001
         return _engine_error(e)
     _meter_bg(user, _provider_for(user), cost, toks)
-    nodes, bid = _diverge_tree(d, None)
+    # The tree roots at a BASE `idea` node (the raw prompt). Every spread — including later pivots and
+    # step-one rebuilds — branches beneath it, so alternate takes always share a common ancestor and
+    # no branch is ever orphaned.
+    base = _new_node({"kind": "idea", "step": 0, "title": "Your idea", "draft": idea,
+                      "files": {}, "history": [], "board": []}, None)
+    nodes, bid = _diverge_tree(d, base["id"])
+    base["children"].append(bid)
+    nodes[base["id"]] = base
     store.plan_save(sid, status="building", stage="brainstorm", tree={"nodes": nodes, "active": bid},
                     cost=round(cost, 4), tokens=toks)
+    return _plan_state(store.plan_get(sid))
+
+
+@app.post("/api/plan/{sid}/rebrainstorm")
+async def api_plan_rebrainstorm(sid: str, request: Request):
+    """Re-spread WITHIN the same tree: a pivot, a 'show me other directions', or a 'start over but
+    keep X'. Runs diverge and attaches a new brainstorm fork off the PIVOT POINT (the active node; a
+    re-spread while already on a fork lands as its sibling), so the old branch stays in the graph."""
+    s = store.plan_get(sid)
+    if not s or not _owns(request, s):
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    body = await request.json()
+    idea = (body.get("idea") or s.get("idea") or "").strip()
+    if len(idea) < 12:
+        return JSONResponse({"error": "Tell me a bit more about the idea."}, status_code=400)
+    try:
+        with _run_slot(s.get("user"), s.get("stack")):
+            d, cost = brainstorm.diverge(idea, mock=MOCK)
+            toks = pipeline.LEDGER.tokens()
+    except BusyError as be:
+        return _busy_response(be)
+    except Exception as e:  # noqa: BLE001
+        return _engine_error(e)
+    _meter_bg(s.get("user"), _provider_for(s.get("user")), cost, toks)
+    tree = s.get("tree") or {"nodes": {}, "active": None}
+    nodes = tree.get("nodes") or {}
+    active = nodes.get(tree.get("active")) or {}
+    # a re-spread from a fork/option lands as a SIBLING fork; from anywhere else, under the pivot node
+    parent = active.get("parent") if _kind(active) in ("brainstorm", "option") else active.get("id")
+    new_nodes, bid = _diverge_tree(d, parent)
+    nodes.update(new_nodes)
+    if parent and nodes.get(parent):
+        nodes[parent].setdefault("children", []).append(bid)
+    tree["nodes"] = nodes
+    tree["active"] = bid
+    _fold_usage(sid, s, cost, toks, tree=tree, stage="brainstorm", **_mirror(tree))
     return _plan_state(store.plan_get(sid))
 
 
@@ -1081,6 +1124,8 @@ async def api_plan_node(sid: str, nid: str, request: Request):
             out[f] = n.get(f)
     elif k == "brainstorm":
         out["spread"] = n.get("spread")
+    elif k == "idea":
+        out["draft"] = n.get("draft")   # the raw prompt the whole tree grew from
     elif k == "fork":
         out.update({"question": n.get("question"), "options": n.get("options")})
     return out
