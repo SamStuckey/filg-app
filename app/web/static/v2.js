@@ -551,7 +551,16 @@ function pastBody(n){
   if(d.kind==='section')return `<div class=draft>${mdToHtml(d.content||d.draft||'')}</div>`;
   if(d.kind==='option'){ const x=d.direction||{}; return `<p>${esc(x.one_liner||'')}</p>${x.mold?`<span class=mold>${esc(x.mold)}</span>`:''}`; }
   if(d.kind==='refined')return `<p class=react>${esc(d.thesis||'')}</p>`+(d.mold?`<span class=mold>${esc(d.mold)}</span>`:'');
-  if(d.kind==='brainstorm')return `<p class=thinking>The fork where the directions were offered.</p>`;
+  if(d.kind==='brainstorm'){
+    const opts=(d.options||[]).map(o=>{const x=o.direction||{};
+      return `<div class="opt${o.picked?' sel':''}" style="cursor:default"><div>`+
+        `<h3>${o.picked?'✓ ':''}${esc(x.title||'')}</h3><p>${esc(x.one_liner||'')}</p>`+
+        `${x.mold?`<span class=mold>${esc(x.mold)}</span>`:''}</div></div>`;}).join('');
+    return `<p class=eyebrow>${d.spread==='tight'?'Your idea, sharpened':'The directions offered'}</p>`+
+      `<div class=optgrid>${opts}</div>`+
+      ((d.options||[]).some(o=>o.picked)?`<p class=thinking>✓ = what you picked and carried forward.</p>`
+        :`<p class=thinking>Nothing picked from this fork yet.</p>`);
+  }
   if(d.kind==='idea')return `<p>${esc(d.draft||'')}</p><p class=thinking>Where it all started. Every spread and pivot branches from here.</p>`;
   return '';
 }

@@ -127,6 +127,20 @@ def test_node_content_returns_the_option_card(client):
     assert r.json()["direction"]["title"]
 
 
+def test_fork_node_lists_offered_options_and_picks(client):
+    s = _brainstorm(client)
+    sid = s["id"]
+    opt_ids = [o["id"] for o in s["activeNode"]["options"]]
+    client.post(f"/api/plan/{sid}/merge", json={"options": opt_ids[:1]})
+    wait_status(client, sid)
+    fork = next(n for n in s["tree"]["nodes"] if n["kind"] == "brainstorm")
+    r = client.get(f"/api/plan/{sid}/node/{fork['id']}").json()
+    assert len(r["options"]) == len(opt_ids)                       # every direction offered
+    assert all(o["direction"]["title"] for o in r["options"])
+    picked = {o["id"] for o in r["options"] if o["picked"]}
+    assert picked == set(opt_ids[:1])                              # the merge's pick is marked
+
+
 def test_node_content_unknown_node_404(client):
     s = _brainstorm(client)
     r = client.get(f"/api/plan/{s['id']}/node/nope")

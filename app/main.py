@@ -1157,6 +1157,15 @@ async def api_plan_node(sid: str, nid: str, request: Request):
             out[f] = n.get(f)
     elif k == "brainstorm":
         out["spread"] = n.get("spread")
+        # the fork's story, self-contained: every direction offered + which were picked (a pick =
+        # named in any join's `selected` anywhere in the tree)
+        nodes = (s.get("tree") or {}).get("nodes") or {}
+        chosen = set()
+        for x in nodes.values():
+            chosen.update(x.get("selected") or [])
+        out["options"] = [{"id": c["id"], "direction": c.get("direction"), "picked": c["id"] in chosen}
+                          for c in (nodes.get(i) for i in (n.get("children") or []))
+                          if c and _kind(c) == "option"]
     elif k == "idea":
         out["draft"] = n.get("draft")   # the raw prompt the whole tree grew from
     elif k == "fork":
