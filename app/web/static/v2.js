@@ -224,7 +224,7 @@ async function sendPrompt(){
   chatUser(prompt);
   // an armed "Pivot from here" ghost: the input IS the pivot feedback — spread from that node directly
   if(PIVOT_FROM){ const from=PIVOT_FROM; box.value=''; clearGhost();
-    chatStatus('Pivoting from that node'); return pivotSpread(from,prompt); }
+    chatStatus('Pivoting from '+pivotSrcLabel(from)); return pivotSpread(from,prompt); }
   // browsing an earlier node? it rides along as context (a steer pivots from it, a question is about it)
   const {t}=nodesOf(S);
   const fromNode=(FOCUS&&FOCUS!==t.active)?FOCUS:null;
@@ -265,7 +265,8 @@ async function dispatch(dec,fromNode){
     }
     case 'ask': setMode(['research','board','help'].includes(dec.target)?dec.target:'build'); return;
     case 'steer': default:
-      if(fromNode)return pivotSpread(fromNode,dec.steer||'');   // feedback on an earlier node = pivot from it
+      if(fromNode){ chatStatus('Pivoting from '+pivotSrcLabel(fromNode));
+        return pivotSpread(fromNode,dec.steer||''); }   // feedback on an earlier node = pivot from it
       return steer(dec.steer||'');
   }
 }
@@ -309,6 +310,10 @@ let PIVOT_FROM=null;
 function pivotFromHere(id){ PIVOT_FROM=id; FOCUS=null; BROWSING=true; renderGraph();
   const b=$('ws-box'); if(b){b.placeholder='Your pivot: what should change from here?';b.focus();} }
 function pivotActive(){ const {t}=nodesOf(S); pivotFromHere(t.active); }   // the step view's Pivot button: arm the ghost off THIS step
+function pivotSrcLabel(id){   // name the pivot's source node in the chat — "which node am I forking?" must never be a guess
+  const {m}=nodesOf(S); const n=m[id]; if(!n)return 'that node';
+  const t=(n.direction&&n.direction.title)||nodeLabel(n);
+  return '“'+String(t).slice(0,60)+'”'; }
 function clearGhost(){ PIVOT_FROM=null; const b=$('ws-box'); if(b)b.placeholder='Tell me what to change, or just talk to it…'; renderGraph(); }
 async function pivotSpread(fromNode,feedback){
   beginWip('Spreading new directions',{parent:pivotParent(fromNode)});
