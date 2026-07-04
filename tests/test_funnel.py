@@ -50,6 +50,9 @@ def test_merge_produces_a_refined_node_with_the_cull(client):
     assert an["kind"] == "refined" and an["thesis"]
     assert isinstance(an["kept"], list) and isinstance(an["dropped"], list)
     assert an["research"]["prose"]["title"]           # light first-pass skim rode along
+    # the tree view names the options the refined node JOINED (the graph draws it as a merge)
+    refined = next(n for n in s["tree"]["nodes"] if n["kind"] == "refined")
+    assert set(refined["selected"]) == set(opt_ids)
 
 
 def test_merge_needs_a_selection(client):

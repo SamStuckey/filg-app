@@ -643,7 +643,10 @@ def _tree_view(tree: dict) -> dict:
     nodes = tree.get("nodes") or {}
     return {"active": tree.get("active"),
             "nodes": [{"id": n["id"], "parent": n.get("parent"), "step": n.get("step", 0),
-                       "kind": _kind(n), "title": n.get("title"), "feedback": n.get("feedback")}
+                       "kind": _kind(n), "title": n.get("title"), "feedback": n.get("feedback"),
+                       # a refined node names the options it JOINED — the graph draws it as a merge
+                       # of those branches, not a sibling branch off the brainstorm fork
+                       **({"selected": n.get("selected")} if n.get("selected") else {})}
                       for n in nodes.values()],
             "show": bool(nodes)}
 

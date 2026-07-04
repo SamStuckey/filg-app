@@ -85,14 +85,24 @@ textarea:focus{border-color:var(--accent)}
   max-height:96px;overflow:hidden;display:flex;flex-direction:column;justify-content:flex-end}
 .nspew div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .nspew div:last-child{color:var(--fg)}
+.wipl{color:var(--accent)!important}
+.spin{width:11px;height:11px;border-radius:50%;border:2px solid color-mix(in srgb,var(--accent) 30%,transparent);
+  border-top-color:var(--accent);display:inline-block;animation:gspin .8s linear infinite;flex:none}
+@keyframes gspin{to{transform:rotate(360deg)}}
+#landing-start.busy::after{content:'';display:inline-block;width:1.2em;text-align:left;animation:ell 1.2s steps(1) infinite}
+@keyframes ell{0%{content:''}25%{content:'.'}50%{content:'..'}75%{content:'...'}}
 
 /* ── Zoomed-in node: the document/step expands IN PLACE inside the node ── */
 #gview.ease{transition:transform .6s cubic-bezier(.22,.8,.3,1)}
-.gnode.focus{width:560px;max-height:66vh;overflow:auto;z-index:7;cursor:default;
-  border-color:var(--accent);box-shadow:0 26px 80px rgba(0,0,0,.35);padding:14px 18px 18px}
+.gnode.focus{width:560px;max-height:640px;overflow:auto;z-index:7;cursor:default;
+  border-color:var(--accent);box-shadow:0 26px 80px rgba(0,0,0,.35);padding:14px 18px 18px;
+  overscroll-behavior:contain}   /* height in world px (not vh) so the auto-zoom fit is deterministic */
 .gnode.focus .nt{-webkit-line-clamp:unset;font-size:15px}
 .nbody{margin-top:10px;font-size:14px;cursor:auto}
 .nbody .draft h3{font-size:15px}
+/* the step's CTA stays pinned to the bottom of the open doc while its content scrolls */
+.gnode.focus .nbody .ctarow{position:sticky;bottom:-18px;margin:16px -18px -18px;padding:12px 18px 14px;
+  background:var(--card);border-top:1px solid var(--line)}
 .nhist{margin-top:12px;border-top:1px solid var(--line);padding-top:8px}
 .nhist summary{cursor:pointer;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
 .nhist .nspew{max-height:150px;display:block;overflow:auto}

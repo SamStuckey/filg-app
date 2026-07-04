@@ -107,9 +107,9 @@ async function startFromLanding(){
   const idea=$('landing-box').value.trim();
   $('landing-err').textContent='';
   if(idea.length<12){$('landing-err').textContent='Tell me a bit more about the idea.';return;}
-  const btn=$('landing-start'); btn.disabled=true; btn.textContent='Thinking…';
+  const btn=$('landing-start'); btn.disabled=true; btn.classList.add('busy'); btn.textContent='Spreading your idea';
   const {ok,d}=await api('POST','/api/brainstorm',{idea});
-  btn.disabled=false; btn.textContent='Start →';
+  btn.disabled=false; btn.classList.remove('busy'); btn.textContent='Start →';
   if(d&&d.gibberish){ $('landing-joke').innerHTML=`<div class=jokecard><h3>${esc(d.title||"That's not an idea yet.")}</h3><div>${mdToHtml(d.body||'')}</div></div>`; return; }
   if(!ok){ if(gateV2(d))return; $('landing-err').textContent=(d&&d.error)||'Something went wrong.'; return; }
   adoptPlan(d);
@@ -203,18 +203,25 @@ function pivotFork(){ const st=PENDING_FORK&&PENDING_FORK.steer; PENDING_FORK=nu
 // Documents/steps live INSIDE nodes; the camera does the storytelling: zoom out on prompt, follow the
 // build as edges draw + leaflets fan, zoom into whatever's ready next. Drag to pan, wheel to zoom.
 const NW=190, NFOCUS=560, NH=58, COLW=225, ROWH=125, PADX=70, PADY=48;
+const WIP_BOX=210;   // an expanded working node's height — its row grows so children never sit under it
 let VIEW={x:0,y:0,k:1}, GSEEN=new Set(), FOCUS=null, BROWSING=false, LAST_ACTIVE=null, WAS_RESEARCHING=false;
-let WIP_LABEL=null, WIPLOG=[], LANES=[], LANES_DONE=new Set(), PROG_N=0;
+let WIP_LABEL=null, WIP_T0=null, WIPLOG=[], LANES=[], LANES_DONE=new Set(), PROG_N=0;
 const NODECACHE={}, NODELOG={};   // fetched past-node content · per-node build-log stash
 function resetGraph(){ GSEEN=new Set(); FOCUS=null; BROWSING=false; LAST_ACTIVE=null; WAS_RESEARCHING=false;
   WIP_LABEL=null; WIPLOG=[]; LANES=[]; LANES_DONE=new Set(); PROG_N=0;
   Object.keys(NODECACHE).forEach(k=>delete NODECACHE[k]); Object.keys(NODELOG).forEach(k=>delete NODELOG[k]);
   const gn=$('gnodes'); if(gn)gn.innerHTML=''; const ge=$('gedges'); if(ge)ge.innerHTML=''; }
-function beginWip(label){ WIP_LABEL=label; WIPLOG=[]; LANES=[]; LANES_DONE=new Set();
+function beginWip(label){ WIP_LABEL=label; WIP_T0=Date.now(); WIPLOG=[]; LANES=[]; LANES_DONE=new Set();
   FOCUS=null; BROWSING=false; renderGraph(); }   // content collapses back into the node, camera pulls out
-function endWip(){ WIP_LABEL=null; }
+function endWip(){ WIP_LABEL=null; WIP_T0=null; }
 function nodesOf(s){const t=(s&&s.tree)||{};const m={};(t.nodes||[]).forEach(n=>m[n.id]=n);return {m,t};}
-function pathSetOf(m,active){const set={};let cur=active;while(cur!=null&&m[cur]){set[cur]=1;cur=m[cur].parent;}return set;}
+function pathSetOf(m,active){const set={};let cur=active;
+  while(cur!=null&&m[cur]){set[cur]=1;
+    const n=m[cur];
+    // a refined node JOINS its selected options — they're part of the taken path, not passed-over
+    if(n.kind==='refined'&&Array.isArray(n.selected))n.selected.forEach(s=>{if(m[s])set[s]=1;});
+    cur=n.parent;}
+  return set;}
 function nodeLabel(n){
   if(n.kind==='brainstorm')return 'A few directions';
   if(n.kind==='refined')return 'Refined idea';
@@ -233,32 +240,51 @@ function drainProgress(s){   // stream progress into the working node (sentinels
   }
   PROG_N=Math.max(PROG_N,prog.length);
 }
-function layoutGraph(m){
+function layoutGraph(m,wip){
   const kids={},roots=[];
   Object.values(m).forEach(n=>{kids[n.id]=kids[n.id]||[];});
   Object.values(m).forEach(n=>{ if(n.parent!=null&&kids[n.parent])kids[n.parent].push(n.id); else if(n.parent==null)roots.push(n.id); });
+  // a refined node with `selected` is a JOIN of those option branches: it sits BELOW the options it
+  // merged, centered between them, with edges from each — not a sibling branch off the brainstorm.
+  const joins={};
+  Object.values(m).forEach(n=>{ if(n.kind==='refined'&&Array.isArray(n.selected)){
+    const sel=n.selected.filter(id=>m[id]); if(sel.length)joins[n.id]=sel; }});
   const depth={},pos={};
   const dq=[...roots]; roots.forEach(r=>depth[r]=0);
-  while(dq.length){const id=dq.shift();(kids[id]||[]).forEach(c=>{depth[c]=depth[id]+1;dq.push(c);});}
+  while(dq.length){const id=dq.shift();(kids[id]||[]).forEach(c=>{depth[c]=(depth[id]||0)+1;dq.push(c);});}
+  Object.keys(joins).forEach(id=>{
+    depth[id]=Math.max(...joins[id].map(s=>depth[s]||0))+1;
+    const q=[id]; while(q.length){const x=q.shift();(kids[x]||[]).forEach(c=>{depth[c]=depth[x]+1;q.push(c);});}
+  });
+  // x slots: a joined node doesn't consume a slot under its parent; it centers on what it merged
   let slot=0; const X={};
-  function place(id){const ks=kids[id]||[];
+  function place(id){const ks=(kids[id]||[]).filter(c=>!joins[c]);
     if(!ks.length){X[id]=slot++;} else {ks.forEach(place);X[id]=(X[ks[0]]+X[ks[ks.length-1]])/2;}}
   roots.forEach(place);
-  Object.keys(m).forEach(id=>{pos[id]={x:PADX+(X[id]||0)*COLW, y:PADY+(depth[id]||0)*ROWH};});
-  return {pos,kids,roots};
+  function placeUnder(id,x){X[id]=x;const ks=kids[id]||[];ks.forEach((c,i)=>placeUnder(c,x+(i-(ks.length-1)/2)));}
+  Object.keys(joins).forEach(id=>{ const xs=joins[id].map(s=>X[s]||0);
+    placeUnder(id,xs.reduce((a,b)=>a+b,0)/xs.length); });
+  // per-row y: the WIP row grows so an expanded working node (+ its leaflets) never covers children
+  const maxDepth=Math.max(0,...Object.values(depth));
+  const rowY={}; let y=PADY;
+  for(let d=0;d<=maxDepth;d++){ rowY[d]=y;
+    y+=ROWH+((wip!=null&&depth[wip]===d)?(WIP_BOX-NH)+(LANES.length?54:0):0); }
+  Object.keys(m).forEach(id=>{pos[id]={x:PADX+(X[id]||0)*COLW, y:rowY[depth[id]||0]};});
+  return {pos,kids,joins};
 }
 function renderGraph(){
   const s=S; const gn=$('gnodes'), ge=$('gedges'); if(!s||!gn)return;
   const {m,t}=nodesOf(s); const active=t.active;
-  const {pos,kids}=layoutGraph(m);
-  const onPath=pathSetOf(m,active);
   const wip=(WIP_LABEL||s.status==='researching')?active:null;
+  const {pos,kids,joins}=layoutGraph(m,wip);
+  const onPath=pathSetOf(m,active);
   // nodes: keyed divs, moved (CSS transition) or created (.enter → fade in)
   const live=new Set(Object.keys(m));
   gn.querySelectorAll('.gnode').forEach(el=>{ if(!live.has(el.dataset.id)) el.remove(); });
   Object.values(m).forEach(n=>{
     const p=pos[n.id]; const isWip=n.id===wip, isFocus=n.id===FOCUS&&!isWip;
-    const dim=n.kind==='option'&&!onPath[n.id]&&(kids[n.parent]||[]).some(id=>m[id]&&m[id].kind==='refined');
+    // an option dims once a refined join exists that did NOT include it (a path not taken)
+    const dim=n.kind==='option'&&!onPath[n.id]&&(kids[n.parent]||[]).concat(Object.keys(joins)).some(id=>m[id]&&m[id].kind==='refined');
     let el=gn.querySelector(`.gnode[data-id="${n.id}"]`);
     const fresh=!el;
     if(fresh){ el=document.createElement('div'); el.dataset.id=n.id; el.classList.add('enter');
@@ -269,28 +295,33 @@ function renderGraph(){
     el.title=isFocus?'':((n.feedback?('↳ '+n.feedback+'\n'):'')+nodeLabel(n));
     let inner=`<div class=nk><span aria-hidden=true>${KICON[n.kind]||'▤'}</span>${esc(n.kind||'part')}</div>`+
       `<div class=nt>${esc(nodeLabel(n))}</div>`;
-    if(isWip){   // the node's own processing: label + the live receipt tail (leaflets fan outside)
-      inner+=`<div class=nk style="margin-top:6px">⚙ ${esc(WIP_LABEL||'Working')}</div>`;
-      inner+=`<div class=nspew>`+(WIPLOG.length?WIPLOG.map(l=>`<div>${esc(l)}</div>`).join(''):'<div>starting up…</div>')+`</div>`;
+    if(isWip){   // the node's own processing: spinner + label + elapsed + the live receipt tail
+      const secs=WIP_T0?Math.round((Date.now()-WIP_T0)/1000)+'s':'';
+      inner+=`<div class="nk wipl" style="margin-top:6px"><span class=spin aria-hidden=true></span>`+
+        `${esc(WIP_LABEL||'Working')} · <span id=wiptime>${secs}</span></div>`;
+      inner+=`<div class=nspew>`+(WIPLOG.length?WIPLOG.map(l=>`<div>${esc(l)}</div>`).join(''):'<div>warming up…</div>')+`</div>`;
     }
     if(isFocus)inner+=`<div class=nbody>${nodeBody(n)}</div>`;
     el.innerHTML=inner;
     if(fresh)requestAnimationFrame(()=>requestAnimationFrame(()=>el.classList.remove('enter')));
   });
   renderLeaves(gn,pos,wip);
-  // edges
+  // edges: parent→child, except a refined JOIN which draws from each option it merged
   let maxX=0,maxY=0; Object.values(pos).forEach(p=>{maxX=Math.max(maxX,p.x+NFOCUS);maxY=Math.max(maxY,p.y+ROWH);});
-  ge.setAttribute('width',maxX+PADX); ge.setAttribute('height',maxY+PADY);
-  ge.innerHTML=Object.values(m).filter(n=>n.parent!=null&&m[n.parent]).map(n=>{
-    const a=pos[n.parent],b=pos[n.id];
-    const x1=a.x+NW/2,y1=a.y+NH,x2=b.x+NW/2,y2=b.y;
-    const cls=(onPath[n.id]&&onPath[n.parent]?'on ':'')+(GSEEN.has(n.id)?'':'new');
-    return `<path class="${cls}" pathLength=1 d="M${x1},${y1} C${x1},${y1+46} ${x2},${y2-46} ${x2},${y2}"/>`;
+  ge.setAttribute('width',maxX+PADX); ge.setAttribute('height',maxY+PADY+WIP_BOX);
+  const edge=(a,b,on,seen)=>{const x1=a.x+NW/2,y1=a.y+NH,x2=b.x+NW/2,y2=b.y;
+    return `<path class="${(on?'on ':'')+(seen?'':'new')}" pathLength=1 d="M${x1},${y1} C${x1},${y1+46} ${x2},${y2-46} ${x2},${y2}"/>`;};
+  ge.innerHTML=Object.values(m).map(n=>{
+    if(joins[n.id])return joins[n.id].map(sid=>edge(pos[sid],pos[n.id],onPath[n.id]&&onPath[sid],GSEEN.has(n.id))).join('');
+    if(n.parent==null||!m[n.parent])return '';
+    return edge(pos[n.parent],pos[n.id],onPath[n.id]&&onPath[n.parent],GSEEN.has(n.id));
   }).join('');
   Object.keys(m).forEach(id=>GSEEN.add(id));
-  // camera: follow the build (center the working node), else keep the focused node centered
-  if(wip&&pos[wip]){ if(!BROWSING)centerOn(pos[wip],250,0.9,0.42); }
-  else if(FOCUS&&pos[FOCUS]){ if(!BROWSING)centerOn(pos[FOCUS],NFOCUS,1,0.14); }
+  // camera: what YOU opened wins, else follow the build, unless you're browsing on your own
+  if(!BROWSING){
+    if(FOCUS&&pos[FOCUS])focusCam(pos[FOCUS]);
+    else if(wip&&pos[wip])centerOn(pos[wip],250,0.9,0.30);
+  }
   pill(!wip && stageSurface(S) && FOCUS!==active);
 }
 function renderLeaves(gn,pos,wip){   // research leaflets: sub-nodes fanning out of the working node
@@ -303,8 +334,8 @@ function renderLeaves(gn,pos,wip){   // research leaflets: sub-nodes fanning out
     if(!el){ el=document.createElement('div'); el.dataset.i=i; el.className='gleaf enter'; el.textContent='🍃';
       gn.appendChild(el); requestAnimationFrame(()=>requestAnimationFrame(()=>el.classList.remove('enter'))); }
     const spread=(i-(want-1)/2);
-    el.style.left=(p.x+125+spread*44-15)+'px';
-    el.style.top=(p.y+ROWH-38)+'px';
+    el.style.left=(p.x+NW/2+spread*44-15)+'px';
+    el.style.top=(p.y+WIP_BOX-4)+'px';   // in the reserved gap under the working node, above its children
     el.title=LANES[i]||('lane '+(i+1));
     el.classList.toggle('done',LANES_DONE.has(i));
   }
@@ -316,31 +347,51 @@ function centerOn(p,w,k,yFrac){   // ease the camera so node at p (width w) sits
   VIEW.y=r.height*yFrac-p.y*k;
   applyView(true);
 }
+function focusCam(p){   // a focused node fills ~3/4 of the panel: zoom auto-adjusts to the space
+  const r=$('right').getBoundingClientRect();
+  const k=Math.min(1.35,Math.max(0.55,(r.width*0.75)/NFOCUS));
+  VIEW.k=k;
+  VIEW.x=r.width/2-(p.x+NW/2)*k;   // the expanded box is centered on the node's slot
+  VIEW.y=r.height*0.07-p.y*k;
+  applyView(true);
+}
 function applyView(ease){ const v=$('gview'); if(!v)return;
   v.classList.toggle('ease',!!ease); v.style.transform=`translate(${VIEW.x}px,${VIEW.y}px) scale(${VIEW.k})`;
   if(ease)setTimeout(()=>v.classList.remove('ease'),650); }
 function initGraphInput(){
   const g=$('graph'); if(!g)return;
   let drag=null,moved=false;
-  g.addEventListener('pointerdown',e=>{ if(e.target.closest('.gnode.focus .nbody'))return;
+  g.addEventListener('pointerdown',e=>{ if(e.target.closest('.gnode.focus'))return;   // the open doc handles its own input
     drag={x:e.clientX,y:e.clientY,vx:VIEW.x,vy:VIEW.y}; moved=false; });
   g.addEventListener('pointermove',e=>{ if(!drag)return;
     const dx=e.clientX-drag.x, dy=e.clientY-drag.y;
     if(Math.abs(dx)+Math.abs(dy)>6){ moved=true; BROWSING=true; g.classList.add('dragging'); g.setPointerCapture(e.pointerId); }
     if(moved){ VIEW.x=drag.vx+dx; VIEW.y=drag.vy+dy; applyView(false); } });
-  const stop=e=>{ if(drag&&!moved&&!e.target.closest('.gnode')){ unfocus(); }   // background click → zoom out
+  const stop=e=>{ if(drag&&!moved&&!e.target.closest('.gnode')){ unfocus(); }   // click outside → the doc collapses into its node
     drag=null; g.classList.remove('dragging'); };
   g.addEventListener('pointerup',stop); g.addEventListener('pointercancel',stop);
-  g.addEventListener('wheel',e=>{ e.preventDefault(); BROWSING=true;
-    const r=g.getBoundingClientRect(), mx=e.clientX-r.left, my=e.clientY-r.top;
-    const k2=Math.min(1.9,Math.max(0.3,VIEW.k*Math.exp(-e.deltaY*0.0012)));
-    VIEW.x=mx-(mx-VIEW.x)*(k2/VIEW.k); VIEW.y=my-(my-VIEW.y)*(k2/VIEW.k); VIEW.k=k2; applyView(false);
+  // Trackpad semantics: pinch (ctrlKey wheel) zooms · two-finger swipe PANS · over an open node's
+  // scrollable content the wheel scrolls THAT, not the canvas.
+  g.addEventListener('wheel',e=>{
+    if(!e.ctrlKey&&e.target.closest('.gnode.focus'))return;   // native scroll inside the open doc
+    e.preventDefault();
+    if(e.ctrlKey){   // pinch → zoom toward the cursor
+      BROWSING=true;
+      const r=g.getBoundingClientRect(), mx=e.clientX-r.left, my=e.clientY-r.top;
+      const k2=Math.min(1.9,Math.max(0.3,VIEW.k*Math.exp(-e.deltaY*0.012)));
+      VIEW.x=mx-(mx-VIEW.x)*(k2/VIEW.k); VIEW.y=my-(my-VIEW.y)*(k2/VIEW.k); VIEW.k=k2; applyView(false);
+    } else {          // two-finger swipe → pan
+      BROWSING=true;
+      VIEW.x-=e.deltaX; VIEW.y-=e.deltaY; applyView(false);
+    }
   },{passive:false});
 }
 function gNodeClick(id){
-  if(S&&S.status==='researching')return;         // let the machine finish
-  if(FOCUS===id){ return; }                       // already reading it
-  focusNode(id);
+  const {t}=nodesOf(S);
+  const wip=(S&&S.status==='researching'||WIP_LABEL)?t.active:null;
+  if(id===wip)return;                             // the working node isn't readable yet
+  if(FOCUS===id)return;                           // already reading it
+  focusNode(id);                                  // browsing past nodes works even while it builds
 }
 function focusActive(force){ const {t}=nodesOf(S); BROWSING=false; if(force)FOCUS=null; focusNode(t.active); }
 function focusNode(id){
@@ -453,10 +504,11 @@ function render(s){
   // server knows when it's done. Sync ops (run) clear their own label via endWip before render().
   const researching=S.status==='researching';
   if(!researching&&!WAS_RESEARCHING)WIP_LABEL=null;   // belt-and-braces: never let a stale label stick
+  if(researching&&!WIP_T0)WIP_T0=Date.now();          // e.g. a reload mid-build → the timer still ticks
   const {t}=nodesOf(S);
   if(WAS_RESEARCHING&&!researching){          // a build just finished → stash its log on the node it made
     if(WIPLOG.length)NODELOG[t.active]=WIPLOG.slice();
-    WIPLOG=[]; LANES=[]; LANES_DONE=new Set(); WIP_LABEL=null;
+    WIPLOG=[]; LANES=[]; LANES_DONE=new Set(); WIP_LABEL=null; WIP_T0=null;
   }
   WAS_RESEARCHING=researching;
   if(!researching){
@@ -490,3 +542,5 @@ function toolBody(mode){
 document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeModal();unfocus();}});
 initGraphInput();
 loadKey();   // paint the key indicator (hosted vs BYOK) on load
+// the working node's elapsed clock — keeps the build feeling alive even between progress lines
+setInterval(()=>{const el=$('wiptime');if(el&&WIP_T0)el.textContent=Math.round((Date.now()-WIP_T0)/1000)+'s';},1000);
