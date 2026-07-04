@@ -499,7 +499,9 @@ function initGraphInput(){
     const dx=e.clientX-drag.x, dy=e.clientY-drag.y;
     if(Math.abs(dx)+Math.abs(dy)>6){ moved=true; BROWSING=true; g.classList.add('dragging'); g.setPointerCapture(e.pointerId); }
     if(moved){ VIEW.x=drag.vx+dx; VIEW.y=drag.vy+dy; applyView(false); } });
-  const stop=e=>{ if(drag&&!moved&&!e.target.closest('.gnode')){ unfocus(); }   // click outside → the doc collapses into its node
+  const stop=e=>{ if(drag&&!moved){
+      if(LEAF_OPEN.size&&!e.target.closest('.gleaf')){ LEAF_OPEN=new Set(); renderView(); }   // click out of an open leaf → fold it
+      if(!e.target.closest('.gnode')&&!e.target.closest('.gleaf')){ unfocus(); } }            // click outside → the doc collapses into its node
     drag=null; g.classList.remove('dragging'); };
   g.addEventListener('pointerup',stop); g.addEventListener('pointercancel',stop);
   // Trackpad semantics: pinch (ctrlKey wheel) zooms · two-finger swipe PANS · over an open node's
