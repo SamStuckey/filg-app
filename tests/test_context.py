@@ -85,8 +85,11 @@ def test_situation_flags_a_midflight_build():
     assert "MID-FLIGHT" in context.situation(s)
 
 
-def test_situation_is_empty_at_an_idle_frontier():
-    assert context.situation(_session()) == ""
+def test_situation_always_names_the_active_step():
+    # 'which section am I in?' must never get 'I can't see your screen' — position is unconditional
+    sit = context.situation(_session())
+    assert "They are ON: the 'The setup' section" in sit
+    assert "READING" not in sit and "MID-FLIGHT" not in sit   # idle frontier → coaching stays allowed
 
 
 # ── the moat's labels survive every view ─────────────────────────────────────

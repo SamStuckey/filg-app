@@ -66,14 +66,16 @@ def chat_reply(session: dict, message: str, history: list | None = None,
 
     if mock:
         picked = journey.count("✓ PICKED")
+        calm = "READING" in situation or "MID-FLIGHT" in situation   # rule 5: no forward coaching here
         aware = (" (I can see you're reading an earlier node — answering in place.)" if "READING" in situation
                  else " (A build is running — answering without adding work.)" if "MID-FLIGHT" in situation
                  else "")
         base = (f"On “{message.strip()[:80]}”: grounded in your plan for {idea}"
                 + (f" (journey: {picked} picked direction{'s' if picked != 1 else ''} in view)" if journey else "")
+                + (f" (you are on: {situation.splitlines()[0][12:80]})" if situation.startswith("They are ON") else "")
                 + f", the straight read is to lead with your edge ({edge}) and pressure-test the "
                 f"riskiest assumption ({vet.get('biggest_risk') or 'your main assumption'}) before scaling.")
-        nxt = ("" if situation else
+        nxt = ("" if calm else
                f" Next step: {vet.get('first_test') or 'run one cheap test this week'}.")
         return base + nxt + aware + " (mock)", 0.0
 

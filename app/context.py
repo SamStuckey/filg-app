@@ -159,11 +159,16 @@ def journey(s: dict) -> str:
 
 
 def situation(s: dict, node_id: str | None = None, working: str | None = None) -> str:
-    """Where the operator IS right now, for the advisor: what's mid-flight, which node they have
-    open, and that node's standing (committed path / picked / passed over). Without this the advisor
-    coaches forward from nowhere — prescribing next steps while the user is reading history."""
+    """Where the operator IS right now, for the advisor — ALWAYS states the active step (so 'which
+    section am I in?' has a source of truth), plus what's mid-flight and which node they have open
+    with its standing (committed path / picked / passed over). Without this the advisor coaches
+    forward from nowhere — or claims it can't see the screen."""
     nodes, active = _nodes(s)
     parts = []
+    a = nodes.get(active)
+    if a:   # unconditional: the operator's position is never a mystery to the advisor
+        parts.append("They are ON: " + snippet(a)
+                     + (f" (funnel stage: {s.get('stage')})" if s.get("stage") else ""))
     if working:
         parts.append(f"A build step is MID-FLIGHT right now ({working[:80]}). The machine is already "
                      "working — do not prescribe new work or next steps.")
@@ -221,7 +226,7 @@ if __name__ == "__main__":  # self-test: the four 2026-07-04 drops, each pinned 
     sit = situation(S, "o2")
     assert "READING" in sit and "PASSED OVER" in sit and "Corporate gift boxes" in sit
     assert "MID-FLIGHT" in situation(S, None, "Writing the next part")
-    assert situation(S) == ""
+    assert "They are ON: the 'The setup' section" in situation(S)   # position is NEVER a mystery
     # evidence keeps the labels split
     c, f = evidence({"research": {"rows": [{"mark": "ok", "text": "a", "url": "u"},
                                            {"mark": "warn", "text": "b", "url": "v"}]}})
