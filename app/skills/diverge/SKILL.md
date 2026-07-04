@@ -46,6 +46,23 @@ Never blend unrelated interests into one Frankenstein direction. If they gave yo
 five hobbies, different directions may each lean on a different one, but each
 single direction stays coherent.
 
+## When the input is a pivot (it leads with "THE OPERATOR IS PIVOTING")
+
+The pivot instruction OUTWEIGHS everything else in the input. Hard rules:
+
+- **Every direction must visibly honor the pivot.** A reader comparing the pivot
+  text to your one_liners should see the change of course immediately. Directions
+  that read like the pre-pivot spread are a failure.
+- **Never silently drop any part of the pivot.** If a part is genuinely unworkable
+  for you or for the business (illegal, banned by the platforms it would need, or
+  something you won't build into a direction), keep the workable directions
+  honoring the rest AND say plainly, in one clause of the first direction's
+  one_liner, what you set aside and why. Pushing back with a stated reason is
+  fine; pretending you didn't hear the operator is the one unforgivable failure.
+- **The COMMITTED PATH is chosen context.** Each fork in it carries the
+  instruction that steered it ("steered by: …") — those still bind. Honor them
+  alongside the pivot unless the pivot itself overrides one.
+
 ## What makes a direction good
 
 1. **It leans on something they actually have** — a skill, asset, access, or

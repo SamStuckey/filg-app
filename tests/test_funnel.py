@@ -129,6 +129,17 @@ def test_route_pick_selects_on_screen_directions(client):
     assert d["intent"] == "pick" and d["picks"] == [1, 2]
 
 
+def test_path_snippets_carry_fork_steering():
+    # a brainstorm fork's snippet must include the instruction that created it — dropping it is
+    # how "drop the DTC piece" evaporated from a later pivot's context (2026-07-04)
+    from app import main as m
+    fork = {"id": "b2", "kind": "brainstorm", "parent": None,
+            "feedback": "keep the story angle, drop the branded cookie delivery"}
+    snip = m._node_snippet(fork)
+    assert "steered by" in snip and "drop the branded cookie delivery" in snip
+    assert m._node_snippet({"id": "b1", "kind": "brainstorm"}) == "the fork where directions were spread"
+
+
 def test_route_context_lists_brainstorm_options():
     from app import main as m
     s = {"tree": {"active": "b1", "nodes": {

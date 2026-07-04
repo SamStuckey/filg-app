@@ -907,8 +907,10 @@ def _node_snippet(n: dict) -> str:
         return "the direction '" + (d.get("title") or "")[:80] + "': " + (d.get("one_liner") or "")[:160]
     if k == "idea":
         return "the original idea: " + (n.get("draft") or "")[:160]
-    if k == "brainstorm":
-        return "the fork where a few directions were offered"
+    if k == "brainstorm":   # a fork carries the instruction that created it — dropping it loses the steer
+        fb = (n.get("feedback") or "").strip()
+        return ("the fork where directions were spread" +
+                (f" — steered by: '{fb[:160]}'" if fb else ""))
     body = (n.get("files") or {}).get(next(iter(n.get("files") or {}), ""), "") or n.get("draft") or ""
     return "the '" + (n.get("title") or "part") + "' section of the plan: " + str(body)[:200]
 
