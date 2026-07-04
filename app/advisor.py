@@ -19,6 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))                       # app/  → skills, personas
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "prototype"))  # prototype/ → engine
+import context  # noqa: E402 — the context engine (graded-evidence blocks)
 import personas  # noqa: E402
 import planner  # noqa: E402 — bundle_markdown + working idea/edge helpers
 import skill_registry as skills  # noqa: E402
@@ -41,13 +42,7 @@ def _board_roster(session: dict) -> str:
     return "\n".join(f"- {personas.get(k)['name']}: {personas.get(k)['blurb']}" for k in keys)
 
 
-def _research_blocks(session: dict) -> tuple[str, str]:
-    rows = ((session.get("research") or {}).get("rows")) or []
-    cited = "\n".join(f"- {r['text']} [{r.get('url', '')}]" for r in rows if r.get("mark") == "ok") \
-        or "- (none cleared)"
-    flagged = "\n".join(f"- {r['text']} [{r.get('url', '')}]" for r in rows if r.get("mark") == "warn") \
-        or "- (none flagged)"
-    return cited, flagged
+_research_blocks = context.evidence   # graded evidence comes from the context engine, labels intact
 
 
 def _convo(history: list, limit: int = 12) -> str:

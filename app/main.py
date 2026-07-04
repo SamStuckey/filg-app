@@ -55,6 +55,7 @@ import brainstorm # noqa: E402 — diverge/merge: the top of the funnel (1-3 dir
 import router     # noqa: E402 — the single prompt box (intent routing) + the pivot-fork integration gate
 import plan_pdf   # noqa: E402 — styled PDF generation (synthesis + fpdf2 render)
 import advisor    # noqa: E402 — "chat with your plan" (grounded advisory layer)
+import context    # noqa: E402 — THE CONTEXT ENGINE: every model-facing view of session state
 import skeptic    # noqa: E402 — adversarial assumption-checking on the live research path
 import provider   # noqa: E402 — BYOK: per-run LLM provider (FILG's key vs a user's OpenRouter key)
 import pipeline   # noqa: E402 — engine: per-run cost ledger (run_ledger) for safe concurrency
@@ -631,10 +632,7 @@ def _new_node(content: dict, parent: str | None) -> dict:
     return {"id": uuid.uuid4().hex[:8], "parent": parent, "children": [], **content}
 
 
-def _kind(node: dict) -> str:
-    """A node's kind. Legacy plan-section nodes (built before the funnel existed) have no `kind`, so an
-    absent kind means 'section'. Funnel kinds: brainstorm | option | refined | fork."""
-    return (node or {}).get("kind") or "section"
+_kind = context.kind   # one owner for "what kind is this node" — the context engine
 
 
 def _tree_view(tree: dict) -> dict:
@@ -897,98 +895,16 @@ def _deep_build(sid: str, thesis: str, user: str, tok: str | None = None) -> Non
         store.plan_save(sid, status="error", error=_humanize_error(e)[0])
 
 
-def _node_snippet(n: dict) -> str:
-    """One line describing a node, for router context."""
-    k = _kind(n)
-    if k == "refined":
-        return "the refined idea: " + (n.get("thesis") or "")[:200]
-    if k == "option":
-        d = n.get("direction") or {}
-        return "the direction '" + (d.get("title") or "")[:80] + "': " + (d.get("one_liner") or "")[:160]
-    if k == "idea":
-        return "the original idea: " + (n.get("draft") or "")[:160]
-    if k == "brainstorm":   # a fork carries the instruction that created it — dropping it loses the steer
-        fb = (n.get("feedback") or "").strip()
-        return ("the fork where directions were spread" +
-                (f" — steered by: '{fb[:160]}'" if fb else ""))
-    body = (n.get("files") or {}).get(next(iter(n.get("files") or {}), ""), "") or n.get("draft") or ""
-    return "the '" + (n.get("title") or "part") + "' section of the plan: " + str(body)[:200]
+# ── The context engine (app/context.py) owns every model-facing view of session state. These
+# aliases keep main.py's historical names; DO NOT grow new context strings here — add to the
+# engine's renderers/views so every consumer inherits the change (see tests/test_context.py).
+_node_snippet = context.snippet
+_journey_digest = context.journey
+_route_context = context.screen
 
 
-def _path_snippets(nodes: dict, at_id: str | None) -> list[str]:
-    """The pivot contract's context: the pivot node and its ANCESTORS only (root → node, in order) —
-    siblings and descendants are dropped. Pivoting from an option means the question was re-answered
-    with ONLY that option selected, so the path ending at it IS the affirmative context."""
-    chain = []
-    cur = at_id
-    while cur is not None and nodes.get(cur):
-        chain.append(nodes[cur])
-        cur = nodes[cur].get("parent")
-    return [_node_snippet(n) for n in reversed(chain)]
-
-
-def _journey_digest(s: dict) -> str:
-    """The decision-tree journey, written out for the advisor: the committed path root→active one
-    line per node, and at each fork every direction offered with ✓ on the ones the operator picked.
-    Without this the advisor only sees the v1 surface (idea/vetting/files) and knows nothing about
-    options, picks, or pivots — it literally can't answer 'which option did I pick?'."""
-    t = s.get("tree") or {}
-    nodes = t.get("nodes") or {}
-    active = t.get("active")
-    if not nodes or not active:
-        return ""
-    chain = []
-    cur = active
-    while cur and nodes.get(cur):
-        chain.append(nodes[cur])
-        cur = nodes[cur].get("parent")
-    chain.reverse()
-    on_path = {n["id"] for n in chain}
-    chosen = set(on_path)
-    for x in nodes.values():
-        chosen.update(x.get("selected") or [])   # a pick = named in any join's `selected`
-    lines = []
-    for n in chain:
-        lines.append("- " + _node_snippet(n))
-        if _kind(n) == "brainstorm":
-            for c in (nodes.get(i) for i in (n.get("children") or [])):
-                if c and _kind(c) == "option":
-                    d = c.get("direction") or {}
-                    mark = "✓ PICKED" if c["id"] in chosen else "passed over"
-                    lines.append(f"    · [{mark}] '{(d.get('title') or '')[:70]}': "
-                                 f"{(d.get('one_liner') or '')[:140]}")
-    return "\n".join(lines)
-
-
-def _route_context(s: dict, node_id: str | None = None) -> str:
-    """A compact summary of what the user is looking at, so the router reads their prompt in context.
-    `node_id` (the node the user has OPEN, when it isn't the active one) takes over the frame — a
-    question like 'how did we make this decision' is about THAT node, and a pivot grows from it."""
-    parts = []
-    t = s.get("tree") or {}
-    nodes = t.get("nodes") or {}
-    opened = nodes.get(node_id) if node_id else None
-    if opened and node_id != t.get("active"):
-        parts.append("The user is looking at an EARLIER node of their build: " + _node_snippet(opened))
-        parts.append("A steer/pivot should grow from that node; a question is about it")
-    a = nodes.get(t.get("active")) or {}
-    if _kind(a) == "refined" and a.get("thesis"):
-        parts.append("Refined idea: " + a["thesis"])
-    elif (s.get("shaped") or {}).get("thesis"):
-        parts.append("Idea: " + s["shaped"]["thesis"])
-    else:
-        parts.append("Idea: " + (s.get("idea") or "")[:160])
-    if _kind(a) == "brainstorm":   # the options ON SCREEN — without this the router can't see them
-        kids = [nodes.get(c) for c in (a.get("children") or [])]
-        titles = [((k.get("direction") or {}).get("title") or "")[:60]
-                  for k in kids if k and _kind(k) == "option"]
-        if titles:
-            parts.append("ON SCREEN: " + str(len(titles)) + " numbered directions to pick from: " +
-                         " ".join(f"{i + 1}) '{x}'" for i, x in enumerate(titles)))
-    p = s.get("proposal") or {}
-    if p.get("title"):
-        parts.append("Currently on the '" + p["title"] + "' part of the plan")
-    return " · ".join(parts)[:900]
+def _path_snippets(nodes: dict, at_id: str | None) -> list[str]:   # legacy signature shim
+    return context.path({"tree": {"nodes": nodes}}, at_id)
 
 
 @app.post("/api/plan/start")
