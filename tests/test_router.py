@@ -54,6 +54,20 @@ def test_route_real_bad_intent_normalized(patch_call):
     assert d["intent"] == "steer" and d["target"] == "current"     # unknowns fall back sanely
 
 
+def test_route_real_feedback_misread_as_help_becomes_a_steer(patch_call):
+    # the live drift: 'not quite, <wild pivot>' classified ask/help — the backstop turns it into a steer
+    patch_call('{"intent": "ask", "target": "help"}')
+    d, _ = router.route("not quite, forget baking entirely and lean into industrial power tools",
+                        mode="build", mock=False)
+    assert d["intent"] == "steer" and d["steer"].startswith("not quite")
+
+
+def test_route_real_short_product_question_still_reaches_help(patch_call):
+    patch_call('{"intent": "ask", "target": "help"}')
+    d, _ = router.route("what does this cost?", mode="build", mock=False)
+    assert d["intent"] == "ask" and d["target"] == "help"
+
+
 def test_route_real_bad_intent_in_tool_defaults_to_ask(patch_call):
     patch_call('{"intent": "nonsense"}')
     d, _ = router.route("hmm", mode="research", mock=False)

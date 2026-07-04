@@ -67,6 +67,11 @@ def _clean(decision: dict, prompt: str, mode: str) -> dict:
     intent = str(d.get("intent", "")).lower().strip()
     if intent not in INTENTS:
         intent = "ask" if mode in ("research", "board", "help") else "steer"
+    # Backstop the known model drift: long, unquestioning feedback classified as a help question.
+    # Feedback is not a question — in build mode that's a steer.
+    if (intent == "ask" and str(d.get("target", "")).lower() == "help" and mode == "build"
+            and len(prompt) > 40 and not prompt.strip().endswith("?")):
+        intent, d = "steer", {**d, "target": "current", "steer": d.get("steer") or prompt}
     target = str(d.get("target", "")).lower().strip()
     if target not in TARGETS:
         target = {"steer": "current", "commit": "commit", "diverge": "brainstorm",

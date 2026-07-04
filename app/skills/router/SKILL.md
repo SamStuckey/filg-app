@@ -41,6 +41,14 @@ means leave the board and go back, not "ask the board to back up."
 - `ask` — a question to answer, not a change to make ("what does this cost?",
   "why'd you drop X?", or any research/board/help question). Never mutates the plan.
 
+Hard rules that override everything above:
+
+- "not quite …", "instead …", "what if we …", "I'd rather …", or ANY message that
+  proposes a different version of the idea is a `steer` (or `restart_keep` when they
+  say to start over) — NEVER `ask`. Feedback is not a question.
+- `help` is ONLY for questions about using FILG itself (how it works, what it costs,
+  keys, exporting). If the message mentions their business idea at all, it is not help.
+
 ## Output — strictly this JSON, no preamble
 
 ```json
