@@ -911,6 +911,18 @@ def _node_snippet(n: dict) -> str:
     return "the '" + (n.get("title") or "part") + "' section of the plan: " + str(body)[:200]
 
 
+def _path_snippets(nodes: dict, at_id: str | None) -> list[str]:
+    """The pivot contract's context: the pivot node and its ANCESTORS only (root → node, in order) —
+    siblings and descendants are dropped. Pivoting from an option means the question was re-answered
+    with ONLY that option selected, so the path ending at it IS the affirmative context."""
+    chain = []
+    cur = at_id
+    while cur is not None and nodes.get(cur):
+        chain.append(nodes[cur])
+        cur = nodes[cur].get("parent")
+    return [_node_snippet(n) for n in reversed(chain)]
+
+
 def _route_context(s: dict, node_id: str | None = None) -> str:
     """A compact summary of what the user is looking at, so the router reads their prompt in context.
     `node_id` (the node the user has OPEN, when it isn't the active one) takes over the frame — a
@@ -1035,16 +1047,26 @@ async def api_plan_rebrainstorm(sid: str, request: Request):
         return JSONResponse({"error": "unknown session"}, status_code=404)
     body = await request.json()
     idea = (body.get("idea") or s.get("idea") or "").strip()
-    if len(idea) < 12:
+    feedback = (body.get("feedback") or "").strip()
+    if not feedback and len(idea) < 12:
         return JSONResponse({"error": "Tell me a bit more about the idea."}, status_code=400)
     tree = s.get("tree") or {"nodes": {}, "active": None}
     nodes = tree.get("nodes") or {}
     # the pivot point: an explicitly named node (the one the user had open) beats the active one
     at = nodes.get((body.get("node") or "").strip()) or nodes.get(tree.get("active")) or {}
-    # the pivot node's own content rides into the spread, so 'pivot from here' actually pivots
-    # FROM here — the new directions react to what this node says, not just the raw idea
-    div_input = idea + ((f"\n\nPIVOTING FROM {_node_snippet(at)} — the new directions should be a "
-                         f"genuine change of course from that.") if at else "")
+    # THE PIVOT CONTRACT: context = the pivot node + its ancestors (root → node, last item = chosen);
+    # siblings/descendants dropped; the pivot feedback OUTWEIGHS all of it.
+    path = _path_snippets(nodes, at.get("id")) if at else []
+    path_block = "\n".join(f"- {p}" for p in path) or f"- the original idea: {s.get('idea', '')[:160]}"
+    if feedback:
+        div_input = (
+            f"THE OPERATOR IS PIVOTING. Their pivot instruction OUTWEIGHS everything below — the new "
+            f"directions must be a genuine change of course that honors it:\n{feedback}\n\n"
+            f"COMMITTED PATH (root \u2192 the pivot point; treat each item, especially the LAST, as "
+            f"chosen context — nothing outside this path applies):\n{path_block}")
+    else:
+        div_input = (f"{idea}\n\nCOMMITTED PATH (root \u2192 the pivot point; treat each item as "
+                     f"chosen context):\n{path_block}")
     try:
         with _run_slot(s.get("user"), s.get("stack")):
             d, cost = brainstorm.diverge(div_input, mock=MOCK)
@@ -1054,8 +1076,8 @@ async def api_plan_rebrainstorm(sid: str, request: Request):
     except Exception as e:  # noqa: BLE001
         return _engine_error(e)
     _meter_bg(s.get("user"), _provider_for(s.get("user")), cost, toks)
-    # a re-spread from a fork/option lands as a SIBLING fork; from anywhere else, under the pivot node
-    parent = at.get("parent") if _kind(at) in ("brainstorm", "option") else at.get("id")
+    # every node is branchable: the new spread is a CHILD of the pivot node itself, always
+    parent = at.get("id")
     new_nodes, bid = _diverge_tree(d, parent)
     nodes.update(new_nodes)
     if parent and nodes.get(parent):

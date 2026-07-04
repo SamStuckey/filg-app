@@ -179,14 +179,40 @@ def test_rebrainstorm_branches_off_the_pivot_point_keeping_the_old_tree(client):
     assert s2["tree"]["active"] == new_fork["id"]
 
 
-def test_rebrainstorm_from_a_fork_lands_as_its_sibling(client):
+def test_rebrainstorm_from_a_fork_branches_off_the_fork_itself(client):
+    # the pivot contract: EVERY node is branchable, and the branch is a CHILD of the pivot node
     s = _brainstorm(client)
     sid = s["id"]
     fork = next(n for n in s["tree"]["nodes"] if n["kind"] == "brainstorm")
     r = client.post(f"/api/plan/{sid}/rebrainstorm", json={"idea": "totally different direction please"})
     s2 = r.json()
     new_fork = next(n for n in s2["tree"]["nodes"] if n["kind"] == "brainstorm" and n["id"] != fork["id"])
-    assert new_fork["parent"] == fork["parent"]              # siblings under the shared base node
+    assert new_fork["parent"] == fork["id"]
+
+
+def test_pivot_from_an_option_builds_off_that_option_with_path_context(client, monkeypatch):
+    # picking a pivot on a selected option = the question re-answered with ONLY that option, plus the
+    # feedback weighted above everything; the new tree grows off the option node itself
+    from app import main
+    s = _brainstorm(client)
+    sid = s["id"]
+    opt = s["activeNode"]["options"][0]["id"]
+    captured = {}
+    real = main.brainstorm.diverge
+    def spy(idea, mock=False):
+        captured["in"] = idea
+        return real(idea, mock=mock)
+    monkeypatch.setattr(main.brainstorm, "diverge", spy)
+    r = client.post(f"/api/plan/{sid}/rebrainstorm",
+                    json={"feedback": "make it sexy, maybe an onlyfans?", "node": opt})
+    assert r.status_code == 200
+    s2 = r.json()
+    new_fork = next(n for n in s2["tree"]["nodes"] if n["kind"] == "brainstorm" and n["parent"] == opt)
+    assert s2["tree"]["active"] == new_fork["id"]            # the new tree grows OFF the option
+    assert "make it sexy" in captured["in"]                  # feedback present…
+    assert captured["in"].index("make it sexy") < captured["in"].index("COMMITTED PATH")   # …and weighted on top
+    assert "the original idea" in captured["in"]             # ancestors ride along
+    assert "the direction" in captured["in"]                 # the option itself is the chosen endpoint
 
 
 # ── run epochs: a pivot mid-run abandons the running query's RESULT ──────────

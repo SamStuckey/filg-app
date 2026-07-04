@@ -259,13 +259,13 @@ let PIVOT_FROM=null;
 function pivotFromHere(id){ PIVOT_FROM=id; FOCUS=null; BROWSING=true; renderGraph();
   const b=$('ws-box'); if(b){b.placeholder='Your pivot: what should change from here?';b.focus();} }
 function clearGhost(){ PIVOT_FROM=null; const b=$('ws-box'); if(b)b.placeholder='Tell me what to change, or just talk to it…'; renderGraph(); }
-async function pivotSpread(fromNode,idea){
+async function pivotSpread(fromNode,feedback){
   beginWip('Spreading new directions',{parent:pivotParent(fromNode)});
-  const {ok,d}=await api('POST',`/api/plan/${SID}/rebrainstorm`,{idea:idea+' — '+(S&&S.idea||''),node:fromNode});
+  const {ok,d}=await api('POST',`/api/plan/${SID}/rebrainstorm`,{feedback,node:fromNode});
   endWip();
   if(!ok){   // fail LOUD: restore the feedback + re-arm the ghost, never quietly show the old fork
     render(S);
-    const b=$('ws-box'); if(b&&!b.value)b.value=idea;
+    const b=$('ws-box'); if(b&&!b.value)b.value=feedback;
     if(fromNode){PIVOT_FROM=fromNode;renderView();}
     $('ws-err').textContent=(d&&d.error)||'The pivot failed — feedback restored, try again.';
     if(gateV2(d))return; toast((d&&d.error)||'Could not pivot.','err'); return; }
@@ -310,9 +310,8 @@ function beginWip(label,opts){ WIP_LABEL=label; WIP_T0=Date.now(); WIPLOG=[]; LA
   WIP_PENDING={label,parent:(opts&&opts.parent)||null,join:(opts&&opts.join)||null};
   LEAF_OPEN=new Set(); FOCUS=null; BROWSING=false; PREFOCUS_VIEW=null; renderView(); }   // content collapses back, the pending node takes the stage
 function endWip(){ WIP_LABEL=null; WIP_T0=null; WIP_PENDING=null; }
-function pivotParent(id){   // where a re-spread visually grows from (mirrors the server's sibling rule)
-  const {m,t}=nodesOf(S); const a=m[id||t.active]||{};
-  return ['brainstorm','option'].includes(a.kind)?(a.parent||t.active):(a.id||t.active); }
+function pivotParent(id){   // THE PIVOT CONTRACT: a pivot branches off the pivot node ITSELF, always
+  const {t}=nodesOf(S); return id||t.active; }
 function nodesOf(s){const t=(s&&s.tree)||{};const m={};(t.nodes||[]).forEach(n=>m[n.id]=n);return {m,t};}
 function pathSetOf(m,active){const set={};let cur=active;
   while(cur!=null&&m[cur]){set[cur]=1;
