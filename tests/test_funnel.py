@@ -155,6 +155,24 @@ def test_lookup_requires_a_question(client):
     assert client.post(f"/api/plan/{s['id']}/lookup", json={"message": ""}).status_code == 400
 
 
+def test_finished_plan_lands_on_stage_done(client):
+    # the off-ramp: when the terminal node lands, stage must flip to done (not stay 'building'
+    # forever, which rendered 'Part 8 of 7' + Keep going — 2026-07-04)
+    s = _brainstorm(client)
+    sid = s["id"]
+    client.post(f"/api/plan/{sid}/commit", json={"thesis": "Wholesale baked goods co-op"})
+    s = wait_status(client, sid)
+    for _ in range(20):
+        if s["status"] == "done":
+            break
+        r = client.post(f"/api/plan/{sid}/next", json={"feedback": ""})
+        assert r.status_code == 200, r.text
+        s = r.json()
+    assert s["status"] == "done" and s["stage"] == "done" and s["proposal"] is None
+    # and the server refuses to roll past the end
+    assert client.post(f"/api/plan/{sid}/next", json={"feedback": ""}).status_code == 409
+
+
 def test_journey_digest_names_picked_options(client):
     # the advisor's grounding must carry the tree: options offered + which were picked — without it
     # 'which option did I pick?' gets 'I don't see which option you picked' (the 2026-07-04 bug)

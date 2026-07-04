@@ -705,9 +705,22 @@ function stageSurface(s){
     `<div class=ctarow><button class="stage-cta secondary" onclick=v2newPlan()>Start over</button></div>`};
   if(s.stage==='brainstorm')return {html:brainstormHtml(s)};
   if(s.stage==='refined')return {html:refinedHtml(s)};
+  if(s.done||s.stage==='done')return {html:doneHtml(s)};   // done wins over building — no ghost 'Part 8 of 7'
   if(s.stage==='building')return {html:(s.step||0)===0?firstPageHtml(s):chapterHtml(s)};
-  if(s.stage==='done'||s.done)return {html:doneHtml(s)};
   return null;
+}
+// The frontier gets "Keep going"; a DECIDED step (its next already exists) or a step with a build
+// already in flight offers Pivot only — rolling forward again would just duplicate the child.
+function stepCtas(){
+  const {m,t}=nodesOf(S);
+  const decided=Object.values(m).some(n=>n.parent===t.active);
+  const busy=!!WIP_LABEL||S.status==='researching';
+  if(decided||busy)return `<div class=ctarow><button class=stage-cta onclick=pivotActive()>⑂ Pivot</button></div>`+
+    `<p class=thinking>${busy&&!decided?'The next part is already being written — pivot to change course.'
+      :'This step is already decided — pivot to take it somewhere else.'}</p>`;
+  return `<div class=ctarow><button class=stage-cta onclick=keepGoing()>Keep going →</button>`+
+    `<button class="stage-cta secondary" onclick=pivotActive()>⑂ Pivot</button></div>`+
+    `<p class=thinking>Comment or steer in the box anytime, it wins.</p>`;
 }
 function brainstormHtml(s){
   const cards=stageOptions().map(o=>{const d=o.direction||{};const on=SEL.has(o.id);
@@ -746,22 +759,20 @@ function firstPageHtml(s){
     .filter(p=>p[1]).map(p=>`<li><b>${esc(p[0])}</b>${esc(p[1])}</li>`).join('');
   return `<p class=eyebrow>Is this serious?</p>`+verdict+mt+
     `<p class=react>${esc(v.reaction||R.title||"Here's your idea, graded.")}</p>`+
-    `<ul class=keypoints>${points}</ul>`+
-    `<div class=ctarow><button class=stage-cta onclick=keepGoing()>Keep going →</button>`+
-    `<button class="stage-cta secondary" onclick=pivotActive()>⑂ Pivot</button></div>`+
-    `<p class=thinking>Comment or steer in the box anytime, it wins.</p>`;
+    `<ul class=keypoints>${points}</ul>`+stepCtas();
 }
 function chapterHtml(s){
   const p=s.proposal||{};
   return `<p class=eyebrow>Part ${(s.step||0)+1} of ${s.total}</p><div class=draft>${mdToHtml(p.draft||'')}</div>`+
-    `<div class=ctarow><button class=stage-cta onclick=keepGoing()>Keep going →</button>`+
-    `<button class="stage-cta secondary" onclick=pivotActive()>⑂ Pivot</button></div>`+
-    `<p class=thinking>Comment or steer in the box anytime, it wins.</p>`;
+    stepCtas();
 }
 function doneHtml(s){
   const files=(s.files||[]).map(f=>`<li>${esc(f.path)}</li>`).join('');
-  return `<p class=react>🎉 All ${s.total} parts, built with you.</p><ul>${files}</ul>`+
-    `<div class=ctarow><a class=stage-cta href="/api/plan/${SID}/download">⬇ Raw files (.zip)</a></div>`;
+  return `<p class=eyebrow>Plan complete</p><p class=react>🎉 All ${s.total} parts, built with you.</p>`+
+    `<ul>${files}</ul>`+
+    `<div class=ctarow><a class=stage-cta href="/api/plan/${SID}/download">⬇ Raw files (.zip)</a>`+
+    `<button class="stage-cta secondary" onclick=pivotActive()>⑂ Pivot</button></div>`+
+    `<p class=thinking>Rework any part by pivoting from its node, or keep asking questions in the box.</p>`;
 }
 
 // ── Two projections of the same tree: the decision graph, and a left-to-right document reader ──

@@ -690,7 +690,10 @@ def _mirror(tree: dict) -> dict:
             "proposal": (None if done else {"section": a["section"], "title": a["title"],
                                             "draft": a["draft"], "change": a.get("change")}),
             "qa": a.get("qa") if done else None,   # the final QA-pass report, surfaced on the finished branch
-            "status": "done" if done else "building"}
+            "status": "done" if done else "building",
+            # the funnel stage must land on 'done' too, or the frontend keeps offering the next
+            # chapter forever ('Part 8 of 7' + Keep going — the off-ramp bug, 2026-07-04)
+            **({"stage": "done"} if done else {})}
 
 
 def _regrade_setup(s: dict, node: dict, cost: float) -> tuple[dict | None, float]:
