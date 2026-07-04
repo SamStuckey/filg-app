@@ -118,6 +118,30 @@ def test_route_plan_steer_integrable_no_fork(client):
     assert "fork" not in r.json()                      # a tweak integrates, no pivot fork
 
 
+def test_route_pick_selects_on_screen_directions(client):
+    # at the brainstorm fork, "go with the first two" is a pick with 1-based indices — the router
+    # must see the options in its context, never claim they don't exist (the 2026-07-04 bug)
+    s = _brainstorm(client)
+    r = client.post(f"/api/plan/{s['id']}/route",
+                    json={"prompt": "let's go with the first two options", "mode": "build"})
+    assert r.status_code == 200
+    d = r.json()["decision"]
+    assert d["intent"] == "pick" and d["picks"] == [1, 2]
+
+
+def test_route_context_lists_brainstorm_options():
+    from app import main as m
+    s = {"tree": {"active": "b1", "nodes": {
+        "b1": {"id": "b1", "kind": "brainstorm", "children": ["o1", "o2"]},
+        "o1": {"id": "o1", "kind": "option", "parent": "b1",
+               "direction": {"title": "Cookie brand with reentry jobs"}},
+        "o2": {"id": "o2", "kind": "option", "parent": "b1",
+               "direction": {"title": "Baking workshop series"}}}},
+         "idea": "cookies with ex cons on tiktok"}
+    ctx = m._route_context(s)
+    assert "1) 'Cookie brand with reentry jobs'" in ctx and "2) 'Baking workshop series'" in ctx
+
+
 # ── lazy node content for the graph zoom ─────────────────────────────────────
 def test_node_content_returns_the_option_card(client):
     s = _brainstorm(client)

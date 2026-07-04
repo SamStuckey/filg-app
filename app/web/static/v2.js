@@ -256,6 +256,13 @@ async function dispatch(dec,fromNode){
     case 'restart_hard':
       if(await chatConfirm('Throw it all out and start fresh?','Start fresh')) v2newPlan();
       return;
+    case 'pick': {   // the chat chose among the on-screen directions → check them + merge
+      const opts=stageOptions();
+      const ids=(dec.picks||[]).map(i=>opts[i-1]&&opts[i-1].id).filter(Boolean);
+      if(!ids.length){ chatErr("I couldn't match that to the directions on screen — name them by number, or click the boxes."); return; }
+      SEL=new Set(ids); renderView();
+      return doMerge();
+    }
     case 'ask': setMode(['research','board','help'].includes(dec.target)?dec.target:'build'); return;
     case 'steer': default:
       if(fromNode)return pivotSpread(fromNode,dec.steer||'');   // feedback on an earlier node = pivot from it

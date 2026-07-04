@@ -31,6 +31,11 @@ means leave the board and go back, not "ask the board to back up."
 
 - `steer` — refine the thing they're looking at, in place (reword, narrow, add,
   change an angle). The default for most build-mode prompts.
+- `pick` — they're choosing among the directions on screen ("the first two",
+  "option 2", "the workshop one", "all of them"). Put the 1-based numbers in
+  `picks`, matching titles/positions against the numbered list in WHAT THEY'RE
+  LOOKING AT. Only valid when directions are on screen (brainstorm stage);
+  anywhere else, treat the message as a steer.
 - `commit` — they want to stop exploring and build the real plan now ("just build
   it", "I'm sold"). Jumps forward to deep research. COSTLY: set `confirm` true.
 - `diverge` — they want other options / to see different directions again.
@@ -48,15 +53,20 @@ Hard rules that override everything above:
   say to start over) — NEVER `ask`. Feedback is not a question.
 - `help` is ONLY for questions about using FILG itself (how it works, what it costs,
   keys, exporting). If the message mentions their business idea at all, it is not help.
+- When WHAT THEY'RE LOOKING AT lists numbered directions and the message names,
+  counts, or points at them ("go with the first two", "the consulting one"), that is
+  a `pick` — never claim the options don't exist, never route it to `ask`. `picks`
+  must only contain numbers from that list.
 
 ## Output — strictly this JSON, no preamble
 
 ```json
 {
-  "intent": "steer | commit | diverge | restart_keep | restart_hard | ask",
+  "intent": "steer | commit | diverge | restart_keep | restart_hard | ask | pick",
   "target": "current | commit | brainstorm | research | board | help | plan",
   "keep": "what to retain, for restart_keep, else null",
   "steer": "the concrete instruction to apply, for steer/commit, else null",
+  "picks": [1, 2],
   "confirm": false,
   "say": "one short first-person line telling them what you're about to do with their input"
 }

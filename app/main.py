@@ -943,10 +943,17 @@ def _route_context(s: dict, node_id: str | None = None) -> str:
         parts.append("Idea: " + s["shaped"]["thesis"])
     else:
         parts.append("Idea: " + (s.get("idea") or "")[:160])
+    if _kind(a) == "brainstorm":   # the options ON SCREEN — without this the router can't see them
+        kids = [nodes.get(c) for c in (a.get("children") or [])]
+        titles = [((k.get("direction") or {}).get("title") or "")[:60]
+                  for k in kids if k and _kind(k) == "option"]
+        if titles:
+            parts.append("ON SCREEN: " + str(len(titles)) + " numbered directions to pick from: " +
+                         " ".join(f"{i + 1}) '{x}'" for i, x in enumerate(titles)))
     p = s.get("proposal") or {}
     if p.get("title"):
         parts.append("Currently on the '" + p["title"] + "' part of the plan")
-    return " · ".join(parts)[:700]
+    return " · ".join(parts)[:900]
 
 
 @app.post("/api/plan/start")

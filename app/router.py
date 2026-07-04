@@ -27,8 +27,28 @@ import skill_registry as skills  # noqa: E402
 
 STAGES = ("brainstorm", "merge", "refined", "plan")
 MODES = ("build", "help", "research", "board")
-INTENTS = ("steer", "commit", "diverge", "restart_keep", "restart_hard", "ask")
+INTENTS = ("steer", "commit", "diverge", "restart_keep", "restart_hard", "ask", "pick")
 TARGETS = ("current", "commit", "brainstorm", "research", "board", "help", "plan")
+
+_NUM_WORDS = {"one": 1, "first": 1, "1": 1, "two": 2, "second": 2, "2": 2,
+              "three": 3, "third": 3, "3": 3, "last": -1}
+
+
+def _mock_picks(p: str) -> list[int]:
+    """Keyword pick-parsing for mock mode: 1-based indices of the on-screen directions."""
+    import re
+    if re.search(r"\ball\b.*\b(of them|three|options|directions)\b", p) or "all of them" in p:
+        return [1, 2, 3]
+    if "first two" in p or "first 2" in p:
+        return [1, 2]
+    if "last two" in p:
+        return [2, 3]
+    picks = {int(m.group(1)) for m in re.finditer(r"(?:option|direction)s?\s+(\d)", p)}
+    if not picks:
+        for w, n in _NUM_WORDS.items():
+            if re.search(rf"\b{w}\b", p):
+                picks.add(3 if n == -1 else n)
+    return sorted(x for x in picks if 1 <= x <= 9)
 
 
 def _mock_route(prompt: str, stage: str, mode: str) -> dict:
@@ -49,6 +69,14 @@ def _mock_route(prompt: str, stage: str, mode: str) -> dict:
     if any(k in p for k in ("other option", "other direction", "different direction", "back to option")):
         return {"intent": "diverge", "target": "brainstorm", "keep": None, "steer": None,
                 "confirm": False, "say": "Pulling up other directions."}
+    # picking among on-screen directions ("go with the first two", "option 2") — brainstorm stage only
+    if stage == "brainstorm" and any(k in p for k in ("go with", "pick", "choose", "select",
+                                                      "let's do", "lets do", "take", "try")):
+        picks = _mock_picks(p)
+        if picks:
+            return {"intent": "pick", "target": "current", "keep": None, "steer": None, "picks": picks,
+                    "confirm": False, "say": "Taking direction" + ("s " if len(picks) > 1 else " ") +
+                    " + ".join(map(str, picks)) + " and merging."}
     if p.strip().endswith("?") or p.startswith(("what", "why", "how", "who", "when", "does", "can ")):
         tgt = mode if mode in ("research", "board", "help") else "plan"
         return {"intent": "ask", "target": tgt, "keep": None, "steer": None,
@@ -72,10 +100,18 @@ def _clean(decision: dict, prompt: str, mode: str) -> dict:
     if (intent == "ask" and str(d.get("target", "")).lower() == "help" and mode == "build"
             and len(prompt) > 40 and not prompt.strip().endswith("?")):
         intent, d = "steer", {**d, "target": "current", "steer": d.get("steer") or prompt}
+    picks = None
+    if intent == "pick":   # 1-based indices of on-screen directions; junk/empty → it was really a steer
+        try:
+            picks = sorted({int(x) for x in (d.get("picks") or []) if 1 <= int(x) <= 9})
+        except (TypeError, ValueError):
+            picks = []
+        if not picks:
+            intent = "steer"
     target = str(d.get("target", "")).lower().strip()
     if target not in TARGETS:
         target = {"steer": "current", "commit": "commit", "diverge": "brainstorm",
-                  "restart_keep": "brainstorm", "restart_hard": "brainstorm",
+                  "restart_keep": "brainstorm", "restart_hard": "brainstorm", "pick": "current",
                   "ask": (mode if mode in ("research", "board", "help") else "plan")}[intent]
     return {
         "intent": intent,
@@ -83,6 +119,7 @@ def _clean(decision: dict, prompt: str, mode: str) -> dict:
         "keep": (str(d.get("keep")).strip() or None) if d.get("keep") else None,
         "steer": (str(d.get("steer")).strip() or None) if d.get("steer") else (
             prompt if intent in ("steer", "commit") else None),
+        "picks": picks if intent == "pick" else None,
         # only the two costly/destructive routes may demand a confirm
         "confirm": bool(d.get("confirm")) and intent in ("commit", "restart_hard"),
         "say": (str(d.get("say")).strip() or "On it."),
@@ -162,6 +199,13 @@ if __name__ == "__main__":  # self-test (mock, no API)
     assert route("start over but keep the food truck angle", mock=True)[0]["keep"]
     assert route("this all sucks, something else", mock=True)[0]["intent"] == "restart_hard"
     assert route("show me other directions", mock=True)[0]["intent"] == "diverge"
+    # picking on-screen directions by position/number (brainstorm stage only)
+    d, _ = route("let's go with the first two options", stage="brainstorm", mock=True)
+    assert d["intent"] == "pick" and d["picks"] == [1, 2]
+    assert route("pick option 2", stage="brainstorm", mock=True)[0]["picks"] == [2]
+    assert route("let's go with the first two options", stage="refined", mock=True)[0]["intent"] == "steer"
+    # a pick with no parsable indices normalizes back to a steer
+    assert _clean({"intent": "pick", "picks": []}, "go with the good one", "build")["intent"] == "steer"
     assert route("what does this cost?", mode="build", mock=True)[0]["intent"] == "ask"
     # mode as a prior: an ambiguous prompt inside research is a research question
     assert route("cheaper competitors", mode="research", mock=True)[0]["target"] == "research"
