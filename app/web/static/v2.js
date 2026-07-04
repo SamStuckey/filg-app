@@ -255,8 +255,19 @@ async function sendPrompt(){
 async function dispatch(dec,fromNode,prompt){
   switch(dec.intent){
     case 'commit':
-      if(dec.confirm&&!(await chatConfirm('Commit to the full research + build?',"Let's go")))return;
+      if(dec.confirm&&!(await chatConfirm(BIG_STEP_ASK,"Let's go")))return;
       return commit(null,fromNode);
+    case 'next': {   // the funnel's ONE next step — what it means depends on where you are
+      if(WIP_LABEL||S.status==='researching'){ chatBot('Already on it — the next part is being written now.'); return; }
+      if(S.done||S.stage==='done'){ chatBot("The plan's complete — pivot from any node to take it somewhere new."); return; }
+      if(S.stage==='building')return keepGoing();
+      if(S.stage==='refined'){
+        if(!(await chatConfirm(BIG_STEP_ASK,"Let's go")))return;
+        return commit(null,fromNode);
+      }
+      chatBot('Pick a direction first — check the boxes, or just name them ("the first two") and I merge them.');
+      return;
+    }
     case 'diverge': return fromNode?pivotSpread(fromNode,S.idea):reBrainstorm(S.idea);
     case 'restart_keep':
       return fromNode?pivotSpread(fromNode,(dec.keep?dec.keep+' — ':'')+S.idea)
@@ -278,6 +289,8 @@ async function dispatch(dec,fromNode,prompt){
       return steer(dec.steer||'');
   }
 }
+// The one costly step, named honestly — used by both an explicit commit and a refined-stage "next"
+const BIG_STEP_ASK='Next up is the big step: deep research + building out the full plan. Go?';
 // A routed question: product questions go to /api/help, everything else to the plan-grounded
 // advisor. The reply lands as a chat bubble — a question must never die in a tool drawer.
 async function askInChat(q,target,fromNode){

@@ -155,6 +155,21 @@ def test_lookup_requires_a_question(client):
     assert client.post(f"/api/plan/{s['id']}/lookup", json={"message": ""}).status_code == 400
 
 
+def test_keep_going_routes_to_next_not_commit(client):
+    # 'keep going' means the ONE next step at every stage — never the whole-build commit (2026-07-04)
+    s = _brainstorm(client)
+    sid = s["id"]
+    r = client.post(f"/api/plan/{sid}/route", json={"prompt": "keep going", "mode": "build"})
+    assert r.json()["decision"]["intent"] == "next"
+    client.post(f"/api/plan/{sid}/commit", json={"thesis": "Wholesale baked goods co-op"})
+    wait_status(client, sid)
+    r = client.post(f"/api/plan/{sid}/route", json={"prompt": "ok next step", "mode": "build"})
+    assert r.json()["decision"]["intent"] == "next"
+    # an explicit whole-build ask still commits
+    r = client.post(f"/api/plan/{sid}/route", json={"prompt": "I'm sold, build the plan", "mode": "build"})
+    assert r.json()["decision"]["intent"] == "commit"
+
+
 def test_chat_answers_in_place_when_browsing_an_old_node(client):
     # the advisor gets WHERE the user is: reading a passed-over node → no next-step coaching
     # (mock replies echo the awareness + drop their 'Next step:' tail when a situation is set)

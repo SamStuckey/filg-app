@@ -36,6 +36,12 @@ means leave the board and go back, not "ask the board to back up."
   `picks`, matching titles/positions against the numbered list in WHAT THEY'RE
   LOOKING AT. Only valid when directions are on screen (brainstorm stage);
   anywhere else, treat the message as a steer.
+- `next` — they want the funnel's ONE next step ("keep going", "next", "ok
+  continue", "onward"). This is NOT a commit: the client maps it per stage
+  (building → write the next part; refined → the deep-research commit, since
+  that IS the next step there; brainstorm → a nudge to pick). Prefer `next`
+  over `commit` unless they clearly ask for the whole thing ("build the whole
+  plan", "I'm sold").
 - `commit` — they want to stop exploring and build the real plan now ("just build
   it", "I'm sold"). Jumps forward to deep research. COSTLY: set `confirm` true.
 - `diverge` — they want other options / to see different directions again.
@@ -62,7 +68,7 @@ Hard rules that override everything above:
 
 ```json
 {
-  "intent": "steer | commit | diverge | restart_keep | restart_hard | ask | pick",
+  "intent": "steer | commit | diverge | restart_keep | restart_hard | ask | pick | next",
   "target": "current | commit | brainstorm | research | board | help | plan",
   "keep": "what to retain, for restart_keep, else null",
   "steer": "the concrete instruction to apply, for steer/commit, else null",

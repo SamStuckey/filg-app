@@ -27,7 +27,7 @@ import skill_registry as skills  # noqa: E402
 
 STAGES = ("brainstorm", "merge", "refined", "plan")
 MODES = ("build", "help", "research", "board")
-INTENTS = ("steer", "commit", "diverge", "restart_keep", "restart_hard", "ask", "pick")
+INTENTS = ("steer", "commit", "diverge", "restart_keep", "restart_hard", "ask", "pick", "next")
 TARGETS = ("current", "commit", "brainstorm", "research", "board", "help", "plan")
 
 _NUM_WORDS = {"one": 1, "first": 1, "1": 1, "two": 2, "second": 2, "2": 2,
@@ -69,6 +69,12 @@ def _mock_route(prompt: str, stage: str, mode: str) -> dict:
     if any(k in p for k in ("other option", "other direction", "different direction", "back to option")):
         return {"intent": "diverge", "target": "brainstorm", "keep": None, "steer": None,
                 "confirm": False, "say": "Pulling up other directions."}
+    # the funnel's ONE next step — NOT a commit; the client maps it per stage (building → next part,
+    # refined → the commit check with honest copy, brainstorm → a nudge to pick)
+    if len(p.strip()) < 40 and any(k in p for k in ("keep going", "next step", "continue", "carry on",
+                                                    "onward", "go on", "proceed")) or p.strip() in ("next", "ok next", "go"):
+        return {"intent": "next", "target": "current", "keep": None, "steer": None,
+                "confirm": False, "say": "Rolling forward."}
     # picking among on-screen directions ("go with the first two", "option 2") — brainstorm stage only
     if stage == "brainstorm" and any(k in p for k in ("go with", "pick", "choose", "select",
                                                       "let's do", "lets do", "take", "try")):
@@ -112,6 +118,7 @@ def _clean(decision: dict, prompt: str, mode: str) -> dict:
     if target not in TARGETS:
         target = {"steer": "current", "commit": "commit", "diverge": "brainstorm",
                   "restart_keep": "brainstorm", "restart_hard": "brainstorm", "pick": "current",
+                  "next": "current",
                   "ask": (mode if mode in ("research", "board", "help") else "plan")}[intent]
     return {
         "intent": intent,
@@ -199,6 +206,10 @@ if __name__ == "__main__":  # self-test (mock, no API)
     assert route("start over but keep the food truck angle", mock=True)[0]["keep"]
     assert route("this all sucks, something else", mock=True)[0]["intent"] == "restart_hard"
     assert route("show me other directions", mock=True)[0]["intent"] == "diverge"
+    # 'keep going' is the funnel's ONE next step, never a whole-build commit
+    assert route("keep going", stage="plan", mock=True)[0]["intent"] == "next"
+    assert route("ok next step", stage="refined", mock=True)[0]["intent"] == "next"
+    assert route("I'm sold, build the plan", stage="refined", mock=True)[0]["intent"] == "commit"
     # picking on-screen directions by position/number (brainstorm stage only)
     d, _ = route("let's go with the first two options", stage="brainstorm", mock=True)
     assert d["intent"] == "pick" and d["picks"] == [1, 2]
