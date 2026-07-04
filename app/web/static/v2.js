@@ -93,6 +93,44 @@ async function removeKey(){
   await loadKey(); closeModal(); toast('Key removed — back on the hosted FILG key.');
 }
 
+// ── Model stacks: the same 5-tier crew picker as v1 (engine keys are STABLE; labels display-only).
+// Chosen stack rides on /api/brainstorm and persists per session via /api/plan/{sid}/stack. ──
+const STACKS_UI=[   // cheap → premium
+  {k:'the-turd-polisher',n:'The intern',b:"Cheap and eager. Fast first drafts you'll want to double-check. Fine for spiking and kicking the tires."},
+  {k:'the-capable-intern',n:'The work horse',b:"Cheap research, solid synthesis. Gets the bulk of the job done well."},
+  {k:'the-work-horse',n:'The closer',b:"Cheap research bots, advanced synthesis and orchestration.",def:true},
+  {k:'the-wonder-kid',n:'Wonder kid',b:"Advanced research with world-class orchestration and synthesis.",rec:true},
+  {k:'trust-fund-baby',n:'Trust fund baby',b:"The absolute best models top to bottom. Not cheap, but hey, neither are you."},
+];
+let STACK_CUR=(function(){try{return localStorage.getItem('filg_stack')||'the-work-horse';}catch(e){return 'the-work-horse';}})();
+function _stackIdx(){const i=STACKS_UI.findIndex(x=>x.k===STACK_CUR);return i<0?2:i;}
+function _pips(i){return '<span class=pips aria-hidden=true>'+[0,1,2,3,4].map(n=>'<i class="'+(n<=i?'on':'')+'"></i>').join('')+'</span>';}
+function renderStackChips(){
+  const i=_stackIdx(), u=STACKS_UI[i];
+  ['stackchip-l','stackchip-w'].forEach(id=>{const el=$(id);if(el)el.innerHTML=esc(u.n)+' '+_pips(i);});
+}
+function stackModal(){
+  const cur=_stackIdx();
+  $('modal-body').innerHTML='<p class=muted>Pick your crew. Sets the models behind research, the credibility gate, and the writing you read.</p>'+
+    STACKS_UI.map((u,i)=>`<button type=button class="sktile${i===cur?' on':''}" onclick="pickStack(${i})">`+
+      `<span class=sk-top><b>${esc(u.n)}</b>${u.rec?'<span class=mold>Recommended</span>':''}${_pips(i)}</span>`+
+      `<span class=sk-desc>${esc(u.b)}</span></button>`).join('');
+  $('modal-acts').innerHTML='<button class=primary onclick="closeModal()">Done</button>';
+  openModal('Model crew');
+}
+async function pickStack(i){
+  const u=STACKS_UI[i]; if(!u)return;
+  STACK_CUR=u.k; try{localStorage.setItem('filg_stack',u.k);}catch(e){}
+  renderStackChips(); closeModal(); toast(u.n+' is on the job.');
+  if(SID)await api('POST',`/api/plan/${SID}/stack`,{stack:u.k});   // future ops on this tree use it
+}
+function paintMeter(s){
+  const el=$('meter'); if(!el||!s)return;
+  const t=s.tokens||0, c=s.cost||0;
+  const tok=t>=1000?(t/1000).toFixed(t>=10000?0:1).replace(/\.0$/,'')+'k':String(t);
+  el.textContent=tok+' tok · $'+c.toFixed(c<1?3:2);
+}
+
 // ── Landing ──────────────────────────────────────────────────────────────────
 let LANDING_HELP=false;
 function toggleLandingHelp(){
@@ -113,7 +151,7 @@ async function startFromLanding(){
   $('workspace').hidden=false;
   setTimeout(()=>{$('landing').hidden=true;},500);
   requestAnimationFrame(()=>seedGraph(idea));
-  const {ok,d}=await api('POST','/api/brainstorm',{idea});
+  const {ok,d}=await api('POST','/api/brainstorm',{idea,stack:STACK_CUR});
   if(!ok||(d&&d.gibberish)){   // rejected → slide back to the landing and say why
     $('landing').hidden=false; $('landing').classList.remove('shrink'); $('workspace').hidden=true;
     if(d&&d.gibberish){ $('landing-joke').innerHTML=`<div class=jokecard><h3>${esc(d.title||"That's not an idea yet.")}</h3><div>${mdToHtml(d.body||'')}</div></div>`; return; }
@@ -186,7 +224,7 @@ async function reBrainstorm(idea){
     if(!ok){ if(gateV2(d))return; toast((d&&d.error)||'Could not re-spread.','err'); return; }
     SEL=new Set(); PENDING_FORK=null; render(d); return;
   }
-  const {ok,d}=await api('POST','/api/brainstorm',{idea});
+  const {ok,d}=await api('POST','/api/brainstorm',{idea,stack:STACK_CUR});
   if(!ok){ if(gateV2(d))return; toast((d&&d.error)||'Could not re-spread.','err'); return; }
   adoptPlan(d); render(d);
 }
@@ -561,6 +599,7 @@ function render(s){
     WIPLOG=[]; LANES=[]; LANES_DONE=new Set(); WIP_LABEL=null; WIP_T0=null;
   }
   WAS_RESEARCHING=researching;
+  paintMeter(S);
   if(!researching){
     if(t.active!==LAST_ACTIVE){ LAST_ACTIVE=t.active; FOCUS=t.active; BROWSING=false; PREFOCUS_VIEW=null;
       promptFocus(); }   // the next step is ready → zoom in, hands back on the keyboard
@@ -604,5 +643,6 @@ document.addEventListener('keydown',e=>{
 });
 initGraphInput();
 loadKey();   // paint the key indicator (hosted vs BYOK) on load
+renderStackChips();   // the model-crew chips (landing + workspace)
 // the working node's elapsed clock — keeps the build feeling alive even between progress lines
 setInterval(()=>{const el=$('wiptime');if(el&&WIP_T0)el.textContent=Math.round((Date.now()-WIP_T0)/1000)+'s';},1000);
