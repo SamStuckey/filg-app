@@ -189,6 +189,40 @@ def test_rebrainstorm_from_a_fork_lands_as_its_sibling(client):
     assert new_fork["parent"] == fork["parent"]              # siblings under the shared base node
 
 
+# ── run epochs: a pivot mid-run abandons the running query's RESULT ──────────
+def test_bg_run_abandoned_when_user_pivots_midflight(client):
+    from app import main
+    s = _brainstorm(client)
+    sid = s["id"]
+    opts = [o["id"] for o in s["activeNode"]["options"]]
+    sess = main.store.plan_get(sid)
+    tree = sess["tree"]; tree["_run"] = "newer-epoch"          # the user pivoted while it ran
+    main.store.plan_save(sid, tree=tree)
+    main._run_merge(sid, opts, sess.get("user"), tok="stale-epoch")   # the old run finishes late
+    s2 = main.store.plan_get(sid)
+    kinds = [n.get("kind") for n in s2["tree"]["nodes"].values()]
+    assert "refined" not in kinds                              # its result was discarded
+    assert any("abandoned" in ln for ln in (s2.get("progress") or []))
+
+
+def test_bg_run_attaches_to_the_fresh_tree_not_a_stale_copy(client):
+    from app import main
+    s = _brainstorm(client)
+    sid = s["id"]
+    opts = [o["id"] for o in s["activeNode"]["options"]]
+    sess = main.store.plan_get(sid)
+    tree = sess["tree"]; tree["_run"] = "tok1"
+    # something else wrote a node mid-run (same epoch) — it must survive the run's save
+    tree["nodes"]["extra1234"] = {"id": "extra1234", "parent": None, "children": [],
+                                  "kind": "idea", "step": 0, "title": "survives",
+                                  "files": {}, "history": [], "board": []}
+    main.store.plan_save(sid, tree=tree)
+    main._run_merge(sid, opts, sess.get("user"), tok="tok1")
+    s2 = main.store.plan_get(sid)
+    assert "extra1234" in s2["tree"]["nodes"]                  # no clobber: fresh-tree attach
+    assert any(n.get("kind") == "refined" for n in s2["tree"]["nodes"].values())
+
+
 # ── the v2 two-panel surface shell + assets serve ────────────────────────────
 def test_v2_shell_and_assets_serve(client):
     page = client.get("/v2")

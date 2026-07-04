@@ -810,16 +810,30 @@ def _bg_progress(sid: str, base_cost: float, base_tokens: int, progress: list):
     return on_progress
 
 
-def _run_merge(sid: str, option_ids: list, user: str) -> None:
+def _fresh_tree_or_abandon(sid: str, tok: str | None):
+    """Run-epoch check for a finishing background run: re-read the session and return
+    (session, tree) to attach into — the FRESH tree, so nothing written mid-run is clobbered.
+    If the user moved on (pivoted / started another run: the tree's `_run` token changed),
+    return None and mark the abandonment in the progress log. The in-flight spend is already
+    metered; only the RESULT is discarded — the user's newer state always wins."""
+    s1 = store.plan_get(sid) or {}
+    tree = s1.get("tree") or {}
+    if tok and tree.get("_run") != tok:
+        prog = list(s1.get("progress") or []) + ["✂ run abandoned — you moved on before it finished"]
+        store.plan_save(sid, progress=prog)
+        return None
+    return s1, tree
+
+
+def _run_merge(sid: str, option_ids: list, user: str, tok: str | None = None) -> None:
     """Background: reconcile the chosen directions into one refined idea (+ light research skim), then
     attach a `refined` node under the brainstorm fork and advance the active pointer to it."""
     try:
         s0 = store.plan_get(sid) or {}
         base_cost, base_tokens = s0.get("cost") or 0, s0.get("tokens") or 0
         progress = list(s0.get("progress") or [])
-        tree = s0.get("tree") or {}
-        nodes = tree.get("nodes") or {}
-        directions = [(nodes.get(i) or {}).get("direction") for i in option_ids]
+        nodes0 = (s0.get("tree") or {}).get("nodes") or {}
+        directions = [(nodes0.get(i) or {}).get("direction") for i in option_ids]
         directions = [d for d in directions if d]
         prov = _provider_for(user)
         stk = tiers.clamp_stack(s0.get("stack"), tier=_tier(user), byok=bool(prov and not prov.bills_filg))
@@ -828,6 +842,11 @@ def _run_merge(sid: str, option_ids: list, user: str) -> None:
                                        on_progress=_bg_progress(sid, base_cost, base_tokens, progress))
             toks = pipeline.LEDGER.tokens()
         _meter_bg(user, prov, cost, toks)
+        fresh = _fresh_tree_or_abandon(sid, tok)
+        if fresh is None:
+            return                                # the user pivoted mid-run — their newer state wins
+        _s1, tree = fresh
+        nodes = tree.get("nodes") or {}
         parent = tree.get("active")
         refined = _refined_node(m, option_ids, parent)
         nodes[refined["id"]] = refined
@@ -841,7 +860,7 @@ def _run_merge(sid: str, option_ids: list, user: str) -> None:
         store.plan_save(sid, status="error", error=_humanize_error(e)[0])
 
 
-def _deep_build(sid: str, thesis: str, user: str) -> None:
+def _deep_build(sid: str, thesis: str, user: str, tok: str | None = None) -> None:
     """Background: the COMMIT step — the one deep research run + first section draft, attached to the
     tree under the active (refined) node so the funnel history is preserved. Same engine as the legacy
     welcome run, but it grows the existing tree instead of reseeding a fresh root."""
@@ -856,7 +875,10 @@ def _deep_build(sid: str, thesis: str, user: str) -> None:
                                    on_progress=_bg_progress(sid, base_cost, base_tokens, progress))
             toks = pipeline.LEDGER.tokens()
         _meter_bg(user, prov, prep["cost"], toks, is_run=True, research_cost=prep["research_cost"])
-        tree = s0.get("tree") or {}
+        fresh = _fresh_tree_or_abandon(sid, tok)
+        if fresh is None:
+            return                                # the user pivoted mid-run — their newer state wins
+        _s1, tree = fresh
         nodes = tree.get("nodes") or {}
         parent = tree.get("active")
         root = _new_node(planner.root_node(prep["proposal"]), parent)   # a plain section node (kind absent)
@@ -1040,6 +1062,7 @@ async def api_plan_rebrainstorm(sid: str, request: Request):
         nodes[parent].setdefault("children", []).append(bid)
     tree["nodes"] = nodes
     tree["active"] = bid
+    tree["_run"] = uuid.uuid4().hex[:8]      # pivoting abandons any run still in flight — you moved on
     _fold_usage(sid, s, cost, toks, tree=tree, stage="brainstorm", **_mirror(tree))
     return _plan_state(store.plan_get(sid))
 
@@ -1057,8 +1080,11 @@ async def api_plan_merge(sid: str, request: Request):
              if isinstance(i, str) and _kind(nodes.get(i) or {}) == "option"]
     if not valid:
         return JSONResponse({"error": "Pick at least one direction to try."}, status_code=400)
-    store.plan_save(sid, status="researching", stage="merging")
-    threading.Thread(target=_run_merge, args=(sid, valid, s.get("user")), daemon=True).start()
+    tok = uuid.uuid4().hex[:8]
+    tree = s.get("tree") or {"nodes": {}, "active": None}
+    tree["_run"] = tok                       # this run's epoch — a pivot mid-run invalidates it
+    store.plan_save(sid, status="researching", stage="merging", tree=tree)
+    threading.Thread(target=_run_merge, args=(sid, valid, s.get("user"), tok), daemon=True).start()
     return {"id": sid}
 
 
@@ -1088,8 +1114,10 @@ async def api_plan_commit(sid: str, request: Request):
             thesis = dr.get("one_liner") or dr.get("title") or ""
     if len(thesis) < 8:
         return JSONResponse({"error": "Refine an idea or pick a direction to build first."}, status_code=400)
-    store.plan_save(sid, status="researching", stage="researching")
-    threading.Thread(target=_deep_build, args=(sid, thesis, s.get("user")), daemon=True).start()
+    tok = uuid.uuid4().hex[:8]
+    tree["_run"] = tok                       # this run's epoch — a pivot mid-run invalidates it
+    store.plan_save(sid, status="researching", stage="researching", tree=tree)
+    threading.Thread(target=_deep_build, args=(sid, thesis, s.get("user"), tok), daemon=True).start()
     return {"id": sid}
 
 
