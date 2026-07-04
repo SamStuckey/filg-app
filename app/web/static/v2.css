@@ -97,9 +97,11 @@ textarea:focus{border-color:var(--accent)}
 .gnode .nt{font-size:13px;font-weight:600;margin-top:2px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
 .gnode.path{border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}
 .gnode.on{border-color:var(--accent);box-shadow:0 4px 18px color-mix(in srgb,var(--accent) 25%,transparent)}
-.gnode.dim{opacity:.42}
+.gnode.dim{opacity:.6}
 .gnode.sel{border-color:var(--green);box-shadow:0 0 0 1px color-mix(in srgb,var(--green) 45%,transparent)}
-.gnode.rej{border-color:color-mix(in srgb,var(--red) 45%,var(--line));opacity:.45}
+/* passed-over: clearly secondary but still READABLE — the rim carries the meaning, not the fade */
+.gnode.rej{border-color:color-mix(in srgb,var(--red) 45%,var(--line));opacity:.72}
+.gnode.rej:hover{opacity:1}
 .gnode.ghost{border-style:dashed;border-color:var(--accent);color:var(--muted);animation:gpulse 1.6s ease-in-out infinite}
 .gnode.enter{opacity:0;transform:translateY(-10px)}
 .gnode.wip{width:250px;border-color:var(--accent);animation:gpulse 1.6s ease-in-out infinite;cursor:default}
@@ -122,9 +124,13 @@ textarea:focus{border-color:var(--accent)}
 
 /* ── Zoomed-in node: the document/step expands IN PLACE inside the node ── */
 #gview.ease{transition:transform .6s cubic-bezier(.22,.8,.3,1)}
-.gnode.focus{overflow:auto;z-index:7;cursor:default;
+.gnode.focus{overflow:auto;z-index:7;cursor:default;opacity:1;
   border-color:var(--accent);box-shadow:0 26px 80px rgba(0,0,0,.35);padding:14px 18px 18px;
   overscroll-behavior:contain}   /* width/max-height set inline: panel-fit at natural scale (k=1) */
+/* an open doc keeps its selection story: green rim on a picked option, red-tinted on a passed one */
+.gnode.focus.sel{border-color:var(--green);
+  box-shadow:0 0 0 1px color-mix(in srgb,var(--green) 45%,transparent),0 26px 80px rgba(0,0,0,.35)}
+.gnode.focus.rej{border-color:color-mix(in srgb,var(--red) 45%,var(--line))}
 .gnode.focus .nt{-webkit-line-clamp:unset;font-size:15px}
 .nbody{margin-top:10px;font-size:14px;cursor:auto}
 .nbody .draft h3{font-size:15px}
