@@ -73,6 +73,12 @@ MOCK = os.environ.get("FILG_MOCK") == "1"
 # (preferred, so it doesn't collide with a dev's own ANTHROPIC_API_KEY / Claude Code login), else
 # ANTHROPIC_API_KEY. No hosted key → fully BYOK (the user must bring their own key from the first submit).
 HOSTED_FREE = bool(provider.hosted_key())
+# One startup line so a local run never has to guess its wiring (the #1 source of confusing 500s is a
+# hosted key that didn't reach the process env).
+print(f"[filg] mock={'ON (canned, no spend)' if MOCK else 'off (REAL runs)'}"
+      f" · hosted key={'wired' if HOSTED_FREE else 'MISSING (free/anon runs will fail in real mode)'}"
+      f" · BYOK store={'on' if keys.enabled() else 'off (no FILG_KEY_SECRET)'}"
+      f" · auth={'on' if auth.AUTH_ENABLED else ('dev as ' + os.environ.get('FILG_DEV_EMAIL', '(anonymous)'))}")
 
 
 def _plan_key(s: dict) -> str | None:
@@ -239,7 +245,10 @@ def _humanize_error(e: Exception) -> tuple[str, bool]:
 def _engine_error(e: Exception, status_code: int = 500):
     """Standard JSON error for an engine route — humanized message + a needKey flag the frontend uses
     to reopen the key modal. A subscriber's fair-use BudgetError is surfaced as a 402 (every route
-    already routes unexpected exceptions here, so no per-route wiring is needed)."""
+    already routes unexpected exceptions here, so no per-route wiring is needed). The full trace goes
+    to stdout (Render logs / local terminal); the client only sees the friendly string."""
+    if not isinstance(e, BudgetError):
+        traceback.print_exc()
     if isinstance(e, BudgetError):
         return _budget_response(e)
     msg, need_key = _humanize_error(e)
