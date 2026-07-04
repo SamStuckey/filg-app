@@ -1207,6 +1207,51 @@ async def api_plan_route(sid: str, request: Request):
     return out
 
 
+_MOCK_LOOKUP = [
+    {"text": "Companies spend an average of $75 per employee per month on office snacks",
+     "url": "https://snackvendor.example.com/report", "tier": "vendor", "flagged": True,
+     "reason": "vendor-published stat promoting its own category"},
+    {"text": "U.S. office food-service spending grew 4% year over year",
+     "url": "https://bls.gov/example", "tier": "primary", "flagged": False, "reason": ""},
+]
+
+
+@app.post("/api/plan/{sid}/lookup")
+async def api_plan_lookup(sid: str, request: Request):
+    """A fast, GRADED research lookup from the chat's research mode: one web-search lane on the
+    question, every claim through the source-credibility gate (the moat), labeled — never laundered."""
+    s = store.plan_get(sid)
+    if not s or not _owns(request, s):
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    if (wall := _key_wall(s)):
+        return wall
+    body = await request.json()
+    question = (body.get("message") or "").strip()
+    if not question:
+        return JSONResponse({"error": "Ask a research question."}, status_code=400)
+    if len(question) > 500:
+        return JSONResponse({"error": "Keep it under 500 characters."}, status_code=400)
+    if MOCK:
+        return {"claims": [dict(c) for c in _MOCK_LOOKUP], "cost": 0, "tokens": 0}
+
+    def _work():
+        with _run_slot(s.get("user"), s.get("stack")):
+            claims = pipeline.research_lane(planner._working_idea(s), question)
+            verdicts = pipeline.gate_claims(claims)
+            return verdicts, round(pipeline.LEDGER.cost(), 4), pipeline.LEDGER.tokens()
+    try:
+        verdicts, cost, toks = await run_in_threadpool(_work)
+    except BusyError as be:
+        return _busy_response(be)
+    except Exception as e:  # noqa: BLE001
+        return _engine_error(e)
+    _meter(s.get("user"), cost)
+    nc, nt = _fold_usage(sid, s, cost, toks)
+    return {"claims": [{"text": v.claim.text, "url": v.claim.source_url, "tier": v.tier,
+                        "flagged": bool(v.flagged), "reason": v.reason or ""} for v in verdicts],
+            "cost": nc, "tokens": nt}
+
+
 @app.post("/api/plan/{sid}/chatlog")
 async def api_plan_chatlog(sid: str, request: Request):
     """Append one message to the session's conversation record (the v2 left-panel chat). Pure logging,

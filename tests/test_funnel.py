@@ -140,6 +140,21 @@ def test_path_snippets_carry_fork_steering():
     assert m._node_snippet({"id": "b1", "kind": "brainstorm"}) == "the fork where directions were spread"
 
 
+def test_lookup_returns_graded_claims(client):
+    # research-mode chat lookup: one lane + the gate, claims come back labeled (mock canned)
+    s = _brainstorm(client)
+    r = client.post(f"/api/plan/{s['id']}/lookup", json={"message": "office snack spend per month?"})
+    assert r.status_code == 200
+    cs = r.json()["claims"]
+    assert cs and all({"text", "url", "tier", "flagged"} <= set(c) for c in cs)
+    assert any(c["flagged"] for c in cs) and any(not c["flagged"] for c in cs)
+
+
+def test_lookup_requires_a_question(client):
+    s = _brainstorm(client)
+    assert client.post(f"/api/plan/{s['id']}/lookup", json={"message": ""}).status_code == 400
+
+
 def test_route_context_lists_brainstorm_options():
     from app import main as m
     s = {"tree": {"active": "b1", "nodes": {

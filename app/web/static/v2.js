@@ -274,6 +274,7 @@ async function dispatch(dec,fromNode,prompt){
 // advisor. The reply lands as a chat bubble — a question must never die in a tool drawer.
 async function askInChat(q,target){
   if(!q)return;
+  if(target==='research')return lookupInChat(q);   // research mode = a real web lookup, graded by the gate
   const th=chatSay('status','thinking…');
   const url=(target==='help')?'/api/help':`/api/plan/${SID}/chat`;
   const body=(target==='help')?{message:q}:{message:q,log_user:false};
@@ -283,6 +284,19 @@ async function askInChat(q,target){
   const reply=(d&&d.reply)||'';
   chatSay('bot',mdToHtml(reply));
   if(target==='help')chatPush('bot',reply);   // the advisor endpoint logs its own turn; /api/help doesn't
+}
+async function lookupInChat(q){
+  const th=chatSay('status','searching + grading sources…');
+  const {ok,d}=await api('POST',`/api/plan/${SID}/lookup`,{message:q});
+  if(th)th.remove();
+  if(!ok){ if(gateV2(d))return; chatErr((d&&d.error)||'The lookup came back empty — try rewording it.'); return; }
+  const cs=(d&&d.claims)||[];
+  if(!cs.length){ chatErr('The lookup found nothing gradeable — try rewording it.'); return; }
+  const rows=cs.map(c=>`<div class=lkclaim>${c.flagged?'⚠':'✓'} ${esc(c.text)} `+
+    `<a href="${esc(c.url)}" target=_blank rel=noopener>src</a>`+
+    `<span class="lktier${c.flagged?' bad':''}" title="${esc(c.reason||'')}">${esc(c.tier)}</span></div>`).join('');
+  chatSay('bot',`<p>Graded lookup — every stat labeled, vendor numbers flagged:</p>${rows}`);
+  chatPush('bot','Graded lookup:\n'+cs.map(c=>`${c.flagged?'⚠':'✓'} ${c.text} [${c.tier}] ${c.url}`).join('\n'));
 }
 async function steer(note){
   if(!note) return;

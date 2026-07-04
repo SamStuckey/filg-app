@@ -68,7 +68,14 @@ textarea:focus{border-color:var(--accent)}
 .cmsg .cbtns{display:flex;gap:8px;margin-top:8px}
 .cmsg .cbtns button{border-radius:7px;padding:6px 14px;font-size:13px;border:1px solid var(--line);background:var(--card);color:var(--fg)}
 .cmsg .cbtns .go{background:var(--accent);color:#fff;border:none;font-weight:600}
-.cmsg.asked .cbtns{display:none}   /* answered → buttons fold away, the bubble stays as history */
+.cmsg.asked .cbtns{display:none}
+/* graded-lookup rows in a chat bubble: claim + source link + a tier chip (flagged = vendor amber) */
+.lkclaim{margin-top:8px;padding-top:8px;border-top:1px solid var(--line);font-size:13px;line-height:1.45}
+.lkclaim:first-of-type{margin-top:6px}
+.lkclaim a{color:var(--muted);font-size:11.5px;margin-left:4px}
+.lktier{display:inline-block;margin-left:6px;padding:1px 8px;border-radius:999px;font-size:10.5px;
+  border:1px solid var(--line);color:var(--muted);vertical-align:1px}
+.lktier.bad{border-color:var(--yellow);color:var(--yellow)}   /* answered → buttons fold away, the bubble stays as history */
 
 /* ── Right: the decision graph IS the panel ── */
 .right{flex:1;position:relative;overflow:hidden;background:
