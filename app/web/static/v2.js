@@ -380,7 +380,7 @@ function pivotFork(){ const st=PENDING_FORK&&PENDING_FORK.steer; PENDING_FORK=nu
 // ═══ THE DECISION GRAPH — the whole right panel ═══════════════════════════════
 // Documents/steps live INSIDE nodes; the camera does the storytelling: zoom out on prompt, follow the
 // build as edges draw + leaflets fan, zoom into whatever's ready next. Drag to pan, wheel to zoom.
-const NW=190, NFOCUS=560, NH=58, COLW=225, ROWH=125, PADX=70, PADY=48;
+const NW=190, NFOCUS=560, NH=58, ROWH=150, PADX=70, PADY=48, GUT=64;   // whitespace is free — spread, don't squeeze
 const WIP_BOX=210;   // an expanded working node's height — its row grows so children never sit under it
 let VIEW={x:0,y:0,k:1}, GSEEN=new Set(), FOCUS=null, BROWSING=false, LAST_ACTIVE=null, WAS_RESEARCHING=false;
 let WIP_LABEL=null, WIP_T0=null, WIPLOG=[], LANES=[], LANES_DONE=new Set(), PROG_N=0;
@@ -429,46 +429,74 @@ function drainProgress(s){   // stream progress into the working node (sentinels
   }
   PROG_N=Math.max(PROG_N,prog.length);
 }
-function layoutGraph(m,wip){
+// ── THE LAYOUT RULES (rebuilt 2026-07-04, backlog #1) ────────────────────────
+// 1. NO OVERLAP, EVER: every subtree reserves the full horizontal extent of ALL its descendants,
+//    siblings pack with a guaranteed gutter. Whitespace is free — we spread, we don't squeeze.
+// 2. THE SPINE IS STRAIGHT: the committed path (root → active → the node being born) is pinned to
+//    one X. You're working this branch, so it reads top-to-bottom; everything old fans aside.
+// 3. AN OPEN DOC PUSHES, NOT COVERS: a focused node reserves its true rendered footprint (width AND
+//    row height), shoving neighbors and lower rows out of the way instead of sitting on them.
+function layoutGraph(m,wip,active,fit){
+  const FWpx=(fit&&fit.fw)||NFOCUS, FHpx=(fit&&fit.fh)||0;
+  // tree wiring: a parentless JOIN (the merge-wip) rides the tree under its first merged option, so
+  // it's part of the reserved layout — the old "re-plant at a fractional slot" was the overlap source
+  const tp={};
+  Object.values(m).forEach(n=>{ tp[n.id]=(n.parent!=null&&m[n.parent])?n.parent
+      :((Array.isArray(n.selected)&&n.selected.find(s=>m[s]))||null); });
   const kids={},roots=[];
-  Object.values(m).forEach(n=>{kids[n.id]=kids[n.id]||[];});
-  Object.values(m).forEach(n=>{ if(n.parent!=null&&kids[n.parent])kids[n.parent].push(n.id); else if(n.parent==null)roots.push(n.id); });
-  // a refined node with `selected` is a JOIN of those option branches: it sits BELOW the options it
-  // merged, centered between them, with edges from each — not a sibling branch off the brainstorm.
+  Object.keys(m).forEach(id=>kids[id]=[]);
+  Object.keys(m).forEach(id=>{ const p=tp[id]; if(p!=null)kids[p].push(id); else roots.push(id); });
   const joins={};
   Object.values(m).forEach(n=>{ if(Array.isArray(n.selected)){
     const sel=n.selected.filter(id=>m[id]); if(sel.length)joins[n.id]=sel; }});
-  const depth={},pos={};
+  // depth; a join (and its whole subtree) sinks below the DEEPEST branch it merged
+  const depth={};
   const dq=[...roots]; roots.forEach(r=>depth[r]=0);
   while(dq.length){const id=dq.shift();(kids[id]||[]).forEach(c=>{depth[c]=(depth[id]||0)+1;dq.push(c);});}
   Object.keys(joins).forEach(id=>{
-    depth[id]=Math.max(...joins[id].map(s=>depth[s]||0))+1;
-    const q=[id]; while(q.length){const x=q.shift();(kids[x]||[]).forEach(c=>{depth[c]=depth[x]+1;q.push(c);});}
+    const want=Math.max(...joins[id].map(s=>depth[s]||0))+1;
+    if((depth[id]||0)<want){ const delta=want-(depth[id]||0);
+      const q=[id]; while(q.length){const x=q.shift();depth[x]=(depth[x]||0)+delta;(kids[x]||[]).forEach(c=>q.push(c));} }
   });
-  // x slots: a joined node doesn't consume a slot under its parent; it centers on what it merged
-  let slot=0; const X={};
-  function place(id){const ks=(kids[id]||[]).filter(c=>!joins[c]);
-    if(!ks.length){X[id]=slot++;} else {ks.forEach(place);X[id]=(X[ks[0]]+X[ks[ks.length-1]])/2;}}
-  roots.forEach(place);
-  function placeUnder(id,x){X[id]=x;const ks=kids[id]||[];ks.forEach((c,i)=>placeUnder(c,x+(i-(ks.length-1)/2)));}
-  Object.keys(joins).forEach(id=>{ const xs=joins[id].map(s=>X[s]||0);
-    placeUnder(id,xs.reduce((a,b)=>a+b,0)/xs.length); });
-  // collision pass: within each row, sweep left→right and push overlapping nodes apart (fractional
-  // positions from joins/ghost children can land on top of slot-packed neighbors)
-  const rows={};
-  Object.keys(m).forEach(id=>{const d0=depth[id]||0;(rows[d0]=rows[d0]||[]).push(id);});
-  Object.values(rows).forEach(ids=>{
-    ids.sort((a,b)=>(X[a]||0)-(X[b]||0));
-    for(let i=1;i<ids.length;i++){
-      if((X[ids[i]]||0)-(X[ids[i-1]]||0)<0.95)X[ids[i]]=(X[ids[i-1]]||0)+0.95;
-    }
-  });
-  // per-row y: the WIP row grows so an expanded working node (+ its leaflets) never covers children
+  // the SPINE: root → active, extended by the node being born when it grows from the active tip
+  const spine=new Set();
+  let tip=(active&&m[active])?active:null;
+  if(wip&&m[wip]&&tp[wip]===active)tip=wip;
+  for(let cur=tip;cur!=null&&m[cur];cur=tp[cur])spine.add(cur);
+  // horizontal extents (px, relative to each node's center): reserve EVERYTHING
+  const nodeW=id=>(id===FOCUS&&FHpx)?FWpx:(id===wip?250:NW);
+  const L={},R={},off={};
+  function measure(id){
+    const ks=kids[id];
+    if(!ks.length){ L[id]=nodeW(id)/2; R[id]=nodeW(id)/2; return; }
+    ks.forEach(measure);
+    let x=0; const o=[];
+    ks.forEach((c,i)=>{ x+=(i?R[ks[i-1]]+GUT+L[c]:L[c]); o.push(x); });
+    const packL=o[0]-L[ks[0]], packR=o[ks.length-1]+R[ks[ks.length-1]];
+    const si=ks.findIndex(c=>spine.has(c));
+    // a spine node pins its spine child DIRECTLY beneath it; everything else centers over its pack
+    const anchor=(spine.has(id)&&si>=0)?o[si]:(packL+packR)/2;
+    ks.forEach((c,i)=>off[c]=o[i]-anchor);
+    L[id]=Math.max(nodeW(id)/2,anchor-packL);
+    R[id]=Math.max(nodeW(id)/2,packR-anchor);
+  }
+  const cx={};
+  let cursor=PADX;
+  roots.forEach(r=>{ measure(r); cursor+=L[r]; cx[r]=cursor; cursor+=R[r]+GUT; });
+  const bq=[...roots];
+  while(bq.length){const id=bq.shift();(kids[id]||[]).forEach(c=>{cx[c]=cx[id]+off[c];bq.push(c);});}
+  const minLeft=Math.min(...Object.keys(m).map(id=>cx[id]-nodeW(id)/2));
+  const nudge=PADX-minLeft;
+  // per-row y: the WIP row grows for the leaf stack; the FOCUSED row reserves the open doc's height
   const maxDepth=Math.max(0,...Object.values(depth));
   const rowY={}; let y=PADY;
   for(let d=0;d<=maxDepth;d++){ rowY[d]=y;
-    y+=ROWH+((wip!=null&&depth[wip]===d)?(WIP_BOX-NH+LANES.length*30):0); }   // the leaf stack grows the WIP row
-  Object.keys(m).forEach(id=>{pos[id]={x:PADX+(X[id]||0)*COLW, y:rowY[depth[id]||0]};});
+    let h=ROWH;
+    if(wip!=null&&depth[wip]===d)h=Math.max(h,WIP_BOX+LANES.length*30+24);
+    if(FOCUS!=null&&FHpx&&depth[FOCUS]===d)h=Math.max(h,FHpx+48);
+    y+=h; }
+  const pos={};
+  Object.keys(m).forEach(id=>{pos[id]={x:cx[id]+nudge-NW/2, y:rowY[depth[id]||0]};});
   return {pos,kids,joins};
 }
 function renderGraph(){
@@ -483,13 +511,13 @@ function renderGraph(){
     parent:WIP_PENDING.join?null:(WIP_PENDING.parent||active),
     selected:WIP_PENDING.join||undefined};   // the node being born — loading lives HERE
   const wip=WIP_PENDING?'_wip':null;
-  const {pos,kids,joins}=layoutGraph(m,wip);
+  const rrect=$('right').getBoundingClientRect();
+  const FW=focusW(rrect), FH=rrect.height-120;   // open-doc box: panel-fit, margin on every side
+  const {pos,kids,joins}=layoutGraph(m,wip,active,FOCUS?{fw:FW,fh:FH}:null);
   const onPath=pathSetOf(m,active);
   // nodes: keyed divs, moved (CSS transition) or created (.enter → fade in)
   const live=new Set(Object.keys(m));
   gn.querySelectorAll('.gnode').forEach(el=>{ if(!live.has(el.dataset.id)) el.remove(); });
-  const rrect=$('right').getBoundingClientRect();
-  const FW=focusW(rrect), FH=rrect.height-120;   // open-doc box: panel-fit, margin on every side
   const JOINSEL=new Set(); Object.values(joins).forEach(a=>a.forEach(id=>JOINSEL.add(id)));
   Object.values(m).forEach(n=>{
     const p=pos[n.id]; const isWip=n.id===wip, isFocus=n.id===FOCUS&&!isWip;
