@@ -17,21 +17,22 @@ textarea:focus{border-color:var(--accent)}
 .ghost.small{padding:3px 8px;font-size:13px}
 .err{color:var(--red);font-size:13px;margin-top:6px;min-height:1px}
 
-/* ── Landing ── */
-.landing{min-height:100%;display:flex;flex-direction:column;position:absolute;inset:0;z-index:12;
-  background:var(--bg);transition:transform .5s cubic-bezier(.4,0,.2,1),opacity .5s ease;
-  transform-origin:left top}
-.landing.shrink{transform:translate(-26vw,-8vh) scale(.5);opacity:0;pointer-events:none}
-.topbar{display:flex;align-items:center;gap:14px;padding:14px 18px}
-.brand{font-weight:800;font-size:19px;color:var(--accent);letter-spacing:.02em}
-.topbar #loginbtn{margin-left:auto}   /* login pins right even if other topbar children change */
-.landing-mid{max-width:640px;margin:0 auto;padding:6vh 20px 20px;text-align:center;width:100%}
-.landing-mid h1{font-size:30px;margin:0 0 12px;font-weight:700}
-.landing-sub,#landing-sub{color:var(--muted);margin:0 0 22px;font-size:15px}
-.landing-go{margin-top:12px}
-#landing-start,#ws-send,.stage-cta{background:var(--accent);color:#fff;border:none;border-radius:8px;
+/* ── Full mode: the landing IS the workspace — left drawer expanded, box centered. The first
+   prompt drops .full and the same surface collapses into the sidebar (width + hero transitions). ── */
+.hero{max-height:0;opacity:0;overflow:hidden;margin:0 auto;text-align:center;max-width:640px;width:100%;
+  transition:max-height .55s cubic-bezier(.4,0,.2,1),opacity .3s ease,padding .55s ease;padding:0 20px}
+.hero h1{font-size:30px;margin:0 0 12px;font-weight:700}
+#landing-sub{color:var(--muted);margin:0 0 22px;font-size:15px}
+.workspace.full .left{width:100%;min-width:100%;border-right:none}
+.workspace.full .hero{max-height:52vh;opacity:1;padding:9vh 20px 8px}
+.workspace.full .chatlog,.workspace.full .modechips{display:none}
+.workspace.full #ws-wrap{max-width:640px;margin:0 auto;width:100%}
+.workspace.full #ws-box{min-height:92px;font-size:16px}
+.workspace.full .right{flex:0 0 0;opacity:0;padding:0;pointer-events:none}
+.qmark{display:none}
+.workspace.full .qmark{display:flex;align-items:center;justify-content:center;bottom:66px}   /* riding the textarea, clear of the Start button */
+#ws-send,.stage-cta{background:var(--accent);color:#fff;border:none;border-radius:8px;
   padding:11px 20px;font-weight:600}
-.landing-go #landing-start{padding:11px 34px}
 
 /* ── the prompt box + its help/mode tint ── */
 .promptwrap{position:relative;text-align:left}
@@ -46,7 +47,8 @@ textarea:focus{border-color:var(--accent)}
 /* ── Workspace split ── */
 .workspace{display:flex;height:100%;overflow:hidden}
 .left{width:360px;min-width:300px;border-right:1px solid var(--line);padding:14px;display:flex;
-  flex-direction:column;gap:12px;overflow:hidden;position:relative;z-index:10}   /* the chatlog scrolls, the box stays pinned; panel sits above the tool backdrop */
+  flex-direction:column;gap:12px;overflow:hidden;position:relative;z-index:10;
+  transition:width .55s cubic-bezier(.4,0,.2,1),min-width .55s cubic-bezier(.4,0,.2,1)}   /* the chatlog scrolls, the box stays pinned; full mode animates into the sidebar */
 @media (min-width:1100px){.left{width:33.333vw}}   /* a third of the screen on big displays */
 .left-top{display:flex;justify-content:space-between;align-items:center}
 .logo{background:none;border:none;font-weight:800;font-size:18px;color:var(--accent)}
@@ -78,7 +80,7 @@ textarea:focus{border-color:var(--accent)}
 .lktier.bad{border-color:var(--yellow);color:var(--yellow)}   /* answered → buttons fold away, the bubble stays as history */
 
 /* ── Right: the decision graph IS the panel ── */
-.right{flex:1;position:relative;overflow:hidden;background:
+.right{flex:1;position:relative;overflow:hidden;min-width:0;opacity:1;transition:opacity .45s ease .2s;background:
   radial-gradient(color-mix(in srgb,var(--fg) 7%,transparent) 1px,transparent 1px);
   background-size:22px 22px}
 #graph{position:absolute;inset:0;cursor:grab;touch-action:none}
@@ -119,7 +121,7 @@ textarea:focus{border-color:var(--accent)}
   border-top-color:var(--accent);display:inline-block;animation:gspin .8s linear infinite;flex:none}
 .sendspin{border-color:rgba(255,255,255,.35);border-top-color:#fff;vertical-align:-1px}
 @keyframes gspin{to{transform:rotate(360deg)}}
-#landing-start.busy::after{content:'';display:inline-block;width:1.2em;text-align:left;animation:ell 1.2s steps(1) infinite}
+#ws-send.busy::after{content:'';display:inline-block;width:1.2em;text-align:left;animation:ell 1.2s steps(1) infinite}
 @keyframes ell{0%{content:''}25%{content:'.'}50%{content:'..'}75%{content:'...'}}
 
 /* ── Zoomed-in node: the document/step expands IN PLACE inside the node ── */

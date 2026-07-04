@@ -158,25 +158,29 @@ function paintMeter(s){
 let LANDING_HELP=false;
 function toggleLandingHelp(){
   LANDING_HELP=!LANDING_HELP;
-  $('landing-wrap').classList.toggle('help',LANDING_HELP);
+  $('ws-wrap').classList.toggle('help',LANDING_HELP);
   $('landing-q').classList.toggle('on',LANDING_HELP);
-  $('landing-box').placeholder=LANDING_HELP
+  $('ws-box').placeholder=LANDING_HELP
     ? "'how does this work?', 'what does this cost?'…"
     : "e.g. 'I want to make my dog internet famous', 'I have a truck, some tools, and free time', 'I'm a book worm with a bad back who likes turtles'…";
 }
+function sendLabel(){ const b=$('ws-send'); if(b)b.textContent=isFull()?'Start →':'Send →';
+  const x=$('ws-box'); if(x&&!LANDING_HELP)x.placeholder=isFull()
+    ? "e.g. 'I want to make my dog internet famous', 'I have a truck, some tools, and free time', 'I'm a book worm with a bad back who likes turtles'…"
+    : 'Tell me what to change, or just talk to it…'; }
+function isFull(){ return $('workspace').classList.contains('full'); }
 async function startFromLanding(){
-  const idea=$('landing-box').value.trim();
+  const box=$('ws-box'), idea=box.value.trim();
   $('landing-err').textContent='';
   if(idea.length<12){$('landing-err').textContent='Tell me a bit more about the idea.';return;}
-  // Slide straight into the workspace: the landing collapses toward the sidebar and the canvas shows
-  // a seed node working immediately — the tree starts building in front of you, not behind a spinner.
-  $('landing').classList.add('shrink');
-  $('workspace').hidden=false;
-  setTimeout(()=>{$('landing').hidden=true;},500);
-  requestAnimationFrame(()=>seedGraph(idea));
+  // ONE surface: the expanded drawer collapses into the sidebar, the box drops to the bottom, and
+  // the canvas fades in with a seed node already working — no swap, no fly-away.
+  box.value='';
+  $('workspace').classList.remove('full'); sendLabel();
+  setTimeout(()=>{ if(!SID)seedGraph(idea); },380);   // seed once the panel has size — unless the spread already landed (mock is FAST)
   const {ok,d}=await api('POST','/api/brainstorm',{idea,stack:STACK_CUR});
-  if(!ok||(d&&d.gibberish)){   // rejected → slide back to the landing and say why
-    $('landing').hidden=false; $('landing').classList.remove('shrink'); $('workspace').hidden=true;
+  if(!ok||(d&&d.gibberish)){   // rejected → expand back out and say why
+    $('workspace').classList.add('full'); sendLabel(); box.value=idea; resetGraph();
     if(d&&d.gibberish){ $('landing-joke').innerHTML=`<div class=jokecard><h3>${esc(d.title||"That's not an idea yet.")}</h3><div>${mdToHtml(d.body||'')}</div></div>`; return; }
     if(gateV2(d))return;
     $('landing-err').textContent=(d&&d.error)||'Something went wrong.'; return;
@@ -184,6 +188,9 @@ async function startFromLanding(){
   adoptPlan(d); render(d);
   chatUser(idea);
   chatBot('Spread that into a few directions — pick what clicks on the graph, or just keep typing.');
+  // the collapse animation is still moving the panels — re-aim the camera once the layout settles,
+  // or the tree stays framed against a mid-transition (half-width) canvas
+  setTimeout(()=>{ if(S){BROWSING=false; focusActive(true);} },650);
 }
 function seedGraph(idea){   // a placeholder working node while the first spread thinks
   const gn=$('gnodes'), ge=$('gedges'); if(!gn)return;
@@ -203,7 +210,7 @@ function adoptPlan(d){ SID=d.id; SEL=new Set(); PENDING_FORK=null; resetGraph();
 async function restorePlan(id){   // boot straight into an existing plan: graph + docs + conversation
   const {ok,d}=await api('GET',`/api/plan/${id}?touch=1`);
   if(!ok||!d||!d.id){ history.replaceState(null,'','/v2'); return; }   // unknown → the landing
-  $('landing').hidden=true; $('workspace').hidden=false;
+  $('workspace').classList.remove('full'); sendLabel();
   SID=d.id; SEL=new Set(); PENDING_FORK=null; resetGraph();
   replayChat(d.chat);
   render(d);
@@ -219,6 +226,7 @@ function setMode(m){
   if(m==='build'){ closeTool(); } else { openTool(m); }
 }
 async function sendPrompt(){
+  if(isFull())return startFromLanding();   // full mode: the first prompt IS the landing submit
   const box=$('ws-box'), prompt=box.value.trim(); if(!prompt) return;
   $('ws-err').textContent='';
   chatUser(prompt);
@@ -232,7 +240,7 @@ async function sendPrompt(){
   btn.innerHTML='<span class="spin sendspin" aria-hidden=true></span> Routing…';   // instant feedback
   const body={prompt,mode:MODE}; if(fromNode)body.node=fromNode;
   const {ok,d}=await api('POST',`/api/plan/${SID}/route`,body);
-  btn.disabled=false; btn.textContent='Send →';
+  btn.disabled=false; sendLabel();
   if(!ok){ if(gateV2(d))return; chatErr((d&&d.error)||'Could not route that.'); return; }
   box.value='';
   if(d.fork){ PENDING_FORK=d.fork;
@@ -867,15 +875,15 @@ function toolBody(mode){
 
 // ── boot ─────────────────────────────────────────────────────────────────────
 document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeModal();unfocus();if(PIVOT_FROM)clearGhost();}});
-// Enter submits (Shift+Enter for a newline) — both the chat box and the landing box
+// Enter submits (Shift+Enter for a newline) — sendPrompt handles full mode as the landing submit
 document.addEventListener('keydown',e=>{
   if(e.key!=='Enter'||e.shiftKey)return;
   if(e.target&&e.target.id==='ws-box'){ e.preventDefault(); sendPrompt(); }
-  else if(e.target&&e.target.id==='landing-box'){ e.preventDefault(); startFromLanding(); }
 });
 initGraphInput();
 loadKey();   // paint the key indicator (hosted vs BYOK) on load
-renderStackChips();   // the model-crew chips (landing + workspace)
+renderStackChips();   // the model-crew chip
+sendLabel();   // 'Start →' in full mode, 'Send →' once a plan exists
 { const m=location.pathname.match(/^\/v2\/plan\/([A-Za-z0-9]+)/); if(m)restorePlan(m[1]); }   // deep link → skip the landing
 // the working node's elapsed clock — keeps the build feeling alive even between progress lines
 setInterval(()=>{const el=$('wiptime');if(el&&WIP_T0)el.textContent=Math.round((Date.now()-WIP_T0)/1000)+'s';},1000);

@@ -4,27 +4,9 @@
 __FILG_HEAD__
 <link rel="stylesheet" href="/static/v2.css">
 </head><body>
-<!-- ── Landing: one box, a help toggle, a login button. Nothing else. ── -->
-<div id=landing class=landing>
-  <div class=topbar><span class=brand>FILG</span>
-    <button id=stackchip-l class="ghost stackchip" type=button onclick="stackModal()"></button>
-    <button id=loginbtn class=ghost type=button onclick="v2login()">Log in</button></div>
-  <div class=landing-mid>
-    <h1 id=landing-head>Let's build your business.</h1>
-    <p id=landing-sub>Drop in an idea, even if it's vague, about what you're good at, what you want to
-      sell, or what you enjoy doing. Don't overthink it, we'll smooth it out as we go.</p>
-    <div class="promptwrap big" id=landing-wrap>
-      <textarea id=landing-box rows=3 placeholder="e.g. 'I want to make my dog internet famous', 'I have a truck, some tools, and free time', 'I'm a book worm with a bad back who likes turtles'…"></textarea>
-      <button type=button class=qmark id=landing-q onclick="toggleLandingHelp()" aria-label="How does this work?" title="How does this work?">?</button>
-    </div>
-    <div class=landing-go><button id=landing-start type=button onclick="startFromLanding()">Start →</button></div>
-    <div class=err id=landing-err></div>
-    <div id=landing-joke></div>
-  </div>
-</div>
-
-<!-- ── Workspace: left = the build surface (prompt + tree + tools), right = the decision graph. ── -->
-<div id=workspace class=workspace hidden>
+<!-- ── ONE surface: the landing IS the workspace with the left drawer fully expanded and the box
+     centered. The first prompt collapses it into the sidebar — no swap, no fly-away. ── -->
+<div id=workspace class="workspace full">
   <aside class=left id=left>
     <div class=left-top>
       <button type=button class=logo onclick="v2newPlan()">FILG</button>
@@ -36,6 +18,13 @@ __FILG_HEAD__
         </button>
       </div>
     </div>
+    <div class=hero id=hero>
+      <h1 id=landing-head>Let's build your business.</h1>
+      <p id=landing-sub>Drop in an idea, even if it's vague, about what you're good at, what you want to
+        sell, or what you enjoy doing. Don't overthink it, we'll smooth it out as we go.</p>
+      <div class=err id=landing-err></div>
+      <div id=landing-joke></div>
+    </div>
     <div class=chatlog id=chatlog aria-live=polite></div>
     <div class="promptwrap" id=ws-wrap>
       <div class=modechips id=modechips>
@@ -45,6 +34,7 @@ __FILG_HEAD__
         <button type=button data-mode=help class=mchip onclick="setMode('help')">Help</button>
       </div>
       <textarea id=ws-box rows=3 placeholder="Tell me what to change, or just talk to it…"></textarea>
+      <button type=button class=qmark id=landing-q onclick="toggleLandingHelp()" aria-label="How does this work?" title="How does this work?">?</button>
       <button type=button class=send id=ws-send onclick="sendPrompt()">Send →</button>
       <div class=err id=ws-err></div>
     </div>
