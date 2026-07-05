@@ -428,3 +428,67 @@ textarea:focus{border-color:var(--accent)}
 .vgrip:hover::after,.vgrip.dragging::after{background:var(--accent)}
 .left.rfull .vgrip,.left.bfull .vgrip{display:none}   /* resize belongs to the SPLIT boundary only */
 .rpane.resizing{transition:none}   /* a live drag needs 1:1 tracking, not the .45s ease */
+
+/* ── The gating wave: summary display · auth/pricing modals · tier chip · the account surface ── */
+/* Summary is the 4th display state of the chat drawer (the hsplit mechanism, green-tinted). */
+.mchip[data-mode=summary].on{border-color:var(--green);color:var(--green)}
+.promptwrap.summary textarea{background:color-mix(in srgb,var(--green) 8%,var(--card));border-color:var(--green)}
+.left.ssplit #spane{opacity:1;pointer-events:auto;flex:0 1 auto;max-height:46%;
+  border-bottom:1px dashed var(--line);padding-bottom:6px;margin-bottom:4px}
+.sumcard{border:1px solid var(--line);border-radius:10px;background:var(--card);padding:12px 14px;margin-bottom:8px}
+.sumcard .verdict{margin-right:6px}   /* reuses the standard verdict chip styling */
+.sumcard .sumreact{font-size:15px;margin:8px 0 6px;font-weight:600}
+.sumcard p{margin:6px 0}
+.sumcard .mold{display:inline-block;font-size:11px;border:1px solid var(--line);border-radius:999px;padding:1px 8px;color:var(--muted)}
+
+/* tier chip: plan label + allowance % in the header */
+.tierchip{border-color:var(--green);color:var(--green)}
+.tierchip.hot{border-color:var(--red);color:var(--red)}
+
+/* auth + pricing modal furniture (ported from v1's modal, restyled plain) */
+.modal.wide{width:min(700px,94vw)}
+.authgate{margin:6px 0 2px}
+.authgate .gbtn{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;margin-bottom:8px;
+  background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:10px 12px;font-weight:700}
+.authgate .gbtn:hover{border-color:var(--fg)}
+.tiergrid{display:flex;gap:10px;margin-top:8px;flex-wrap:wrap}
+.tiercard{border:1px solid var(--line);border-radius:10px;padding:14px;flex:1;min-width:180px;background:var(--card)}
+.tiercard.cur{border-color:var(--green)}
+.tiercard .tprice{font-size:1.5em;font-weight:700;margin:4px 0}
+.tiercard .tprice span{font-size:.55em;color:var(--muted)}
+.tiercard ul{margin:0 0 10px;padding-left:18px;font-size:.85em}
+.tiercard button{border:1px solid var(--line);background:var(--accent);color:#fff;border-radius:8px;padding:7px 14px;border:none}
+.tiercard button[disabled]{background:var(--card);color:var(--muted);border:1px solid var(--line);cursor:default}
+.byokbox{margin-top:12px;border:1px dashed var(--muted);border-radius:10px;padding:12px 14px}
+.byokbox .byokfree{color:var(--green);font-weight:700}
+.byokbox button{border:1px solid var(--line);background:var(--card);color:var(--fg);border-radius:8px;padding:7px 14px;margin-top:6px}
+.submeter{margin:6px 0 12px;font-size:.85em}
+.submeter .bar{height:6px;background:var(--line);border-radius:3px;margin-top:4px;overflow:hidden}
+.submeter .bar i{display:block;height:100%;background:var(--green)}
+.submeter .bar i.hot{background:var(--red)}
+
+/* the account surface: a full overlay over the workspace */
+.account{position:fixed;inset:0;z-index:20;background:var(--bg);overflow-y:auto;padding:28px 20px 60px}
+.acctwrap{max-width:860px;margin:0 auto}
+.accttop{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}
+.accttop h2{margin:0}
+.accttop .link{background:none;border:none;color:var(--accent);font-size:14px}
+.accttabs{display:flex;gap:6px;border-bottom:1px solid var(--line);margin-bottom:16px;flex-wrap:wrap}
+.accttabs button{background:none;border:none;border-bottom:2px solid transparent;padding:8px 12px;color:var(--muted);font-weight:600}
+.accttabs button.on{color:var(--fg);border-bottom-color:var(--accent)}
+.pcard{display:flex;justify-content:space-between;align-items:center;gap:12px;border:1px solid var(--line);
+  border-radius:10px;background:var(--card);padding:12px 14px;margin-bottom:8px;flex-wrap:wrap}
+.pcard .idea{font-weight:600}
+.pcard .meta{font-size:12.5px;color:var(--muted)}
+.pcard .act{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.pcard .act button{border:1px solid var(--line);background:var(--card);color:var(--fg);border-radius:8px;padding:6px 10px;font-size:13px}
+.pcard .act button.primary{background:var(--accent);color:#fff;border:none}
+.pcard .pill{font-size:11px;font-weight:700;border:1px solid var(--line);border-radius:999px;padding:2px 8px;color:var(--muted)}
+.pcard .pill.done{border-color:var(--green);color:var(--green)}
+.acct-block{border:1px solid var(--line);border-radius:10px;background:var(--card);padding:14px;margin-bottom:12px}
+.acct-lbl{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);margin-bottom:6px}
+.acct-block .prow{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+.acct-block .prow button{border:1px solid var(--line);background:var(--card);color:var(--fg);border-radius:8px;padding:7px 12px}
+.acct-block .prow button.danger{border-color:var(--red);color:var(--red)}
+.acct-block .pnote{color:var(--muted);font-size:13.5px;margin:2px 0}
+.acctempty{color:var(--muted);padding:18px 4px}

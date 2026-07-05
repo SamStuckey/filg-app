@@ -12,6 +12,7 @@ const CFG = window.FILG || {};
 let SID = null, S = null, MODE = 'build';
 let SEL = new Set();            // selected brainstorm option ids
 let PENDING_FORK = null;        // a pivot fork awaiting discard/pivot
+let SB = null, SESSION = null, ME = null;   // Supabase client · live session · /api/me snapshot
 
 // ── tiny helpers ─────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
@@ -23,13 +24,91 @@ function mdToHtml(t){ if(!t)return'';
    .replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g,'<a href="$2" target=_blank rel=noopener>$1</a>');
   return t.split(/\n{2,}/).map(p=>/^<h3>/.test(p)?p:'<p>'+p.replace(/\n/g,'<br>')+'</p>').join('');
 }
+function authHeaders(){ return SESSION?{'Authorization':'Bearer '+SESSION.access_token}:{}; }
 async function api(method,url,body){
-  const r=await fetch(url,{method,headers:{'Content-Type':'application/json'},
+  const r=await fetch(url,{method,headers:{'Content-Type':'application/json',...authHeaders()},
     body:body?JSON.stringify(body):undefined});
   let d={}; try{d=await r.json();}catch(e){}
   return {ok:r.ok,status:r.status,d};
 }
-function v2login(){ toast('Login is stubbed locally — identity is your FILG_DEV_EMAIL.'); }
+
+// ── Auth (Supabase): magic link + Google, same accounts as v1. The wall lives at commit — the free
+// taste (brainstorm → merge) runs anonymous; signing in CLAIMS the tasted plan into the account. ──
+function signedIn(){ return !!SESSION||!!CFG.devEmail; }
+async function initAuth(){
+  if(!CFG.authEnabled||!window.supabase){ if(CFG.devEmail)await loadMe(); paintIdentity(); routeV2(); return; }
+  SB=window.supabase.createClient(CFG.supabaseUrl,CFG.supabaseAnon);
+  SB.auth.onAuthStateChange(async(_e,s)=>{ SESSION=s; await loadMe(); paintIdentity(); claimPending(); });
+  const {data}=await SB.auth.getSession(); SESSION=data&&data.session;
+  await loadMe(); paintIdentity(); await claimPending(); routeV2();
+}
+async function loadMe(){
+  if(!SESSION&&!CFG.devEmail){ ME=null; await loadKey(); return; }
+  const {ok,d}=await api('GET','/api/me'); ME=(ok&&d&&d.signed_in)?d:null;
+  await loadKey();
+}
+function paintIdentity(){
+  const chip=$('tierchip'); if(chip){
+    const sub=ME&&ME.subscription;
+    if(ME&&ME.tier&&sub&&sub.cap_cents){
+      const pct=Math.min(100,Math.round(100*sub.spent_cents/sub.cap_cents));
+      chip.hidden=false; chip.textContent=(ME.tier_label||ME.tier)+' · '+pct+'%';
+      chip.classList.toggle('hot',pct>=100);
+    } else chip.hidden=true;
+  }
+  const pb=$('profilebtn'); if(pb)pb.title=signedIn()?('Account · '+((ME&&ME.email)||SESSION&&SESSION.user&&SESSION.user.email||'')):'Log in / Sign up';
+}
+function profileClick(){ if(signedIn())openAccount(); else authModal(); }
+// after any sign-in: the plan they tasted anonymously joins the new account (the wall's happy path)
+async function claimPending(){
+  if(!SESSION)return;
+  let sid=null; try{sid=localStorage.getItem('filg_claim_sid');}catch(e){}
+  const target=sid||((SID&&S&&!S.owned)?SID:null);
+  if(!target)return;
+  try{localStorage.removeItem('filg_claim_sid');}catch(e){}
+  const {ok,d}=await api('POST',`/api/plan/${target}/claim`,{});
+  if(ok&&S&&S.id===target){ render(d); chatStatus('✓ Plan saved to your account.'); }
+}
+function _rememberClaim(){ try{ if(SID)localStorage.setItem('filg_claim_sid',SID); }catch(e){} }
+function authModal(note){
+  if(!CFG.authEnabled){ toast('Auth is off here (dev) — identity is FILG_DEV_EMAIL.'); return; }
+  const goog=CFG.supabaseUrl?`<button type=button class=gbtn onclick="authGo('google')">Continue with Google</button>`:'';
+  $('modal-body').innerHTML=
+    `<p class=muted>${esc(note||'Sign in so your plan saves to your account. Free to start — build on your own API key, or subscribe to run on ours.')}</p>`+
+    `<div class=authgate>${goog}<button type=button class=gbtn onclick="authGo('email')">✉️ Email me a sign-in link</button></div>`+
+    `<div id=authemailrow hidden><input id=authemail type=email placeholder="you@email.com" autocomplete=email>`+
+    `<div class=err id=autherr></div></div>`;
+  $('modal-acts').innerHTML='<button onclick="closeModal()">Not now</button>';
+  openModal('Sign in / Sign up');
+}
+function authGo(kind){
+  if(kind==='google')return signinGoogle();
+  const row=$('authemailrow');
+  if(row&&row.hidden){ row.hidden=false;
+    $('modal-acts').innerHTML='<button onclick="closeModal()">Not now</button>'+
+      '<button class=primary onclick="signinEmail()">Send the link</button>';
+    setTimeout(()=>{const i=$('authemail');if(i)i.focus();},30); }
+}
+function _authReturnTo(){ return location.origin+(SID?'/v2/plan/'+SID:'/v2'); }
+async function signinGoogle(){
+  if(!SB){ toast("Auth isn't configured here.",'err'); return; }
+  _rememberClaim();
+  const {error}=await SB.auth.signInWithOAuth({provider:'google',options:{redirectTo:_authReturnTo()}});
+  if(error)toast(error.message,'err');
+}
+async function signinEmail(){
+  const email=(($('authemail')||{}).value||'').trim(), er=$('autherr');
+  if(!email||email.indexOf('@')<0){ if(er)er.textContent='Enter your email.'; return; }
+  if(!SB){ toast("Auth isn't configured here.",'err'); return; }
+  _rememberClaim();
+  const {error}=await SB.auth.signInWithOtp({email,options:{emailRedirectTo:_authReturnTo()}});
+  closeModal();
+  toast(error?error.message:'Check your inbox for the sign-in link.',error?'err':'');
+}
+async function signout(){
+  if(SB)await SB.auth.signOut();
+  SESSION=null; ME=null; closeAccount(); paintIdentity(); toast('Signed out.');
+}
 
 // ── The chat log: the conversation IS the left panel; every exchange leaves a bubble ──
 function chatSay(role,html){const log=$('chatlog'); if(!log)return null;
@@ -63,13 +142,90 @@ function chatConfirm(text,goLabel){return new Promise(res=>{
     chatStatus(yes?(goLabel||'Go')+' ✓':'Not yet — carrying on as is.'); res(yes);};
   m.querySelector('.go').onclick=()=>done(true);
   m.querySelector('.nah').onclick=()=>done(false);});}
-// Central handler for a gated API error (the prod wall): needKey → the key modal; fairUse → the
-// allowance message. Returns true if it handled the response.
+// Central handler for a gated API error (the prod wall). The ladder, in the order the server sends
+// it: needAccount → sign up (the wall at commit) · fairUse → allowance used (upgrade / BYOK fallback)
+// · upgrade → a feature that needs a plan · needKey → the fork (BYOK free vs subscribe).
+// Returns true if it handled the response.
 function gateV2(d){
   if(!d)return false;
-  if(d.fairUse){ toast(d.error||'Monthly allowance used — add your own key or wait for the reset.','err'); keyModal(); return true; }
-  if(d.needKey){ toast('Add your own API key to keep building.','err'); keyModal(); return true; }
+  if(d.needAccount){
+    authModal("That first stretch was on the house. Create a free account to keep building — this "
+      +"plan saves to it (unclaimed plans are cleaned up after ~48h). Then bring your own API key "
+      +"(free) or subscribe to run on ours.");
+    return true;
+  }
+  if(d.fairUse){ fairUseModal(d); return true; }
+  if(d.upgrade){ pricingModal(d.error||'That one needs a plan, or your own key.'); return true; }
+  if(d.needKey){
+    if(CFG.authEnabled&&!signedIn()){ authModal(); return true; }
+    if((tiersCat().length)&&!HAS_KEY){ pricingModal(d.error||null); return true; }   // the fork: plans + BYOK box
+    keyModal(); return true;
+  }
   return false;
+}
+
+// ── Pricing: the fork (free BYOK vs the monthly plans), the tier cards, and the allowance modal ──
+function tiersCat(){ return (ME&&ME.tiers)||CFG.tiers||[]; }
+function curTier(){ return (ME&&ME.tier)||null; }
+function pdfPriceStr(){ const c=(ME&&ME.pdf_price)||CFG.pdfPrice||1300; return '$'+Math.round(c/100); }
+function tierCard(t){
+  const cur=curTier()===t.id;
+  const allow='~$'+(t.cap_cents/100).toFixed(0)+'/mo of model usage included';
+  return `<div class="tiercard${cur?' cur':''}">`+
+    `<div style="font-weight:700">${esc(t.label)}${cur?' <span style="color:var(--green)">✓ current</span>':''}</div>`+
+    `<div class=tprice>$${t.price}<span>/mo</span></div>`+
+    `<ul><li>Every feature, every model crew</li><li>Runs on our key — no API key needed</li>`+
+    `<li>Unlimited clean PDFs</li><li>${esc(allow)}</li></ul>`+
+    (cur?'<button type=button disabled>Your plan</button>'
+        :`<button type=button onclick="subscribe('${t.id}')">Choose ${esc(t.label)}</button>`)+
+    `</div>`;
+}
+function subMeterHtml(){
+  const s=ME&&ME.subscription; if(!s||!s.cap_cents)return '';
+  const pct=Math.min(100,Math.round(100*s.spent_cents/s.cap_cents));
+  const reset=s.reset_at?(' · resets '+new Date(s.reset_at).toLocaleDateString()):'';
+  return `<div class=submeter>This month's allowance: <b>${pct}% used</b>${reset}`+
+    `<div class=bar><i class="${pct>=100?'hot':''}" style="width:${pct}%"></i></div></div>`;
+}
+function pricingModal(note){
+  if(!tiersCat().length){ keyModal(); return; }
+  const cards=tiersCat().map(tierCard).join('');
+  const byok=CFG.byokEnabled?
+    `<div class=byokbox><b>Bring your own key</b> · <span class=byokfree>free</span>`+
+    `<p class=muted style="margin:6px 0 0">Your own OpenRouter or Anthropic key — unlimited, every `+
+    `model crew, every feature; you pay your provider (pennies a plan). The clean PDF is a one-time `+
+    `${pdfPriceStr()} per plan (re-downloads free; a watermarked copy is always free on your key).</p>`+
+    `<button type=button onclick="closeModal();keyModal()">Use my own key</button></div>`:'';
+  $('modal-body').innerHTML=(note?`<p class=muted>${esc(note)}</p>`:'')+
+    (curTier()?subMeterHtml():'')+`<div class=tiergrid>${cards}</div>`+byok;
+  $('modal-acts').innerHTML='<button class=primary onclick="closeModal()">Maybe later</button>';
+  openModal(curTier()?'Change your plan':'Keep building',true);
+}
+async function subscribe(tier){
+  if(CFG.authEnabled&&!signedIn()){ authModal('Sign in to subscribe.'); return; }
+  if(!CFG.subEnabled){ toast("Billing isn't set up yet.",'err'); return; }
+  const {d}=await api('POST','/api/subscribe',{tier,v2:true});
+  if(d&&d.url){ location.href=d.url; return; }          // → Stripe Checkout
+  if(d&&d.current){ toast("You're already on that plan."); return; }
+  toast((d&&d.error)||'Could not start checkout.','err');
+}
+function fairUseModal(d){
+  const nxt=d&&d.upgradeTier;
+  const nxtLabel=(tiersCat().find(t=>t.id===nxt)||{}).label||'the next plan';
+  const reset=d&&d.resetAt?(' It resets '+new Date(d.resetAt).toLocaleDateString()+'.'):'';
+  $('modal-body').innerHTML=
+    `<p class=muted>You've used this month's allowance on our key.${esc(reset)} `+
+    (nxt?`Upgrade to ${esc(nxtLabel)} for more monthly credits, or add`:'Add')+
+    ` your own API key as a fallback — overflow runs on it, free.</p>`+subMeterHtml();
+  $('modal-acts').innerHTML='<button onclick="closeModal()">Wait for the reset</button>'+
+    (CFG.byokEnabled?'<button onclick="closeModal();keyModal()">Add my key</button>':'')+
+    (nxt?`<button class=primary onclick="closeModal();subscribe('${nxt}')">Upgrade for more credits</button>`:'');
+  openModal('Monthly allowance used');
+}
+async function manageBilling(){
+  const {d}=await api('POST','/api/subscription/portal',{});
+  if(d&&d.url){ location.href=d.url; return; }
+  toast((d&&d.error)||'Could not open billing.','err');
 }
 
 // ── The API-key hierarchy: hosted (FILG's key) vs BYOK (your own). Same /api/key endpoints as the
@@ -86,9 +242,13 @@ function keyIndicator(){
   else if(HAS_KEY){ dot.textContent='on: your key ••'+(KEY_META.last4||'????'); dot.className='keydot byok'; }
   else { dot.textContent='on: FILG key'; dot.className='keydot'; }
 }
-function openModal(title){ $('modal-title').textContent=title; $('v2modal').hidden=false; $('modalback').classList.add('show'); }
-function closeModal(){ $('v2modal').hidden=true; $('modalback').classList.remove('show'); }
+function openModal(title,wide){ $('modal-title').textContent=title;
+  $('v2modal').classList.toggle('wide',!!wide);
+  $('v2modal').hidden=false; $('modalback').classList.add('show'); }
+function closeModal(){ $('v2modal').hidden=true; $('v2modal').classList.remove('wide');
+  $('modalback').classList.remove('show'); }
 async function keyModal(){
+  if(CFG.authEnabled&&!signedIn()){ authModal('Your key is stored on your account — sign in first.'); return; }
   await loadKey();
   if(!BYOK_ON){ toast('BYOK is off — set FILG_KEY_SECRET to enable the key store.','err'); return; }
   if(HAS_KEY){
@@ -132,8 +292,8 @@ const STACKS_UI=[   // cheap → premium
   {k:'the-turd-polisher',n:'The intern',b:"Cheap and eager. Fast first drafts you'll want to double-check. Fine for spiking and kicking the tires."},
   {k:'the-capable-intern',n:'The work horse',b:"Cheap research, solid synthesis. Gets the bulk of the job done well."},
   {k:'the-work-horse',n:'The closer',b:"Cheap research bots, advanced synthesis and orchestration.",def:true},
-  {k:'the-wonder-kid',n:'Wonder kid',b:"Advanced research with world-class orchestration and synthesis.",rec:true},
-  {k:'trust-fund-baby',n:'Trust fund baby',b:"The absolute best models top to bottom. Not cheap, but hey, neither are you."},
+  {k:'the-wonder-kid',n:'Wonder kid',b:"Advanced research with world-class orchestration and synthesis.",rec:true,o:true},
+  {k:'trust-fund-baby',n:'Trust fund baby',b:"The absolute best models top to bottom. Not cheap, but hey, neither are you.",o:true},
 ];
 let STACK_CUR=(function(){try{return localStorage.getItem('filg_stack')||'the-work-horse';}catch(e){return 'the-work-horse';}})();
 function _stackIdx(){const i=STACKS_UI.findIndex(x=>x.k===STACK_CUR);return i<0?2:i;}
@@ -144,9 +304,11 @@ function renderStackChips(){
 }
 function stackModal(){
   const cur=_stackIdx();
+  const locked=u=>!!u.o&&!HAS_KEY&&!curTier();   // Opus crews clamp on the free hosted key
   $('modal-body').innerHTML='<p class=muted>Pick your crew. Sets the models behind research, the credibility gate, and the writing you read.</p>'+
     STACKS_UI.map((u,i)=>`<button type=button class="sktile${i===cur?' on':''}" onclick="pickStack(${i})">`+
-      `<span class=sk-top><b>${esc(u.n)}</b>${u.rec?'<span class=mold>Recommended</span>':''}${_pips(i)}</span>`+
+      `<span class=sk-top><b>${esc(u.n)}</b>${u.rec?'<span class=mold>Recommended</span>':''}`+
+      `${locked(u)?'<span class=mold>Plan or your own key</span>':''}${_pips(i)}</span>`+
       `<span class=sk-desc>${esc(u.b)}</span></button>`).join('');
   $('modal-acts').innerHTML='<button class=primary onclick="closeModal()">Done</button>';
   openModal('Model crew');
@@ -229,6 +391,7 @@ async function restorePlan(id){   // boot straight into an existing plan: graph 
   SID=d.id; SEL=new Set(); PENDING_FORK=null; resetGraph();
   replayChat(d.chat);
   render(d);
+  if(SESSION&&!d.owned)claimPending();   // signed in, restoring an anonymous taste → claim it
   loadSel();   // checkbox picks made before the reload come back (per plan + active fork)
   if(SEL.size)renderView();
   if(d.status==='researching')poll();   // a run was mid-flight — pick the poll back up
@@ -244,12 +407,13 @@ function setMode(m){
   MODE=m;
   document.querySelectorAll('#modechips .mchip').forEach(b=>b.classList.toggle('on',b.dataset.mode===m));
   $('ws-wrap').className='promptwrap'+(m!=='build'?' '+m:'');
-  // research, board, AND help are DISPLAY STATES of the chat drawer (one chat, one display at a
-  // time). Entering one quietly drops the others; there are no tool drawers anymore.
-  if(m==='research'){ _disarmTraps(); _bDrop(); _hDrop(); enterResearch(); return; }
-  if(m==='board'){ _disarmTraps(); _rDrop(); _hDrop(); enterBoard(); return; }
-  if(m==='help'){ _disarmTraps(); _rDrop(); _bDrop(); enterHelp(); return; }
-  exitResearch(); exitBoard(); exitHelp(true);
+  // research, board, help, AND summary are DISPLAY STATES of the chat drawer (one chat, one display
+  // at a time). Entering one quietly drops the others; there are no tool drawers anymore.
+  if(m==='research'){ _disarmTraps(); _bDrop(); _hDrop(); _sDrop(); enterResearch(); return; }
+  if(m==='board'){ _disarmTraps(); _rDrop(); _hDrop(); _sDrop(); enterBoard(); return; }
+  if(m==='help'){ _disarmTraps(); _rDrop(); _bDrop(); _sDrop(); enterHelp(); return; }
+  if(m==='summary'){ _disarmTraps(); _rDrop(); _bDrop(); _hDrop(); enterSummary(); return; }
+  exitResearch(); exitBoard(); exitHelp(true); exitSummary(true);
 }
 // an armed pivot ghost / revet box makes the NEXT message a build input — leaving build mode with
 // one armed would swallow a research/board/help question into it (the monkey, seed 3, step 9).
@@ -262,6 +426,7 @@ function _disarmTraps(){
 function _rDrop(){ if(RMODE){ RMODE=null; RQUERY=''; applyRmode(); } }
 function _bDrop(){ if(BMODE){ BMODE=null; BQUERY=''; applyBmode(); } }
 function _hDrop(){ if(HMODE){ HMODE=false; applyHmode(); } }
+function _sDrop(){ if(SMODE){ SMODE=false; applySmode(); } }
 async function sendPrompt(){
   if(isFull())return startFromLanding();   // full mode: the first prompt IS the landing submit
   const box=$('ws-box'), prompt=box.value.trim(); if(!prompt) return;
@@ -293,7 +458,8 @@ async function sendPrompt(){
   const fromNode=(FOCUS&&FOCUS!==t.active)?FOCUS:null;
   const btn=$('ws-send'); btn.disabled=true;
   btn.innerHTML='<span class="spin sendspin" aria-hidden=true></span> Routing…';   // instant feedback
-  const body={prompt,mode:MODE}; if(fromNode)body.node=fromNode;
+  // summary is display-only for routing purposes — the chat under it behaves like build mode
+  const body={prompt,mode:(MODE==='summary'?'build':MODE)}; if(fromNode)body.node=fromNode;
   const {ok,d}=await api('POST',`/api/plan/${SID}/route`,body);
   btn.disabled=false; sendLabel();
   if(!ok){ if(!box.value)box.value=prompt;   // give the words back — the send failed
@@ -308,6 +474,7 @@ async function sendPrompt(){
     if(RMODE)exitResearch();
     if(BMODE)exitBoard();
     if(HMODE)exitHelp();
+    if(SMODE)exitSummary();
   }
   // a question that isn't about the live display → answer it, then offer the way out. Two signals:
   // the router aimed it away, or nothing in the on-screen stack matched the question.
@@ -486,15 +653,23 @@ document.addEventListener('mousedown',e=>{ const p=$('cmtpop');
   if(p&&p.classList.contains('show')&&!e.target.closest('#cmtpop'))p.classList.remove('show'); });
 
 // ── Funnel actions ───────────────────────────────────────────────────────────
+// A keyboard-mash pivot gets the same free roast as a mash at the landing box — in the chat,
+// where the conversation lives (the graph is untouched; a roast is not a spread).
+function roastChat(d){
+  chatSay('bot',`<b>${esc(d.title||"That's not an idea yet.")}</b>${mdToHtml(d.body||'')}`);
+  chatPush('bot',(d.title||'')+'\n'+(d.body||''));
+}
 async function reBrainstorm(idea){
   if(SID){   // same tree: the new spread branches off the pivot point, the old branch stays visible
     beginWip('Spreading new directions',{parent:pivotParent()});
     const {ok,d}=await api('POST',`/api/plan/${SID}/rebrainstorm`,{idea});
     endWip();
+    if(ok&&d&&d.gibberish){ render(S); roastChat(d); return; }
     if(!ok){ render(S); if(gateV2(d))return; chatErr((d&&d.error)||'Could not re-spread.'); return; }
     SEL=new Set(); PENDING_FORK=null; render(d); return;
   }
   const {ok,d}=await api('POST','/api/brainstorm',{idea,stack:STACK_CUR});
+  if(ok&&d&&d.gibberish){ roastChat(d); return; }
   if(!ok){ if(gateV2(d))return; chatErr((d&&d.error)||'Could not re-spread.'); return; }
   adoptPlan(d); render(d);
 }
@@ -524,7 +699,7 @@ function pivotFromHere(id){ PIVOT_FROM=id; REVET_ARMED=false; FOCUS=null; BROWSI
   // arming a pivot is a BUILD act — EVERY display bows out and the chat says what's next
   // (Sam's QA: pivot from research stayed in research; the monkey then caught the same
   // hole for help mode on its first walk — seed 1, step 26)
-  exitResearch(true); exitBoard(true); exitHelp(true);
+  exitResearch(true); exitBoard(true); exitHelp(true); exitSummary(true);
   renderGraph();
   chatStatus('⑂ Pivot armed from '+pivotSrcLabel(id)+' — enter your pivot: what should change?');
   const b=$('ws-box'); if(b){b.placeholder='Your pivot: what should change from here?';b.focus();} }
@@ -540,6 +715,7 @@ async function pivotSpread(fromNode,feedback){
   beginWip('Spreading new directions',{parent:src});
   const {ok,d}=await api('POST',`/api/plan/${SID}/rebrainstorm`,{feedback:full,node:fromNode});
   endWip();
+  if(ok&&d&&d.gibberish){ render(S); roastChat(d); return; }   // a mash pivot → the roast, no spread
   if(ok)delete DOCCMTS[src];
   if(!ok){   // fail LOUD: restore the feedback + re-arm the ghost, never quietly show the old fork
     render(S);
@@ -659,6 +835,7 @@ function resetGraph(){ GSEEN=new Set(); FOCUS=null; BROWSING=false; LAST_ACTIVE=
   BQUERY=''; B_OFFERED=false; BOARD_PICK=null; STRESS_ON=false; FORGED=null;   // board display too
   if(BMODE)exitBoard(true);
   if(HMODE)exitHelp(true);   // display only — the FAQ itself is browser-level, it survives
+  if(SMODE)exitSummary(true);
   SA_SAID=new Set();   // set-aside announcements are per-plan
   WIP_LABEL=null; WIP_PENDING=null; WIPLOG=[]; LANES=[]; LANES_DONE=new Set(); PROG_N=0;
   Object.keys(NODECACHE).forEach(k=>delete NODECACHE[k]); Object.keys(NODELOG).forEach(k=>delete NODELOG[k]);
@@ -1351,12 +1528,13 @@ function doneHtml(s){
   const files=(s.files||[]).map(f=>`<li>${esc(f.path)}</li>`).join('');
   return `<p class=eyebrow>Plan complete</p><p class=react>🎉 All ${s.total} parts, built with you.</p>`+
     `<ul>${files}</ul>`+
-    `<div class=ctarow><a class=stage-cta href="/api/plan/${SID}/download">⬇ Raw files (.zip)</a>`+
+    `<div class=ctarow><button class=stage-cta onclick=downloadZip()>⬇ Raw files (.zip)</button>`+
     `<button class="stage-cta secondary" onclick=downloadPdf()>📄 Plan PDF</button>`+
     `<button class="stage-cta secondary" onclick=shareModal()>🔗 Share</button>`+
     `<button class="stage-cta secondary" onclick=pivotActive()>⑂ Pivot</button></div>`+
     `<p class=thinking>Raw export is always free. The PDF is free with a watermark on your own key `+
-    `($7 removes it, 3 plans) and clean on any subscription.</p>`;
+    `(a one-time ${pdfPriceStr()} unlocks this plan's clean copy, re-downloads free) and clean on `+
+    `any subscription.</p>`;
 }
 // ── Share: a public read-only /p/{id} page (receipts + decision path + the plan), private by
 // default. The artifact IS the funnel — the maker line on the page is the growth loop.
@@ -1386,16 +1564,16 @@ async function setShared(v){
 function copyShare(){ const i=$('shareurl'); if(!i)return; i.select();
   try{ navigator.clipboard?navigator.clipboard.writeText(i.value):document.execCommand('copy');
        toast('Link copied. ✓'); }catch(e){ toast('Copy failed — select + copy by hand.','err'); } }
-// The PDF fetch goes through JS so a 402 (credits) or 429 lands as guidance, not a broken tab.
+// The PDF fetch goes through JS so a 402 (unlock needed) or 429 lands as guidance, not a broken tab.
 async function downloadPdf(){
   if(!SID)return;
   const th=chatSay('status','synthesizing the PDF…');
   let r;
-  try{ r=await fetch(`/api/plan/${SID}/plan.pdf`); }catch(e){ if(th)th.remove(); toast('Network hiccup — try again.','err'); return; }
+  try{ r=await fetch(`/api/plan/${SID}/plan.pdf`,{headers:authHeaders()}); }catch(e){ if(th)th.remove(); toast('Network hiccup — try again.','err'); return; }
   if(th)th.remove();
   if(!r.ok){
     let d={}; try{d=await r.json();}catch(e){}
-    if(d.needPurchase){ chatBot((d.error||'Out of PDF credits.')+' (Credits and subscriptions live on the pricing page.)'); return; }
+    if(d.needPurchase){ pdfBuyPrompt(d); return; }
     if(gateV2(d))return;
     toast((d&&d.error)||'Could not build the PDF.','err'); return;
   }
@@ -1405,7 +1583,27 @@ async function downloadPdf(){
   const fm=(r.headers.get('Content-Disposition')||'').match(/filename="([^"]+)"/);
   a.download=(fm&&fm[1])||'business-plan.pdf';
   document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href),4000);
-  toast(wm?'PDF downloaded — free copy, watermarked. $7 unlocks 3 clean ones.':'PDF downloaded. ✓');
+  toast(wm?`PDF downloaded — free copy, watermarked. A one-time ${pdfPriceStr()} unlocks this plan's clean one.`:'PDF downloaded. ✓');
+}
+// 402 needPurchase → an in-chat offer with the real checkout button (never a dead end).
+function pdfBuyPrompt(d){
+  const txt=(d&&d.error)||`The clean PDF for this plan is a one-time ${pdfPriceStr()} — re-downloads are free.`;
+  chatPush('bot',txt);
+  const m=chatSay('bot',esc(txt)+
+    `<div class=cbtns><button type=button class=go>🔓 Unlock clean PDF, ${pdfPriceStr()}</button>`+
+    `<button type=button class=nah>Not now</button></div>`);
+  if(!m)return;
+  m.querySelector('.go').onclick=()=>{ m.classList.add('asked'); buyPdf(); };
+  m.querySelector('.nah').onclick=()=>{ m.classList.add('asked');
+    chatStatus('No problem — the watermarked copy and the raw export stay free.'); };
+}
+async function buyPdf(){
+  if(CFG.authEnabled&&!signedIn()){ authModal('Sign in to unlock your PDF.'); return; }
+  if(!CFG.pdfBilling){ toast("Billing isn't set up yet.",'err'); return; }
+  const {d}=await api('POST',`/api/plan/${SID}/buy-pdf`,{v2:true});
+  if(d&&d.url){ location.href=d.url; return; }          // → Stripe Checkout
+  if(d&&d.unlocked){ downloadPdf(); return; }           // already claimable → just grab it
+  toast((d&&d.error)||'Could not start checkout.','err');
 }
 
 // ── Two projections of the same tree: the decision graph, and a left-to-right document reader ──
@@ -1481,6 +1679,7 @@ function render(s){
   if(!researching&&VIEWMODE==='docs')DOCTAB=t.active;   // the reader follows the build
   renderView();
   if(RMODE)renderResearch();   // fresh graded rows (a build just landed) show up in the stack live
+  if(SMODE)renderSummary();    // the in-voice summary tracks the newest graded read
 }
 // A set-aside must reach the CHAT too (the record the operator reads back), once per node —
 // "quietly ignore and reroute" is the failure this whole channel exists to kill.
@@ -1873,6 +2072,195 @@ function renderHelp(){
       :`<p class=thinking>Ask anything about using FILG — your questions collect here as a personal FAQ.</p>`);
 }
 
+// ── SUMMARY — the in-voice idea summary (v1's top-of-page block), as a display state. The pane
+// leads with the FILG-voice read (the vet's spoken reaction + verdict), then the offer prose. The
+// chat underneath is the same one chat — ask anything; build intents exit the display like the
+// other modes. ──
+let SMODE=false;
+function enterSummary(){ SMODE=true; applySmode(); renderSummary(); }
+function exitSummary(quiet){
+  if(!SMODE)return;
+  SMODE=false; applySmode();
+  MODE='build';
+  document.querySelectorAll('#modechips .mchip').forEach(b=>b.classList.toggle('on',b.dataset.mode==='build'));
+  $('ws-wrap').className='promptwrap';
+  if(!quiet)chatStatus('Back to build mode.');
+}
+function applySmode(){
+  const L=$('left'), pane=$('spane');
+  if(!L||!pane){ if(SMODE){ SMODE=false; toast('This page is stale — hard-refresh (⌘⇧R) to load the summary surface.','err'); }
+    if(L)L.classList.remove('ssplit'); return; }
+  L.classList.toggle('ssplit',SMODE);
+  pane.setAttribute('aria-hidden',String(!SMODE));
+  applySplitSize(pane,SMODE);
+  if(!SMODE){ const log=$('chatlog'); if(log)log.scrollTop=log.scrollHeight; }
+}
+function summaryHtml(){
+  if(!S)return '<p class=thinking>Start a plan and your idea\'s summary lives here.</p>';
+  const v=S.vetting||{}, sh=S.shaped||{};
+  const prose=(S.research&&S.research.prose)
+    ||(S.activeNode&&S.activeNode.research&&S.activeNode.research.prose)||{};
+  const MT={'full-time':'Full time','side-hustle':'Side hustle','seasonal':'Seasonal',
+            'one-shot':'One shot','gig':'Gig','scalable':'Scalable'};
+  const chips=(v.verdict?`<span class="verdict ${esc(v.verdict)}">${esc(v.verdict)}</span>`:'')+
+    (v.model_type&&MT[v.model_type]?`<span class=mold>${esc(MT[v.model_type])}</span>`:'');
+  const react=v.reaction?`<p class=sumreact>${esc(v.reaction)}</p>`:'';   // the FILG voice leads
+  const rows=[["What you'd sell",prose.offer],["How you'd sell it",prose.gtm],
+              ['Your edge',sh.founder_edge],['Biggest risk',v.biggest_risk],
+              ['Cheapest first test',v.first_test]]
+    .filter(r=>r[1]).map(r=>`<p><b>${esc(r[0])}:</b> ${esc(r[1])}</p>`).join('');
+  const title=prose.title||sh.thesis||(S.activeNode&&S.activeNode.thesis)||S.idea||'';
+  if(!v.reaction&&!prose.offer&&!title)
+    return '<p class=thinking>No summary yet — it lands with the first graded read (merge a direction, or build the plan).</p>';
+  return `<div class=sumcard>${chips}${title?`<h3 style="margin:6px 0 0">${esc(title)}</h3>`:''}${react}`+
+    `<p class=thinking style="margin:2px 0 8px">Your offer with the research graded — vendor spin labeled, not laundered.</p>`+
+    `${rows}</div>`;
+}
+function renderSummary(){ const el=$('slist'); if(el)el.innerHTML=summaryHtml(); }
+
+// ═══ THE ACCOUNT SURFACE — projects / files / API key / account, ported from v1 ═══
+// A full overlay over the workspace with real routes (/v2/account/<tab>) so refresh, bookmarks, and
+// Stripe returns land on the right tab. Same endpoints as v1 (/api/plans, /api/key, /api/me).
+const ACCT_TABS=[['projects','Projects'],['files','My files'],['api','API key'],['account','Account']];
+const ACCT_SLUG={projects:'plans',files:'files',api:'api-config',account:'settings'};
+const ACCT_FROM_SLUG={plans:'projects',files:'files','api-config':'api',settings:'account'};
+let ACCT_TAB='projects', ACCT_PD=null;
+async function openAccount(tab,replace){
+  if(CFG.authEnabled&&!signedIn()){ authModal(); return; }
+  if(tab)ACCT_TAB=tab;
+  const url='/v2/account/'+(ACCT_SLUG[ACCT_TAB]||'plans');
+  if(location.pathname!==url){ const st={acct:ACCT_TAB};
+    if(replace)history.replaceState(st,'',url); else history.pushState(st,'',url); }
+  const {ok,d}=await api('GET','/api/plans');
+  ACCT_PD=ok?d:{plans:[],total:7,email:(ME&&ME.email)||''};
+  await loadMe(); paintIdentity();
+  renderAccount();
+  $('account').hidden=false;
+}
+function closeAccount(){
+  const a=$('account'); if(!a||a.hidden)return;
+  a.hidden=true;
+  if(location.pathname.indexOf('/v2/account')===0)
+    history.pushState({},'',SID?'/v2/plan/'+SID:'/v2');
+}
+function acctTab(t){ ACCT_TAB=t;
+  const url='/v2/account/'+(ACCT_SLUG[t]||'plans');
+  if(location.pathname!==url)history.pushState({acct:t},'',url);
+  renderAccount(); }
+function _planCard(p,total){
+  const meta=p.done?`Finished · ${total} parts`:(p.status==='researching'?'Researching…':`In progress · part ${(p.step||0)+1} of ${total}`);
+  const pill=p.done?'done':(p.status==='researching'?'WIP':((p.step||0)+1)+'/'+total);
+  return `<div class=pcard><div><div class=idea>${esc((p.idea||'Untitled').slice(0,90))}</div>`+
+    `<div class=meta>${meta} · ${esc(new Date(p.created_at).toLocaleDateString())}</div></div>`+
+    `<div class=act><span class="pill${p.done?' done':''}">${pill}</span>`+
+    `<button class=primary onclick="acctOpen('${p.id}')">${p.done?'Open / iterate':'Resume'}</button>`+
+    `<button onclick="acctShare('${p.id}')">${p.shared?'🔗 Shared':'Share'}</button>`+
+    `<button onclick="acctDelete('${p.id}')">Delete</button></div></div>`;
+}
+function _fileCard(p){
+  const acts=[];
+  if(p.done&&p.pdf_unlocked)acts.push(`<button onclick="acctPdf('${p.id}')">⬇ Clean PDF</button>`);
+  if(p.done)acts.push(`<button onclick="acctZip('${p.id}')">⬇ Raw files (.zip)</button>`);
+  return `<div class=pcard><div><div class=idea>${esc((p.idea||'Untitled').slice(0,90))}</div>`+
+    `<div class=meta>${p.done?'Finished':'In progress'} · ${esc(new Date(p.created_at).toLocaleDateString())}</div></div>`+
+    `<div class=act>${acts.join('')||'<span class=meta>finishes first</span>'}</div></div>`;
+}
+function _acctPlanBlock(){
+  if(curTier()){
+    const manage=CFG.subEnabled?'<div class=prow><button onclick=pricingModal()>Change plan</button><button onclick=manageBilling()>Manage / cancel</button></div>':'';
+    return `<p class=pnote>You're on <b>${esc((ME&&ME.tier_label)||'your plan')}</b> — every feature, runs on our key, unlimited clean PDFs.</p>`+subMeterHtml()+manage;
+  }
+  const byok=HAS_KEY?`<p class=pnote>You're on <b>BYOK</b> (free) — your own <b>${esc((KEY_META&&KEY_META.provider)||'')}</b> key, unlimited. The clean PDF is ${pdfPriceStr()} per plan.</p>`
+    :`<p class=pnote>Free on your own API key (BYOK), or subscribe monthly to run on our key — no API key needed, clean PDFs included.</p>`;
+  return byok+(CFG.subEnabled||tiersCat().length?'<div class=prow><button onclick=pricingModal()>See plans</button></div>':'');
+}
+function renderAccount(){
+  const pd=ACCT_PD||{plans:[],total:7,email:''}, total=pd.total||7;
+  const tabbar=ACCT_TABS.map(([k,l])=>`<button type=button class="${ACCT_TAB===k?'on':''}" onclick="acctTab('${k}')">${l}</button>`).join('');
+  let body='';
+  if(ACCT_TAB==='projects'){
+    body=(pd.plans||[]).length?pd.plans.map(p=>_planCard(p,total)).join('')
+      :'<p class=acctempty>No projects yet — build your first one.</p>';
+  }else if(ACCT_TAB==='files'){
+    body=`<p class=pnote style="margin:0 0 10px">Re-download anything you've made. Raw export is always free; the clean PDF shows once a plan is unlocked (or on any subscription).</p>`+
+      ((pd.plans||[]).length?pd.plans.map(_fileCard).join(''):'<p class=acctempty>Nothing here yet.</p>');
+  }else if(ACCT_TAB==='api'){
+    body=!BYOK_ON?'<p class=pnote>Bring-your-own-key isn\'t enabled here.</p>'
+      :(HAS_KEY?`<div class=acct-block><div class=acct-lbl>Your key</div><p class=pnote>Running on your own <b>${esc(KEY_META.provider)}</b> key (••••${esc(KEY_META.last4||'')}).</p>`+
+          `<div class=prow><button onclick=keyForm()>Replace key</button><button onclick=removeKey()>Remove key</button></div></div>`
+        :`<div class=acct-block><div class=acct-lbl>Your key</div><p class=pnote>No key yet. Add your own OpenRouter or Anthropic key to build free, every model crew, every feature.</p>`+
+          `<div class=prow><button onclick=keyForm()>Add a key</button></div></div>`);
+  }else{
+    body=`<div class=acct-block><div class=acct-lbl>Contact</div><p class=pnote>${esc(pd.email||(ME&&ME.email)||'')}</p></div>`+
+      `<div class=acct-block><div class=acct-lbl>Plan</div>${_acctPlanBlock()}</div>`+
+      `<div class=acct-block><div class=acct-lbl>Session</div><div class=prow><button onclick=signout()>Sign out</button></div></div>`+
+      `<div class=acct-block><div class=acct-lbl>Danger zone</div><p class=pnote>Permanently delete your account, all projects, your key, and purchase history.</p>`+
+      `<div class=prow><button class=danger onclick=acctDeleteAccount()>Delete account</button></div></div>`;
+  }
+  $('account').innerHTML=`<div class=acctwrap>`+
+    `<div class=accttop><h2>Account</h2><button class=link onclick=closeAccount()>← Back to building</button></div>`+
+    `<div class=accttabs role=tablist>${tabbar}</div>${body}</div>`;
+}
+function acctOpen(id){ location.href='/v2/plan/'+id; }   // full boot restores graph + docs + chat
+async function acctShare(id){
+  const {ok,d}=await api('POST',`/api/plan/${id}/share`,{shared:true});
+  if(!ok){ toast((d&&d.error)||'Could not share.','err'); return; }
+  try{ await navigator.clipboard.writeText(d.url); toast('🔗 Share link copied.'); }
+  catch(e){ toast('Share link: '+d.url); }
+  openAccount();   // refresh the chip
+}
+async function acctDelete(id){
+  if(!confirm('Delete this plan? This permanently removes it.'))return;
+  const {ok,d}=await api('POST',`/api/plan/${id}/delete`,{});
+  if(!ok){ toast((d&&d.error)||'Could not delete.','err'); return; }
+  toast('Plan deleted.'); openAccount();
+}
+async function acctDeleteAccount(){
+  if(!confirm('Delete your account? This permanently deletes your account, all projects, your saved key, and purchase history. It cannot be undone.'))return;
+  const {ok}=await api('DELETE','/api/account');
+  if(!ok){ toast('Could not delete your account.','err'); return; }
+  toast('Your account and all its data were deleted.');
+  await signout(); location.href='/v2';
+}
+async function acctPdf(id){
+  toast('Building the PDF…');
+  let r; try{ r=await fetch(`/api/plan/${id}/plan.pdf`,{headers:authHeaders()}); }catch(e){ toast('Network hiccup.','err'); return; }
+  if(!r.ok){ let d={}; try{d=await r.json();}catch(e){} toast((d&&d.error)||'Could not build the PDF.','err'); return; }
+  const blob=await r.blob(); const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob); a.download='filg-business-plan.pdf';
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href),4000);
+}
+async function acctZip(id){
+  let r; try{ r=await fetch(`/api/plan/${id}/download`,{headers:authHeaders()}); }catch(e){ toast('Network hiccup.','err'); return; }
+  if(!r.ok){ toast('Could not download.','err'); return; }
+  const blob=await r.blob(); const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob); a.download='filg-business-plan.zip';
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href),4000);
+}
+function downloadZip(){ if(SID)acctZip(SID); }   // the done off-ramp uses the same authed fetch
+
+// ── v2 routing: /v2 · /v2/plan/{id} · /v2/account/<tab>, back/forward safe ──
+function routeV2(){
+  const path=location.pathname||'';
+  let m=path.match(/^\/v2\/account(?:\/([a-z-]+))?\/?$/i);
+  if(m){ openAccount(ACCT_FROM_SLUG[(m[1]||'').toLowerCase()]||'projects',true); return; }
+  const a=$('account'); if(a)a.hidden=true;
+  m=path.match(/^\/v2\/plan\/([A-Za-z0-9]+)/);
+  if(m&&m[1]&&(!S||S.id!==m[1]))restorePlan(m[1]).then(_afterBootQuery);
+  else _afterBootQuery();
+}
+function _afterBootQuery(){   // back from Stripe: ?pdf=1 (clean PDF unlocked) / ?sub=1 (tier live)
+  const q=new URLSearchParams(location.search);
+  if(q.get('pdf')){ history.replaceState(history.state,'',location.pathname);
+    chatBot('🎉 Payment received — the clean PDF for this plan is unlocked. Downloading it now; re-downloads are free.');
+    if(SID)downloadPdf(); }
+  if(q.get('sub')){ history.replaceState(history.state,'',location.pathname);
+    loadMe().then(paintIdentity); toast('🎉 Your subscription is live.'); }
+  if(q.get('sub_canceled')||q.get('pdf_canceled')){ history.replaceState(history.state,'',location.pathname);
+    toast('Checkout canceled — no charge.'); }
+}
+window.addEventListener('popstate',routeV2);
+
 // ── boot ─────────────────────────────────────────────────────────────────────
 document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeModal();unfocus();if(PIVOT_FROM)clearGhost();
   if(NAVCUR){NAVCUR=null;if(VIEWMODE==='graph')renderGraph();}}});
@@ -1885,9 +2273,8 @@ document.addEventListener('keydown',e=>{
 initGraphInput();
 initMinimap(); initTrail();   // graph chrome: click-to-jump minimap + hover wayfinding trail
 initGrips();   // the split boundary drags; the height is remembered across modes + reloads
-loadKey();   // paint the key indicator (hosted vs BYOK) on load
 renderStackChips();   // the model-crew chip
 sendLabel();   // 'Start →' in full mode, 'Send →' once a plan exists
-{ const m=location.pathname.match(/^\/v2\/plan\/([A-Za-z0-9]+)/); if(m)restorePlan(m[1]); }   // deep link → skip the landing
+initAuth();   // session + /api/me + key state, then routeV2 (deep links + /v2/account tabs)
 // the working node's elapsed clock — keeps the build feeling alive even between progress lines
 setInterval(()=>{const el=$('wiptime');if(el&&WIP_T0)el.textContent=Math.round((Date.now()-WIP_T0)/1000)+'s';},1000);

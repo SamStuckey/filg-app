@@ -69,7 +69,8 @@ def _post(path: str, data: dict) -> dict:
 
 
 def create_pdf_checkout_url(email: str, *, user_id: str | None = None,
-                            plan_id: str | None = None, plan_key: str | None = None) -> str:
+                            plan_id: str | None = None, plan_key: str | None = None,
+                            return_path: str | None = None) -> str:
     """Create a ONE-TIME ($13) Checkout Session unlocking ONE plan's clean PDF and return its hosted
     URL. `plan_key` ("{sid}:{leaf-node-id}") scopes the unlock to that finished branch — re-downloads
     are free, a new branch is a new key and pays again. Inline `price_data` so no pre-made Stripe
@@ -77,7 +78,7 @@ def create_pdf_checkout_url(email: str, *, user_id: str | None = None,
     handle_event records the unlock for exactly that plan."""
     if not PDF_BILLING_ENABLED:
         raise StripeError("billing not configured")
-    ret = f"/plan/{plan_id}" if plan_id else "/"
+    ret = return_path or (f"/plan/{plan_id}" if plan_id else "/")
     fields = {
         "mode": "payment",
         "line_items[0][price_data][currency]": "usd",
@@ -98,7 +99,8 @@ def create_pdf_checkout_url(email: str, *, user_id: str | None = None,
 
 
 def create_subscription_checkout_url(email: str, *, tier: str, price_cents: int, label: str,
-                                     user_id: str | None = None) -> str:
+                                     user_id: str | None = None,
+                                     return_path: str | None = None) -> str:
     """Create a MONTHLY subscription Checkout Session for a paid tier and return its hosted URL. Inline
     recurring `price_data` (no dashboard Price needed). `tier` rides on both the session metadata and
     `subscription_data[metadata]` so the subscription object carries it too — the webhook reads it back
@@ -120,7 +122,7 @@ def create_subscription_checkout_url(email: str, *, tier: str, price_cents: int,
         "subscription_data[metadata][kind]": "subscription",
         "subscription_data[metadata][tier]": tier,
         "allow_promotion_codes": "true",
-        "success_url": f"{PUBLIC_URL}/account?sub=1",
+        "success_url": f"{PUBLIC_URL}{return_path or '/account'}?sub=1",
         "cancel_url": f"{PUBLIC_URL}/?sub_canceled=1",
     }
     return _post("/checkout/sessions", fields)["url"]

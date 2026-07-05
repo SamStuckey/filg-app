@@ -12,9 +12,10 @@ __FILG_HEAD__
       <button type=button class=logo onclick="v2newPlan()">FILG</button>
       <div class=lt-right>
         <button id=stackchip-w class="ghost stackchip" type=button onclick="stackModal()" title="Pick your model crew"></button>
+        <button id=tierchip class="ghost stackchip tierchip" type=button hidden onclick="pricingModal()" title="Your plan + this month's allowance"></button>
         <span class=meter id=meter title="tokens + $ this session">0 tok · $0.00</span>
         <button type=button class="ghost small sharebtn" id=sharebtn onclick="shareModal()" title="Share a read-only link">🔗 Share</button>
-        <button type=button class=profile onclick="keyModal()" aria-label="Account" title="Account · API key">
+        <button type=button class=profile id=profilebtn onclick="profileClick()" aria-label="Account" title="Account">
           <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="8.2" r="3.6"/><path d="M4.5 19.5c1.3-3.4 4.2-5 7.5-5s6.2 1.6 7.5 5"/></svg>
         </button>
       </div>
@@ -41,6 +42,13 @@ __FILG_HEAD__
       <div class=rlist id=hlist></div>
       <div class=vgrip data-pane=hpane title="Drag to resize"></div>
     </div>
+    <!-- Summary: the in-voice idea summary (v1's top-of-page block), as a display state — review it,
+         or just keep chatting under it; the conversation is the same one chat. -->
+    <div class=rpane id=spane aria-hidden=true>
+      <div class=rpane-head><span>Summary</span></div>
+      <div class=rlist id=slist></div>
+      <div class=vgrip data-pane=spane title="Drag to resize"></div>
+    </div>
     <!-- Board room (same one-chat/three-displays contract as research): the pill shows the convene
          history + the stress-test; a question splits the drawer; ⇥ Expand slides it out. -->
     <div class=rpane id=bpane aria-hidden=true>
@@ -58,6 +66,7 @@ __FILG_HEAD__
     <div class="promptwrap" id=ws-wrap>
       <div class=modechips id=modechips>
         <button type=button data-mode=build class="mchip on" onclick="setMode('build')">Build</button>
+        <button type=button data-mode=summary class=mchip onclick="setMode('summary')">Summary</button>
         <button type=button data-mode=research class=mchip onclick="setMode('research')">Research</button>
         <button type=button data-mode=board class=mchip onclick="setMode('board')">Board</button>
         <button type=button data-mode=help class=mchip onclick="setMode('help')">Help</button>
@@ -111,6 +120,9 @@ __FILG_HEAD__
     <button id=gpill type=button hidden onclick="focusActive()">▣ Current step</button>
   </main>
 </div>
+<!-- The account surface: projects / files / API key / account, ported from v1 to the v2 shell.
+     A full overlay with real routes (/v2/account/<tab>) so refresh + Stripe returns land right. -->
+<div id=account class=account hidden></div>
 <div class=modalback id=modalback onclick="closeModal()"></div>
 <div class=modal id=v2modal role=dialog aria-modal=true hidden>
   <div class=modal-h><span id=modal-title>Key</span><button type=button class=ghost small onclick="closeModal()">✕</button></div>

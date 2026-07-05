@@ -409,8 +409,13 @@ async def api_buy_pdf(sid: str, request: Request):
         return JSONResponse({"error": "You can download this plan already.", "unlocked": True},
                             status_code=409)
     try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    ret = f"/v2/plan/{sid}" if body.get("v2") else None   # come back to the surface that sent you
+    try:
         url = billing.create_pdf_checkout_url(authed["email"], user_id=authed["id"], plan_id=sid,
-                                              plan_key=_plan_key(s))
+                                              plan_key=_plan_key(s), return_path=ret)
     except billing.StripeError as e:
         return JSONResponse({"error": str(e)}, status_code=502)
     return {"url": url}
@@ -429,7 +434,7 @@ async def api_subscribe(request: Request):
         body = await request.json()
     except Exception:  # noqa: BLE001
         body = {}
-    tier = (body.get("tier") or "").strip()
+    tier = tiers.canonical((body.get("tier") or "").strip())
     if not tiers.is_tier(tier):
         return JSONResponse({"error": "Unknown plan."}, status_code=400)
     if _tier(authed["email"]) == tier:
@@ -438,7 +443,8 @@ async def api_subscribe(request: Request):
     try:
         url = billing.create_subscription_checkout_url(
             authed["email"], tier=tier, price_cents=tiers.price_cents(tier),
-            label=tiers.label(tier), user_id=authed["id"])
+            label=tiers.label(tier), user_id=authed["id"],
+            return_path="/v2/account" if body.get("v2") else None)
     except billing.StripeError as e:
         return JSONResponse({"error": str(e)}, status_code=502)
     return {"url": url}
@@ -701,6 +707,7 @@ def _plan_state(s: dict) -> dict:
                      for x in planner.SECTIONS],
         "step": s.get("step", 0), "total": planner.N, "proposal": s.get("proposal"),
         "done": s["status"] == "done", "shared": bool(s.get("shared")),
+        "owned": bool((s.get("user") or "").strip()),   # anonymous taste vs claimed-by-an-account
         "qa": s.get("qa"),   # final QA-pass report {notes, fixed} on the finished plan
 
         "tree": _tree_view(s["tree"]) if s.get("tree") else None,
@@ -2445,6 +2452,14 @@ async def v2():
 async def v2_plan(sid: str):
     """Deep link into a v2 plan: same shell, the frontend reads the id from the path and restores the
     session — graph, documents, and the conversation log."""
+    return _page_text("v2.html").replace("__FILG_HEAD__", _page_head())
+
+
+@app.get("/v2/account", response_class=HTMLResponse)
+@app.get("/v2/account/{tab}", response_class=HTMLResponse)
+async def v2_account(tab: str = ""):
+    """The v2 account surface (projects / files / API key / account) — same shell, the frontend reads
+    the tab from the path. Directly visitable so a refresh or a Stripe return lands on the right tab."""
     return _page_text("v2.html").replace("__FILG_HEAD__", _page_head())
 
 

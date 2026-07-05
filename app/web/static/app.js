@@ -227,7 +227,7 @@ function paintMeter(){
 }
 let LAST_S=null;
 let PENDING_PDF=false;   // set on return from Stripe (?pdf=1): auto-download once the credits land
-// Back from Stripe checkout: poll for the 3 credits to land (the webhook is async), re-render so the
+// Back from Stripe checkout: poll for the plan unlock to land (the webhook is async), re-render so the
 // button flips to Download, then auto-grab the PDF (which spends one credit). Stays on the plan.
 function pdfReady(){ return pdfUnlocked()||pdfCredits()>0; }
 async function autoGrabPdf(){
@@ -458,7 +458,7 @@ function applyPlanTab(s){
     const nodeId=tab?tab.dataset.node:'';
     // Build-from-here works AFTER completion too: jump to an earlier node and roll a NEW branch from
     // clean context at that point (its own files/research only). The new branch is its own finished plan
-    // → its own $7 PDF unlock, priced on the new data alone.
+    // → its own $13 PDF unlock, priced on the new data alone.
     const build=nodeId?`<button type=button class=pbuild onclick="gotoNode('${nodeId}')">↩ Jump back and build from here</button>`:'';
     const back=`<button type=button class=ghost onclick=backToCurrent()>${s.done?'Back to overview':"Back to the part you're on"} →</button>`;
     view.innerHTML=`<div class=node><span class=eyebrow>From your plan</span><h3>${esc(sec.title||'Part')}</h3><p class=h3sub>${esc(sec.sub||'')}</p><div class="draft md">${mdToHtml(content)}</div><div class=planacts>${build}${back}</div></div>`;
@@ -1330,7 +1330,7 @@ const Activity={
 };
 const RESEARCH_STEPS=["Focusing your idea into one sharp thesis","Spinning up research across the web","Pulling sources on the market and competition","Grading every source for credibility","Flagging vendor-marketing spin","Re-sourcing the headline stats to primary sources","Scoring demand, market, and willingness to pay","Drafting your first offer"];
 const PDF_STEPS=["Applying your board's input","Pulling your graded evidence","Building the decision matrix","Laying out a modern, on-brand design","Typesetting your PDF"];
-// ── PDF = plan-unlock credits: $7 buys 3 plans; re-downloading an unlocked plan is free ──
+// ── PDF = a $13 unlock for THIS plan; re-downloading an unlocked plan is free ──
 // pdfUnlocked(): THIS plan is already free to grab (already unlocked, a comp grant, or billing-off dev).
 function pdfUnlocked(){ return !CFG.pdfBilling || !!(LAST_S&&LAST_S.pdfUnlocked) || !!(me&&me.pdf_unlocked); }
 // pdfCredits(): account credits left to spend on a new plan (prefer the plan state, fall back to /me).
@@ -1420,7 +1420,7 @@ function pricingModal(note){
   const byok=CFG.byokEnabled?
     '<div class=byokbox>'+
       '<div class=byokhd><b>Bring your own key</b> \u00b7 <span class=byokfree>free</span></div>'+
-      '<div class=byoksub>Your own OpenRouter or Anthropic key \u2014 unlimited, every model stack, all features. You pay your provider (pennies a plan). The polished PDF is '+pdfPriceStr()+' for 3 plans.</div>'+
+      '<div class=byoksub>Your own OpenRouter or Anthropic key \u2014 unlimited, every model stack, all features. You pay your provider (pennies a plan). The polished PDF is '+pdfPriceStr()+' per plan (re-downloads free).</div>'+
       '<button type=button onclick="_closeModal();keyForm()">Use my own key</button>'+
     '</div>':'';
   document.getElementById('modal-body').innerHTML=
