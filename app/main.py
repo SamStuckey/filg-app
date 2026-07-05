@@ -1171,13 +1171,14 @@ async def api_plan_commit(sid: str, request: Request):
     thesis = (body.get("thesis") or "").strip()
     tree = s.get("tree") or {}
     nodes = tree.get("nodes") or {}
-    # building from an explicitly named node (the one the user had open) jumps the active pointer
-    # there first, so the deep build grows out of THAT node
+    # Building from an explicitly named node (the one the user had open) grows the build out of THAT
+    # node — but VALIDATE FIRST, MUTATE LAST. This used to jump the active pointer before checking
+    # the thesis: a commit from a browsed brainstorm fork 400'd AND stranded `active` on the fork,
+    # so every surface then described two different nodes and every retry re-failed (Sam's
+    # roll-forward freeze, 2026-07-06). A rejected request must leave the plan untouched.
     at_id = (body.get("node") or "").strip()
-    if at_id and nodes.get(at_id):
-        tree["active"] = at_id
-        store.plan_save(sid, tree=tree)
-    a = nodes.get(tree.get("active")) or {}
+    target = nodes.get(at_id) if at_id else None
+    a = target or nodes.get(tree.get("active")) or {}
     if not thesis:
         if _kind(a) == "refined":
             thesis = a.get("thesis") or ""
@@ -1186,6 +1187,8 @@ async def api_plan_commit(sid: str, request: Request):
             thesis = dr.get("one_liner") or dr.get("title") or ""
     if len(thesis) < 8:
         return JSONResponse({"error": "Refine an idea or pick a direction to build first."}, status_code=400)
+    if target is not None:
+        tree["active"] = at_id               # the jump happens only when the build actually starts
     tok = uuid.uuid4().hex[:8]
     tree["_run"] = tok                       # this run's epoch — a pivot mid-run invalidates it
     store.plan_save(sid, status="researching", stage="researching", tree=tree)

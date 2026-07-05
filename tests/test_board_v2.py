@@ -97,3 +97,22 @@ def test_help_pricing_facts_track_the_live_ladder():
     # help is a real SKILL now (app/skills/help), not a hardcoded prompt in main.py
     import skill_registry
     assert skill_registry.exists("help")
+
+
+def test_commit_rejected_leaves_the_tree_untouched(client):
+    """Validate first, mutate last (2026-07-06): a commit aimed at a node it can't build from must
+    400 WITHOUT moving the active pointer — it used to jump active onto the bad node first, leaving
+    the plan describing two different nodes and every retry re-failing."""
+    r = client.post("/api/brainstorm", json={"idea": GRAB_BAG, "email": "vm@x.com"})
+    sid = r.json()["id"]
+    s = client.get(f"/api/plan/{sid}").json()
+    active_before = s["tree"]["active"]                  # the brainstorm fork
+    r2 = client.post(f"/api/plan/{sid}/commit", json={"node": active_before, "thesis": ""})
+    assert r2.status_code == 400                         # a fork has no thesis — rejected
+    s2 = client.get(f"/api/plan/{sid}").json()
+    assert s2["tree"]["active"] == active_before         # ...and NOTHING moved
+    assert s2["status"] != "researching"                 # no phantom run started
+    # an option node CAN carry a commit — same body shape, now it starts
+    opt = next(n["id"] for n in s2["tree"]["nodes"] if n["kind"] == "option")
+    r3 = client.post(f"/api/plan/{sid}/commit", json={"node": opt})
+    assert r3.status_code == 200

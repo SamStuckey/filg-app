@@ -32,12 +32,14 @@ __FILG_HEAD__
       <div class=rpane-head><span>Graded research</span>
         <button type=button class="ghost small" id=rexpand onclick="expandResearch()" title="Slide the research out into its own drawer">⇥ Expand</button></div>
       <div class=rlist id=rlist></div>
+      <div class=vgrip data-pane=rpane title="Drag to resize"></div>
     </div>
     <!-- Help: a banner above the chat (the split mechanism) — the one-paragraph how-to plus the
          user's own past help Q&As as a personal FAQ. No drawer. -->
     <div class=rpane id=hpane aria-hidden=true>
       <div class=rpane-head><span>Help</span></div>
       <div class=rlist id=hlist></div>
+      <div class=vgrip data-pane=hpane title="Drag to resize"></div>
     </div>
     <!-- Board room (same one-chat/three-displays contract as research): the pill shows the convene
          history + the stress-test; a question splits the drawer; ⇥ Expand slides it out. -->
@@ -50,6 +52,7 @@ __FILG_HEAD__
         </span></div>
       <div class=bseats id=bseats title="Who's seated — click to bench/seat for the next convene"></div>
       <div class=rlist id=blist></div>
+      <div class=vgrip data-pane=bpane title="Drag to resize"></div>
     </div>
     <div class=chatlog id=chatlog aria-live=polite></div>
     <div class="promptwrap" id=ws-wrap>

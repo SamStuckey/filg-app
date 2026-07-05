@@ -219,6 +219,8 @@ async function restorePlan(id){   // boot straight into an existing plan: graph 
   SID=d.id; SEL=new Set(); PENDING_FORK=null; resetGraph();
   replayChat(d.chat);
   render(d);
+  loadSel();   // checkbox picks made before the reload come back (per plan + active fork)
+  if(SEL.size)renderView();
   if(d.status==='researching')poll();   // a run was mid-flight — pick the poll back up
   focusActive(true);
 }
@@ -310,7 +312,7 @@ async function dispatch(dec,fromNode,prompt){
       if(S.stage==='building')return keepGoing();
       if(S.stage==='refined'){
         if(!(await chatConfirm(BIG_STEP_ASK,"Let's go")))return;
-        return commit(null,fromNode);
+        return commit();   // 'next' rolls the ACTIVE refined node — a browsed node never hijacks it
       }
       chatBot('Pick a direction first — check the boxes, or just name them ("the first two") and I merge them.');
       return;
@@ -477,16 +479,17 @@ async function reBrainstorm(idea){
 }
 async function doMerge(){
   if(!SEL.size){toast('Pick at least one direction.','err');return;}
-  const picks=[...SEL];
+  const picks=[...SEL], selKey=_selKey();
   const {ok,d}=await api('POST',`/api/plan/${SID}/merge`,{options:picks});
   if(!ok){ if(gateV2(d))return; chatErr((d&&d.error)||'Could not merge.'); return; }
-  beginWip('Merging your picks + first-pass research',{join:picks}); poll();
+  try{localStorage.removeItem(selKey);}catch(e){}   // consumed — the refined node records the picks
+  beginWip('Merging your picks + first-pass research',{join:picks,poll:true}); poll();
 }
 async function commit(thesis,fromNode){
   const body={}; if(thesis)body.thesis=thesis; if(fromNode)body.node=fromNode;   // build out of THAT node
   const {ok,d}=await api('POST',`/api/plan/${SID}/commit`,body);
   if(!ok){ if(gateV2(d))return; chatErr((d&&d.error)||'Could not start the build.'); return; }
-  beginWip('Deep research: pulling + grading sources',{parent:fromNode||(nodesOf(S).t||{}).active}); poll();
+  beginWip('Deep research: pulling + grading sources',{parent:fromNode||(nodesOf(S).t||{}).active,poll:true}); poll();
 }
 // ── Pivot-from-a-node: an armed ghost child ("enter feedback to pivot…") + the direct spread ──
 let PIVOT_FROM=null;
@@ -576,10 +579,28 @@ async function revetSend(more){
   } else chatBot('That cleared the gate — part 1 redrafted from the stronger idea.');
   render(d);
 }
-async function poll(){
-  const {d:s}=await api('GET',`/api/plan/${SID}`);
-  if(s&&s.id)render(s);
-  if(s&&s.status==='researching')setTimeout(poll,1100);
+// THE POLL, hardened (systemic pass, 2026-07-06). Two failure classes lived here:
+// (1) a dropped GET killed the chain forever — the WIP box spun with no completion (the "freeze");
+// (2) two overlapping ops could both be polling, and a STALE chain's render stomped the newer op's
+//     WIP state (the "WIP box confused with the previous box" family).
+// Epoch token = only the newest chain may render; transient failures retry with backoff, then say so.
+let POLL_EPOCH=0;
+function poll(){
+  const tok=++POLL_EPOCH, sid=SID; let miss=0;
+  const tick=async()=>{
+    if(tok!==POLL_EPOCH||sid!==SID)return;      // a newer op (or another plan) owns the poll now
+    const {ok,d:s}=await api('GET',`/api/plan/${sid}`);
+    if(tok!==POLL_EPOCH||sid!==SID)return;
+    if(!ok||!s||!s.id){
+      if(++miss<=5){ setTimeout(tick,1200*miss); return; }   // a blip is not a verdict — retry
+      endWip(); if(S)render(S);
+      chatErr('Lost contact with the build — it may still be running. Reload to catch up.');
+      return;
+    }
+    miss=0; render(s);
+    if(s.status==='researching')setTimeout(tick,1100);
+  };
+  tick();
 }
 function discardFork(){ PENDING_FORK=null; focusActive(true); toast('Dropped it, carrying on.'); }
 function pivotFork(){ const st=PENDING_FORK&&PENDING_FORK.steer; PENDING_FORK=null;
@@ -613,11 +634,14 @@ function resetGraph(){ GSEEN=new Set(); FOCUS=null; BROWSING=false; LAST_ACTIVE=
   Object.keys(NODECACHE).forEach(k=>delete NODECACHE[k]); Object.keys(NODELOG).forEach(k=>delete NODELOG[k]);
   HIST_OPEN=new Set();
   const gn=$('gnodes'); if(gn)gn.innerHTML=''; const ge=$('gedges'); if(ge)ge.innerHTML=''; }
+let WIP_SYNC=false;   // sync ops (await-style: /next, /redraft, pivot spreads) OWN their label —
+                      // only endWip may clear it. Poll-driven ops defer to the server's status.
 function beginWip(label,opts){ WIP_LABEL=label; WIP_T0=Date.now(); WIPLOG=[]; LANES=[]; LANES_DONE=new Set();
+  WIP_SYNC=!(opts&&opts.poll);
   WIP_PENDING={label,parent:(opts&&opts.parent)||null,join:(opts&&opts.join)||null};
   if(VIEWMODE==='docs')DOCTAB='_wip';   // docs view rolls forward like the tree: the new step gets its own tab
   LEAF_OPEN=new Set(); FOCUS=null; BROWSING=false; PREFOCUS_VIEW=null; renderView(); }   // content collapses back, the pending node takes the stage
-function endWip(){ WIP_LABEL=null; WIP_T0=null; WIP_PENDING=null; }
+function endWip(){ WIP_LABEL=null; WIP_T0=null; WIP_PENDING=null; WIP_SYNC=false; }
 function pivotParent(id){   // THE PIVOT CONTRACT: a pivot branches off the pivot node ITSELF, always
   const {t}=nodesOf(S); return id||t.active; }
 function nodesOf(s){const t=(s&&s.tree)||{};const m={};(t.nodes||[]).forEach(n=>m[n.id]=n);return {m,t};}
@@ -1166,6 +1190,17 @@ function pastBody(n){
 function stageOptions(){ return (S&&S.activeNode&&S.activeNode.options)||[]; }
 function stageSurface(s){
   if(!s)return null;
+  // THE SURFACE MUST MATCH THE NODE IT RENDERS INSIDE. `stage` and `tree.active` can disagree (a
+  // stranded pointer from the old commit bug corrupted live sessions; any future drift lands the
+  // same way) — trusting stage alone painted refined CTAs on a brainstorm fork with no checkboxes
+  // (Sam's refresh bug, 2026-07-06). When idle, the ACTIVE NODE'S KIND picks the surface; stage
+  // stays the tiebreak for section nodes. Mid-run keeps the stage flow → transitionalBody, no CTAs.
+  const busy=!!(WIP_LABEL||s.status==='researching');
+  if(!busy&&!PENDING_FORK&&s.status!=='error'&&!(s.done||s.stage==='done')){
+    const ak=s.activeNode&&s.activeNode.kind;
+    if(ak==='brainstorm')return {html:brainstormHtml(s)};
+    if(ak==='refined')return {html:refinedHtml(s)};
+  }
   if(PENDING_FORK)return {html:
     `<p class=eyebrow>We tried to work that in</p><p>${esc(PENDING_FORK.clash||'That clashes with the committed idea.')}</p>`+
     (PENDING_FORK.skeptic_say?`<p class=skept>🧐 ${esc(PENDING_FORK.skeptic_say)}</p>`:'')+
@@ -1214,7 +1249,16 @@ function brainstormHtml(s){
     `<button class="stage-cta secondary" onclick=commitFromBrainstorm()>I'm sold, build the plan</button></div>`+
     `<p class=thinking>Or just type in the box, it always wins.</p>`;
 }
-function toggleSel(id){ if(SEL.has(id))SEL.delete(id); else SEL.add(id); renderView(); }
+// checkbox picks survive a refresh — they were client-memory only, so a reload silently dropped
+// the selection and the fork re-rendered pickless (Sam's QA, 2026-07-06)
+function _selKey(){ const {t}=nodesOf(S); return 'filg_sel_'+SID+':'+(t.active||''); }
+function saveSel(){ try{localStorage.setItem(_selKey(),JSON.stringify([...SEL]));}catch(e){} }
+function loadSel(){ try{
+    const v=JSON.parse(localStorage.getItem(_selKey())||'[]');
+    const opts=new Set((stageOptions()||[]).map(o=>o.id));
+    SEL=new Set((v||[]).filter(id=>opts.has(id)));
+  }catch(e){ SEL=new Set(); } }
+function toggleSel(id){ if(SEL.has(id))SEL.delete(id); else SEL.add(id); saveSel(); renderView(); }
 function refinedHtml(s){
   const a=s.activeNode||{};
   const kept=(a.kept||[]).map(k=>`<li>${esc(k)}</li>`).join('');
@@ -1384,7 +1428,9 @@ function render(s){
   // Server status is the truth here: a poll-driven op (merge/commit) sets WIP_LABEL but only the
   // server knows when it's done. Sync ops (run) clear their own label via endWip before render().
   const researching=S.status==='researching';
-  if(!researching&&!WAS_RESEARCHING)WIP_LABEL=null;   // belt-and-braces: never let a stale label stick
+  // belt-and-braces: never let a stale POLL-DRIVEN label stick. A SYNC op's label is its own —
+  // a stray render mid-await (an old poll tick, a board reply) must not blank a live WIP box.
+  if(!researching&&!WAS_RESEARCHING&&!WIP_SYNC)WIP_LABEL=null;
   if(researching&&!WIP_T0)WIP_T0=Date.now();          // e.g. a reload mid-build → the timer still ticks
   const {t}=nodesOf(S);
   if(WAS_RESEARCHING&&!researching){          // a build just finished → stash its log on the node it made
@@ -1442,6 +1488,36 @@ function exitResearch(quiet){
 }
 function expandResearch(){ RMODE='expanded'; applyRmode(); renderResearch(); }
 function collapseResearch(){ RMODE='split'; applyRmode(); renderResearch(); }
+// ── The split boundary is DRAGGABLE (Sam, 2026-07-06): one remembered height shared by every
+// in-drawer pane (research/board/help). Dragging sets an inline flex-basis; leaving the split
+// clears it so the full/expanded displays keep their class-driven sizing. ──
+let SPLIT_PX=(function(){try{const v=parseInt(localStorage.getItem('filg_split_px'),10);
+  return (v>=120&&v<=2000)?v:null;}catch(e){return null;}})();
+function applySplitSize(pane,on){
+  if(!pane)return;
+  if(on&&SPLIT_PX){ pane.style.flex=`0 0 ${SPLIT_PX}px`; pane.style.maxHeight='none'; }
+  else { pane.style.flex=''; pane.style.maxHeight=''; }
+}
+function initGrips(){
+  document.querySelectorAll('.vgrip').forEach(g=>{
+    const pane=$(g.dataset.pane); if(!pane)return;
+    g.addEventListener('pointerdown',e=>{
+      e.preventDefault(); g.setPointerCapture(e.pointerId); g.classList.add('dragging');
+      pane.classList.add('resizing');   // the .45s flex ease fights a live drag — off while held
+      const move=ev=>{
+        const L=$('left'), lr=L.getBoundingClientRect(), pr=pane.getBoundingClientRect();
+        const h=Math.max(110,Math.min(ev.clientY-pr.top,lr.height-230));   // chat + box stay usable
+        SPLIT_PX=Math.round(h); applySplitSize(pane,true);
+      };
+      const up=ev=>{ g.classList.remove('dragging'); pane.classList.remove('resizing');
+        g.removeEventListener('pointermove',move); g.removeEventListener('pointerup',up);
+        g.removeEventListener('pointercancel',up);
+        try{localStorage.setItem('filg_split_px',String(SPLIT_PX));}catch(x){} };
+      g.addEventListener('pointermove',move);
+      g.addEventListener('pointerup',up); g.addEventListener('pointercancel',up);
+    });
+  });
+}
 function applyRmode(){
   const L=$('left'), pane=$('rpane'), dr=$('rdrawer');
   // a stale shell (served before the research pane existed) must fail LOUD, not half-collapse the
@@ -1456,6 +1532,7 @@ function applyRmode(){
   pane.setAttribute('aria-hidden',String(!(RMODE==='full'||RMODE==='split')));
   dr.classList.toggle('open',RMODE==='expanded');
   dr.setAttribute('aria-hidden',String(RMODE!=='expanded'));
+  applySplitSize(pane,RMODE==='split');   // the remembered drag height applies to the split only
   if(RMODE!=='full'){ const log=$('chatlog'); if(log)log.scrollTop=log.scrollHeight; }
 }
 function researchItems(){
@@ -1557,6 +1634,7 @@ function applyBmode(){
   pane.setAttribute('aria-hidden',String(!(BMODE==='full'||BMODE==='split')));
   dr.classList.toggle('open',BMODE==='expanded');
   dr.setAttribute('aria-hidden',String(BMODE!=='expanded'));
+  applySplitSize(pane,BMODE==='split');
   if(BMODE!=='full'){ const log=$('chatlog'); if(log)log.scrollTop=log.scrollHeight; }
 }
 // The stack: newest first — the stress-test result (if any) rides on top, then every convene.
@@ -1741,6 +1819,7 @@ function applyHmode(){
     if(L)L.classList.remove('hsplit'); return; }
   L.classList.toggle('hsplit',HMODE);
   pane.setAttribute('aria-hidden',String(!HMODE));
+  applySplitSize(pane,HMODE);
   if(!HMODE){ const log=$('chatlog'); if(log)log.scrollTop=log.scrollHeight; }
 }
 function helpFaq(){ try{return JSON.parse(localStorage.getItem('filg_help_faq')||'[]');}catch(e){return [];} }
@@ -1774,6 +1853,7 @@ document.addEventListener('keydown',e=>{
 });
 initGraphInput();
 initMinimap(); initTrail();   // graph chrome: click-to-jump minimap + hover wayfinding trail
+initGrips();   // the split boundary drags; the height is remembered across modes + reloads
 loadKey();   // paint the key indicator (hosted vs BYOK) on load
 renderStackChips();   // the model-crew chip
 sendLabel();   // 'Start →' in full mode, 'Send →' once a plan exists

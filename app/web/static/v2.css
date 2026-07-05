@@ -419,3 +419,12 @@ textarea:focus{border-color:var(--accent)}
 .saside{font-size:13px;line-height:1.5;border:1px solid var(--yellow);border-radius:8px;
   padding:8px 11px;margin:8px 0;background:color-mix(in srgb,var(--yellow) 9%,var(--card))}
 .saside .why{color:var(--muted)}
+
+/* the split boundary is DRAGGABLE (Sam, 2026-07-06): a grip at the bottom of each in-drawer pane */
+.vgrip{flex:0 0 12px;cursor:row-resize;display:flex;align-items:center;justify-content:center;
+  touch-action:none;user-select:none}
+.vgrip::after{content:"";width:38px;height:4px;border-radius:2px;background:var(--line);
+  transition:background .2s}
+.vgrip:hover::after,.vgrip.dragging::after{background:var(--accent)}
+.left.rfull .vgrip,.left.bfull .vgrip{display:none}   /* resize belongs to the SPLIT boundary only */
+.rpane.resizing{transition:none}   /* a live drag needs 1:1 tracking, not the .45s ease */
