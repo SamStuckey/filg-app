@@ -328,3 +328,48 @@ textarea:focus{border-color:var(--accent)}
   padding:14px 0 14px;transition:flex .45s ease,opacity .3s ease}
 .rdrawer.open{flex:0 0 340px;width:340px;opacity:1;pointer-events:auto;padding:14px}
 .workspace.full .rpane,.workspace.full .rdrawer{display:none}   /* no research surface on the landing */
+
+/* ── Graph chrome (2026-07-05): search-glow · fit/zoom controls · minimap · stubs · wayfinding ── */
+#gctrls{position:absolute;top:12px;right:14px;display:flex;gap:6px;align-items:center;z-index:5}
+#gctrls input{width:180px;font:13px/1.2 inherit;background:var(--card);color:var(--fg);
+  border:1px solid var(--line);border-radius:7px;padding:6px 9px;outline:none}
+#gctrls input:focus{border-color:var(--accent)}
+#gctrls button{width:30px;height:30px;border:1px solid var(--line);border-radius:7px;
+  background:var(--card);color:var(--fg);font-size:14px;line-height:1}
+#gctrls button:hover{border-color:var(--accent)}
+.gsn{font-size:11.5px;color:var(--muted);white-space:nowrap}
+#minimap{position:absolute;right:14px;bottom:14px;width:156px;height:104px;z-index:5;cursor:pointer;
+  background:color-mix(in srgb,var(--card) 82%,transparent);border:1px solid var(--line);
+  border-radius:9px;overflow:hidden;backdrop-filter:blur(3px)}
+#minimap i{position:absolute;border-radius:1.5px;background:var(--muted);opacity:.55}
+#minimap i.path{background:var(--accent);opacity:.85}
+#minimap i.act{background:var(--accent);opacity:1;box-shadow:0 0 0 1.5px color-mix(in srgb,var(--accent) 40%,transparent)}
+#minimap i.stub{background:var(--line);opacity:.8}
+#minimap i.wip{background:var(--accent);animation:gpulse 1.6s ease-in-out infinite}
+#minimap .mmview{position:absolute;display:block;border:1.5px solid var(--accent);border-radius:3px;
+  background:color-mix(in srgb,var(--accent) 7%,transparent);pointer-events:none}
+/* a folded passed-over subtree: one quiet dashed row, click to unfold */
+.gnode.stub{border-style:dashed;border-color:var(--line);background:color-mix(in srgb,var(--card) 60%,var(--bg))}
+.gnode.stub .nt{color:var(--muted);font-weight:500}
+.gnode.stub:hover{border-color:var(--accent)}
+.gnode .tuck{margin-left:auto;background:none;border:none;color:var(--muted);font-size:12px;padding:0 2px}
+.gnode .tuck:hover{color:var(--accent)}
+/* keyboard cursor: where the arrows are, distinct from .on (the active step) */
+.gnode.kbd{outline:2px solid var(--blue);outline-offset:2px}
+/* search-glow: hits pulse, everything else steps back (PoE's tree-search pattern) */
+.gnode.ghit{border-color:var(--yellow);animation:ghlow 1.4s ease-in-out infinite}
+@keyframes ghlow{0%,100%{box-shadow:0 0 0 0 color-mix(in srgb,var(--yellow) 55%,transparent)}
+  50%{box-shadow:0 0 0 7px transparent}}
+.gnode.gdim{opacity:.35}
+.gnode.gdim:hover{opacity:1}
+/* hover wayfinding: the root→hovered chain lifts */
+.gnode.trail{border-color:color-mix(in srgb,var(--blue) 55%,var(--line));
+  box-shadow:0 0 0 1px color-mix(in srgb,var(--blue) 30%,transparent)}
+/* share modal bits */
+.sharerow{display:flex;justify-content:space-between;align-items:center;gap:10px;margin:12px 0}
+.sharerow button{border:1px solid var(--line);border-radius:7px;background:var(--card);color:var(--fg);padding:6px 12px}
+.sharerow button.primary{background:var(--accent);color:#fff;border:none}
+#shareurl{width:100%;font:12.5px ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--bg);
+  color:var(--fg);border:1px solid var(--line);border-radius:7px;padding:8px 10px;margin-top:4px}
+.sharebtn{white-space:nowrap}
+.workspace.full .sharebtn{display:none}   /* no plan yet on the landing — nothing to share */

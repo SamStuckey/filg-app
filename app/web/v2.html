@@ -13,6 +13,7 @@ __FILG_HEAD__
       <div class=lt-right>
         <button id=stackchip-w class="ghost stackchip" type=button onclick="stackModal()" title="Pick your model crew"></button>
         <span class=meter id=meter title="tokens + $ this session">0 tok · $0.00</span>
+        <button type=button class="ghost small sharebtn" id=sharebtn onclick="shareModal()" title="Share a read-only link">🔗 Share</button>
         <button type=button class=profile onclick="keyModal()" aria-label="Account" title="Account · API key">
           <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="8.2" r="3.6"/><path d="M4.5 19.5c1.3-3.4 4.2-5 7.5-5s6.2 1.6 7.5 5"/></svg>
         </button>
@@ -67,7 +68,19 @@ __FILG_HEAD__
       <button type=button data-v=graph class=on role=tab onclick="setView('graph')">Decision graph</button>
       <button type=button data-v=docs role=tab onclick="setView('docs')">Documents</button>
     </div>
-    <div id=graph><div id=gview><svg id=gedges xmlns="http://www.w3.org/2000/svg"></svg><div id=gnodes></div></div></div>
+    <div id=graph><div id=gview><svg id=gedges xmlns="http://www.w3.org/2000/svg"></svg><div id=gnodes></div></div>
+      <!-- Graph chrome: search-glow (PoE pattern), fit/zoom controls, and the minimap (branch
+           structure + viewport, click-to-jump). All render from the last layout — no extra state. -->
+      <div id=gctrls>
+        <input id=gsearch type=search placeholder="Search the tree…  ( / )" autocomplete=off
+               oninput="gSearch(this.value)">
+        <span id=gsearch-n class=gsn hidden></span>
+        <button type=button onclick="fitView()" title="Fit the whole tree (F)">⤢</button>
+        <button type=button onclick="zoomStep(1.25)" title="Zoom in (+)">+</button>
+        <button type=button onclick="zoomStep(0.8)" title="Zoom out (−)">−</button>
+      </div>
+      <div id=minimap title="Click to jump"></div>
+    </div>
     <div id=docs hidden><div id=dtabs role=tablist></div><div id=docpane></div></div>
     <button id=gpill type=button hidden onclick="focusActive()">▣ Current step</button>
   </main>

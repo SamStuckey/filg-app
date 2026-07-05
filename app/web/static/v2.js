@@ -558,6 +558,9 @@ let HIST_OPEN=new Set();   // which nodes' "how this was built" is expanded (sur
 function histKeep(id,el){ if(el.open)HIST_OPEN.add(id); else HIST_OPEN.delete(id); }
 function resetGraph(){ GSEEN=new Set(); FOCUS=null; BROWSING=false; LAST_ACTIVE=null; WAS_RESEARCHING=false;
   PIVOT_FROM=null; REVET_ARMED=false;
+  GEXPANDED=new Set(); GQUERY=''; NAVCUR=null; LAYOUT=null;
+  const gs=$('gsearch'); if(gs)gs.value=''; const gn2=$('gsearch-n'); if(gn2)gn2.hidden=true;
+  const mm=$('minimap'); if(mm){mm.hidden=true;mm.innerHTML='';}
   LOOKUPS=[]; RQUERY=''; if(RMODE)exitResearch(true);   // research display is per-plan state
   WIP_LABEL=null; WIP_PENDING=null; WIPLOG=[]; LANES=[]; LANES_DONE=new Set(); PROG_N=0;
   Object.keys(NODECACHE).forEach(k=>delete NODECACHE[k]); Object.keys(NODELOG).forEach(k=>delete NODELOG[k]);
@@ -578,7 +581,38 @@ function pathSetOf(m,active){const set={};let cur=active;
     if(n.kind==='refined'&&Array.isArray(n.selected))n.selected.forEach(s=>{if(m[s])set[s]=1;});
     cur=n.parent;}
   return set;}
+// ── Collapse passed-over subtrees to stubs (the wide-tree lever; Sublime Merge's commit-folding
+// pattern). An OFF-PATH branch root whose parent is on the committed path, carrying ≥2 nodes,
+// folds into one "⊞ N steps" stub — click to unfold, ⊟ on its root to tuck it back. A subtree
+// holding the focused / pivot-armed / keyboard-cursor node never folds (you're IN it).
+let GEXPANDED=new Set();
+function collapseMap(m,onPath){
+  const tp={},kids={};
+  Object.keys(m).forEach(id=>kids[id]=[]);
+  Object.values(m).forEach(n=>{ tp[n.id]=(n.parent!=null&&m[n.parent])?n.parent
+    :((Array.isArray(n.selected)&&n.selected.find(s=>m[s]))||null);
+    if(tp[n.id]!=null)kids[tp[n.id]].push(n.id); });
+  const size=id=>1+(kids[id]||[]).reduce((a,c)=>a+size(c),0);
+  const hot=new Set([FOCUS,PIVOT_FROM,NAVCUR].filter(Boolean));
+  const warm=id=>hot.has(id)||(kids[id]||[]).some(warm);
+  const out={};
+  const emit=id=>{
+    if(!onPath[id]&&tp[id]!=null&&onPath[tp[id]]&&!GEXPANDED.has(id)&&size(id)>=2&&!warm(id)){
+      out['_stub:'+id]={id:'_stub:'+id,kind:'stub',parent:tp[id],root:id,count:size(id),
+        title:size(id)+' passed-over steps'};
+      return; }
+    out[id]=m[id]; (kids[id]||[]).forEach(emit); };
+  Object.keys(m).forEach(id=>{ if(tp[id]==null)emit(id); });
+  return out;
+}
+function stubExpand(root){ GEXPANDED.add(root); renderView(); }
+function stubCollapse(root){ GEXPANDED.delete(root); renderView(); }
+// Is this node the root of an expanded passed-over subtree? (It gets the ⊟ tuck-away control.)
+function stubRootOf(n,onPath,m){
+  return GEXPANDED.has(n.id)&&!onPath[n.id]&&n.parent!=null&&m[n.parent]&&onPath[n.parent];
+}
 function nodeLabel(n){
+  if(n.kind==='stub')return n.title||'passed over';
   if(n.kind==='idea')return n.title||'Your idea';
   if(n.kind==='brainstorm')return 'A few directions';
   if(n.kind==='refined')return 'Refined idea';
@@ -586,7 +620,7 @@ function nodeLabel(n){
   if(n.kind==='pivot')return n.title||'enter feedback to pivot…';
   return n.title||('Part '+((n.step||0)+1));
 }
-const KICON={idea:'◉',brainstorm:'✳',option:'◇',refined:'◆',fork:'⑂',pivot:'⑂',wip:'⚙',section:'▤'};
+const KICON={idea:'◉',brainstorm:'✳',option:'◇',refined:'◆',fork:'⑂',pivot:'⑂',wip:'⚙',section:'▤',stub:'⊞'};
 function drainProgress(s){   // stream progress into the working node (sentinels drive the leaflets)
   const prog=s.progress||[];
   for(let i=PROG_N;i<prog.length;i++){
@@ -685,11 +719,13 @@ function layoutGraph(m,wip,active,fit){
     y+=h; }
   const pos={};
   Object.keys(m).forEach(id=>{pos[id]={x:cx[id]+nudge-NW/2, y:rowY[depth[id]||0]};});
-  return {pos,kids,joins};
+  return {pos,kids,joins,tp};
 }
 function renderGraph(){
   const s=S; const gn=$('gnodes'), ge=$('gedges'); if(!s||!gn)return;
-  const {m,t}=nodesOf(s); const active=t.active;
+  const {m:m0,t}=nodesOf(s); const active=t.active;
+  const onPath=pathSetOf(m0,active);   // computed on the FULL tree — stubs never change the path
+  const m=collapseMap(m0,onPath);      // passed-over subtrees fold to ⊞ stubs (expand on click)
   if(PIVOT_FROM&&m[PIVOT_FROM])m._ghost={id:'_ghost',parent:PIVOT_FROM,kind:'pivot',
     title:'enter feedback to pivot…',step:0};   // the armed pivot: a blank child awaiting your words
   const working=!!(WIP_LABEL||s.status==='researching');
@@ -701,8 +737,10 @@ function renderGraph(){
   const wip=WIP_PENDING?'_wip':null;
   const rrect=$('right').getBoundingClientRect();
   const FW=focusW(rrect), FH=rrect.height-120;   // open-doc box: panel-fit, margin on every side
-  const {pos,kids,joins}=layoutGraph(m,wip,active,FOCUS?{fw:FW,fh:FH}:null);
-  const onPath=pathSetOf(m,active);
+  const {pos,kids,joins,tp}=layoutGraph(m,wip,active,FOCUS?{fw:FW,fh:FH}:null);
+  LAYOUT={pos,kids,tp,m};   // the minimap, fit-view, and keyboard nav all read the LAST layout
+  const qhits=GQUERY?new Set(Object.keys(m).filter(id=>nodeMatches(m[id],GQUERY))):null;
+  const gsn=$('gsearch-n'); if(gsn){gsn.hidden=!GQUERY; if(GQUERY)gsn.textContent=(qhits?qhits.size:0)+' hit'+((qhits&&qhits.size===1)?'':'s');}
   // nodes: keyed divs, moved (CSS transition) or created (.enter → fade in)
   const live=new Set(Object.keys(m));
   gn.querySelectorAll('.gnode').forEach(el=>{ if(!live.has(el.dataset.id)) el.remove(); });
@@ -719,7 +757,9 @@ function renderGraph(){
     const fresh=!el;
     if(fresh){ el=document.createElement('div'); el.dataset.id=n.id; el.classList.add('enter');
       el.addEventListener('click',e=>{ if(!e.target.closest('.nbody'))gNodeClick(n.id); }); gn.appendChild(el); }
-    el.className='gnode'+(n.id==='_ghost'?' ghost':'')+(fresh?' enter':'')+(n.id===active?' on':'')+(onPath[n.id]?' path':'')+(sel?' sel':'')+(rej?' rej':'')+(isWip?' wip':'')+(isFocus?' focus':'');
+    const hit=qhits&&qhits.has(n.id), dimq=qhits&&qhits.size>0&&!hit;
+    el.className='gnode'+(n.id==='_ghost'?' ghost':'')+(fresh?' enter':'')+(n.id===active?' on':'')+(onPath[n.id]?' path':'')+(sel?' sel':'')+(rej?' rej':'')+(isWip?' wip':'')+(isFocus?' focus':'')
+      +(n.kind==='stub'?' stub':'')+(n.id===NAVCUR?' kbd':'')+(hit?' ghit':'')+(dimq?' gdim':'');
     const w=isFocus?FW:(isWip?250:NW);
     el.style.width=isFocus?FW+'px':''; el.style.maxHeight=isFocus?FH+'px':'';
     el.style.left=(p.x-(w-NW)/2)+'px'; el.style.top=p.y+'px';
@@ -731,8 +771,14 @@ function renderGraph(){
         `${esc(WIP_PENDING.label||'Working')} · <span id=wiptime>${secs}</span></div>`;
       inner+=leafStackHtml();   // research lanes live INSIDE the node, stacked; green as each resolves
       inner+=`<div class=nspew>`+(WIPLOG.length?WIPLOG.map(l=>`<div>${esc(l)}</div>`).join(''):'<div>warming up…</div>')+`</div>`;
+    } else if(n.kind==='stub'){   // a folded passed-over subtree: one row, click to unfold
+      inner=`<div class=nk><span aria-hidden=true>⊞</span>passed over</div>`+
+        `<div class=nt>${esc(n.count)} steps tucked away — click to unfold</div>`;
     } else {
-      inner=`<div class=nk><span aria-hidden=true>${KICON[n.kind]||'▤'}</span>${esc(n.kind||'part')}</div>`+
+      const tuck=stubRootOf(n,onPath,m0)
+        ?`<button type=button class=tuck title="Tuck this passed-over branch away" `+
+         `onclick="event.stopPropagation();stubCollapse('${n.id}')">⊟</button>`:'';
+      inner=`<div class=nk><span aria-hidden=true>${KICON[n.kind]||'▤'}</span>${esc(n.kind||'part')}${tuck}</div>`+
         `<div class=nt>${esc(nodeLabel(n))}</div>`;
     }
     if(isFocus)inner+=`<div class=nbody>${nodeBody(n)}</div>`;
@@ -758,6 +804,152 @@ function renderGraph(){
     else if(wip&&pos[wip])centerOn(pos[wip],250,0.9,0.30);
   }
   pill(!wip && stageSurface(S) && FOCUS!==active);
+  renderMinimap();
+}
+// ── Graph chrome: minimap · fit view · zoom · keyboard nav · search-glow · hover trail ─────────
+let LAYOUT=null, GQUERY='', NAVCUR=null, MM_DRAG=false;
+function graphBounds(){   // the laid-out tree's extent in graph coords
+  if(!LAYOUT||!LAYOUT.pos)return null;
+  const ids=Object.keys(LAYOUT.pos); if(!ids.length)return null;
+  let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
+  ids.forEach(id=>{const p=LAYOUT.pos[id];
+    x0=Math.min(x0,p.x);y0=Math.min(y0,p.y);x1=Math.max(x1,p.x+NW);y1=Math.max(y1,p.y+NH);});
+  return {x:x0,y:y0,w:Math.max(1,x1-x0),h:Math.max(1,y1-y0)};
+}
+function fitView(){   // frame the whole tree (F) — zoom-by-pixels; stubs are the zoom-by-meaning lever
+  const b=graphBounds(); if(!b)return;
+  const r=$('right').getBoundingClientRect();
+  const k=Math.min(1,Math.max(0.25,Math.min((r.width-90)/b.w,(r.height-140)/b.h)));
+  BROWSING=true; VIEW.k=k;
+  VIEW.x=(r.width-b.w*k)/2-b.x*k;
+  VIEW.y=(r.height-b.h*k)/2-b.y*k+16;
+  applyView(true); renderMinimap();
+}
+function zoomStep(f){   // +/− buttons and keys zoom on the panel center
+  const r=$('right').getBoundingClientRect(), cx=r.width/2, cy=r.height/2;
+  const k2=Math.min(1.9,Math.max(0.25,VIEW.k*f));
+  BROWSING=true;
+  VIEW.x=cx-(cx-VIEW.x)*(k2/VIEW.k); VIEW.y=cy-(cy-VIEW.y)*(k2/VIEW.k); VIEW.k=k2;
+  applyView(false); renderMinimap();
+}
+const MMW=156, MMH=104, MMPAD=6;
+function _mmScale(b){ return Math.min((MMW-MMPAD*2)/b.w,(MMH-MMPAD*2)/b.h); }
+function renderMinimap(){   // branch structure + viewport rect; click/drag to jump
+  const mm=$('minimap'); if(!mm)return;
+  const b=graphBounds();
+  if(!b||!LAYOUT||Object.keys(LAYOUT.m||{}).length<3||VIEWMODE!=='graph'){mm.hidden=true;return;}
+  mm.hidden=false;
+  const sc=_mmScale(b), r=$('right').getBoundingClientRect();
+  const {t}=nodesOf(S); const onPath=S?pathSetOf(nodesOf(S).m,t.active):{};
+  let html='';
+  Object.keys(LAYOUT.pos).forEach(id=>{
+    const p=LAYOUT.pos[id], n=LAYOUT.m[id]||{};
+    const cls='mmdot'+(id===t.active?' act':(onPath[id]?' path':''))+(n.kind==='stub'?' stub':'')+(id==='_wip'?' wip':'');
+    html+=`<i class="${cls}" style="left:${((p.x-b.x)*sc+MMPAD).toFixed(1)}px;`+
+      `top:${((p.y-b.y)*sc+MMPAD).toFixed(1)}px;width:${Math.max(4,NW*sc).toFixed(1)}px;`+
+      `height:${Math.max(2.5,NH*sc*0.8).toFixed(1)}px"></i>`;
+  });
+  // the viewport rectangle: what the camera currently shows, in tree coords → minimap coords
+  const vx=((-VIEW.x/VIEW.k)-b.x)*sc+MMPAD, vy=((-VIEW.y/VIEW.k)-b.y)*sc+MMPAD;
+  const vw=(r.width/VIEW.k)*sc, vh=(r.height/VIEW.k)*sc;
+  html+=`<b class=mmview style="left:${vx.toFixed(1)}px;top:${vy.toFixed(1)}px;`+
+    `width:${vw.toFixed(1)}px;height:${vh.toFixed(1)}px"></b>`;
+  mm.innerHTML=html;
+}
+function mmJump(e){   // center the camera on the clicked tree point
+  const b=graphBounds(); if(!b)return;
+  const mm=$('minimap'), mr=mm.getBoundingClientRect(), sc=_mmScale(b);
+  const gx=(e.clientX-mr.left-MMPAD)/sc+b.x, gy=(e.clientY-mr.top-MMPAD)/sc+b.y;
+  const r=$('right').getBoundingClientRect();
+  BROWSING=true;
+  VIEW.x=r.width/2-gx*VIEW.k; VIEW.y=r.height/2-gy*VIEW.k;
+  applyView(false); renderMinimap();
+}
+function initMinimap(){
+  const mm=$('minimap'); if(!mm)return;
+  mm.addEventListener('pointerdown',e=>{MM_DRAG=true;mm.setPointerCapture(e.pointerId);mmJump(e);});
+  mm.addEventListener('pointermove',e=>{if(MM_DRAG)mmJump(e);});
+  const up=()=>{MM_DRAG=false;};
+  mm.addEventListener('pointerup',up); mm.addEventListener('pointercancel',up);
+}
+// Search-glow (the PoE pattern): every node whose label / cached content / research mentions the
+// term lights up; the rest dim. Deterministic substring — same spirit as the research stack's focus.
+function cacheText(id){
+  const d=NODECACHE[id]; if(!d)return '';
+  const opts=(d.options||[]).map(o=>{const x=o.direction||{};return (x.title||'')+' '+(x.one_liner||'');}).join(' ');
+  return [d.content,d.draft,d.thesis,opts].filter(Boolean).join(' ');
+}
+function nodeMatches(n,q){
+  if(!q||n.kind==='stub')return false;
+  const hay=(nodeLabel(n)+' '+(n.title||'')+' '+(n.feedback||'')+' '+cacheText(n.id)).toLowerCase();
+  return hay.indexOf(q.toLowerCase())>=0;
+}
+function gSearch(q){ GQUERY=(q||'').trim(); if(VIEWMODE==='graph')renderGraph(); }
+// Keyboard nav: arrows walk the laid-out tree (↑ parent · ↓ child, spine first · ←/→ siblings),
+// Enter opens the cursor node (or unfolds a stub), F fits, +/− zoom, / jumps to search.
+function navSibs(id){
+  const p=LAYOUT&&LAYOUT.tp&&LAYOUT.tp[id];
+  if(p==null||!LAYOUT.kids[p])return [id];
+  return LAYOUT.kids[p].slice().sort((a,b)=>LAYOUT.pos[a].x-LAYOUT.pos[b].x);
+}
+function navMove(dir){
+  if(!LAYOUT||!S)return;
+  const {t}=nodesOf(S);
+  let cur=NAVCUR&&LAYOUT.m[NAVCUR]?NAVCUR:(FOCUS&&LAYOUT.m[FOCUS]?FOCUS:t.active);
+  if(!LAYOUT.m[cur])return;
+  if(dir==='up'){ const p=LAYOUT.tp[cur]; if(p!=null&&LAYOUT.m[p])cur=p; }
+  else if(dir==='down'){
+    const ks=(LAYOUT.kids[cur]||[]).slice();
+    if(ks.length){ const onPath=pathSetOf(nodesOf(S).m,t.active);
+      ks.sort((a,b)=>(onPath[b]?1:0)-(onPath[a]?1:0)||LAYOUT.pos[a].x-LAYOUT.pos[b].x); cur=ks[0]; }
+  } else {
+    const sibs=navSibs(cur), i=sibs.indexOf(cur);
+    if(i>=0)cur=sibs[Math.max(0,Math.min(sibs.length-1,i+(dir==='right'?1:-1)))];
+  }
+  NAVCUR=cur; BROWSING=true;
+  renderGraph();
+  if(LAYOUT.pos[cur]){ const r=$('right').getBoundingClientRect();
+    VIEW.x=r.width/2-(LAYOUT.pos[cur].x+NW/2)*VIEW.k; VIEW.y=r.height*0.42-LAYOUT.pos[cur].y*VIEW.k;
+    applyView(true); renderMinimap(); }
+}
+function graphKeys(e){
+  const tgt=e.target||{};
+  if(tgt.tagName==='INPUT'||tgt.tagName==='TEXTAREA'||tgt.isContentEditable)return;
+  if(!$('v2modal')||!$('v2modal').hidden)return;
+  if(VIEWMODE!=='graph'||!S)return;
+  if(e.key==='/'){ e.preventDefault(); const g=$('gsearch'); if(g)g.focus(); return; }
+  if(e.key==='f'||e.key==='F'){ e.preventDefault(); return fitView(); }
+  if(e.key==='+'||e.key==='='){ e.preventDefault(); return zoomStep(1.25); }
+  if(e.key==='-'){ e.preventDefault(); return zoomStep(0.8); }
+  if(e.key==='ArrowUp'){ e.preventDefault(); return navMove('up'); }
+  if(e.key==='ArrowDown'){ e.preventDefault(); return navMove('down'); }
+  if(e.key==='ArrowLeft'){ e.preventDefault(); return navMove('left'); }
+  if(e.key==='ArrowRight'){ e.preventDefault(); return navMove('right'); }
+  if(e.key==='Enter'&&NAVCUR){ e.preventDefault();
+    const n=LAYOUT&&LAYOUT.m&&LAYOUT.m[NAVCUR];
+    if(n&&n.kind==='stub'){ NAVCUR=n.root; return stubExpand(n.root); }
+    const id=NAVCUR; NAVCUR=null; return gNodeClick(id); }
+}
+// Hover trail (PoE's path-to-target): hovering any node glows the root→node chain and counts steps.
+function initTrail(){
+  const gn=$('gnodes'); if(!gn)return;
+  gn.addEventListener('mouseover',e=>{
+    const el=e.target.closest('.gnode'); if(!el||!LAYOUT)return;
+    if(el.classList.contains('focus'))return;   // an open doc isn't a wayfinding target
+    let id=el.dataset.id, steps=0;
+    const chain=new Set();
+    for(let cur=id;cur!=null&&LAYOUT.m[cur];cur=LAYOUT.tp[cur]){chain.add(cur);steps++;}
+    gn.querySelectorAll('.gnode').forEach(x=>x.classList.toggle('trail',chain.has(x.dataset.id)));
+    if(!el.classList.contains('stub')){
+      const base=(el.title||'').replace(/\n?· \d+ steps? from the start$/,'');
+      const n=Math.max(1,steps-1);
+      el.title=base+(base?'\n':'')+`· ${n} step${n===1?'':'s'} from the start`;
+    }
+  });
+  gn.addEventListener('mouseout',e=>{
+    if(e.relatedTarget&&e.relatedTarget.closest&&e.relatedTarget.closest('#gnodes'))return;
+    gn.querySelectorAll('.gnode.trail').forEach(x=>x.classList.remove('trail'));
+  });
 }
 let LEAF_OPEN=new Set();   // expanded leaflets (click a leaf to read its full research question)
 function leafToggle(i){ if(LEAF_OPEN.has(i))LEAF_OPEN.delete(i); else LEAF_OPEN.add(i); renderView(); }
@@ -794,7 +986,8 @@ function focusCam(p){   // an open doc reads at NATURAL scale (k=1), panel-fit w
 }
 function applyView(ease){ const v=$('gview'); if(!v)return;
   v.classList.toggle('ease',!!ease); v.style.transform=`translate(${VIEW.x}px,${VIEW.y}px) scale(${VIEW.k})`;
-  if(ease)setTimeout(()=>v.classList.remove('ease'),650); }
+  if(ease)setTimeout(()=>v.classList.remove('ease'),650);
+  if(!MM_DRAG)renderMinimap(); }   // the viewport rect tracks every pan/zoom (drag drives itself)
 function initGraphInput(){
   const g=$('graph'); if(!g)return;
   let drag=null,moved=false;
@@ -828,13 +1021,14 @@ function initGraphInput(){
 function gNodeClick(id){
   if(id==='_ghost'){ const b=$('ws-box'); if(b)b.focus(); return; }   // the ghost wants your words
   if(id==='_wip')return;                          // the node being born isn't readable yet
+  if(id.indexOf('_stub:')===0)return stubExpand(id.slice(6));   // a folded branch: click unfolds it
   if(FOCUS===id)return;                           // already reading it
   focusNode(id);                                  // browsing rendered nodes works even while it builds
 }
 function focusActive(force){ const {t}=nodesOf(S); BROWSING=false; if(force)FOCUS=null; focusNode(t.active); }
 function focusNode(id){
   const {m,t}=nodesOf(S); if(!m[id])return;
-  FOCUS=id; BROWSING=false;
+  FOCUS=id; BROWSING=false; NAVCUR=null;
   const n=m[id];
   if(id!==t.active&&!NODECACHE[id]){   // a past node: fetch its full content, then re-render
     api('GET',`/api/plan/${SID}/node/${id}`).then(({ok,d})=>{ if(ok){NODECACHE[id]=d; hydrateLog(id,d.log); if(FOCUS===id)renderGraph();} });
@@ -985,8 +1179,60 @@ function doneHtml(s){
   return `<p class=eyebrow>Plan complete</p><p class=react>🎉 All ${s.total} parts, built with you.</p>`+
     `<ul>${files}</ul>`+
     `<div class=ctarow><a class=stage-cta href="/api/plan/${SID}/download">⬇ Raw files (.zip)</a>`+
+    `<button class="stage-cta secondary" onclick=downloadPdf()>📄 Plan PDF</button>`+
+    `<button class="stage-cta secondary" onclick=shareModal()>🔗 Share</button>`+
     `<button class="stage-cta secondary" onclick=pivotActive()>⑂ Pivot</button></div>`+
-    `<p class=thinking>Rework any part by pivoting from its node, or keep asking questions in the box.</p>`;
+    `<p class=thinking>Raw export is always free. The PDF is free with a watermark on your own key `+
+    `($7 removes it, 3 plans) and clean on any subscription.</p>`;
+}
+// ── Share: a public read-only /p/{id} page (receipts + decision path + the plan), private by
+// default. The artifact IS the funnel — the maker line on the page is the growth loop.
+async function shareModal(){
+  if(!SID){ toast('Start a plan first — then you can share it.','err'); return; }
+  const on=!!(S&&S.shared);
+  const url=location.origin+'/p/'+SID;
+  $('modal-body').innerHTML=
+    `<p class=muted>A public, read-only page of this plan: the graded receipts, the decision path, `+
+    `and every part — shareable with a client, cofounder, or the internet. Private by default; `+
+    `flip it off any time.</p>`+
+    `<div class=sharerow><b>${on?'Sharing is ON':'Sharing is OFF'}</b>`+
+    `<button type=button class=${on?'':'primary'} onclick="setShared(${on?'false':'true'})">${on?'Make it private':'Turn on sharing'}</button></div>`+
+    (on?`<input id=shareurl readonly value="${esc(url)}" onclick="this.select()">`+
+        `<div class=cmtacts><button type=button class=primary onclick="copyShare()">Copy link</button>`+
+        `<a class=ghost style="padding:6px 10px" href="${esc(url)}" target=_blank rel=noopener>Open ↗</a></div>`:'');
+  $('modal-acts').innerHTML='<button class=primary onclick="closeModal()">Done</button>';
+  openModal('Share this plan');
+}
+async function setShared(v){
+  const {ok,d}=await api('POST',`/api/plan/${SID}/share`,{shared:v});
+  if(!ok){ toast((d&&d.error)||'Could not change sharing.','err'); return; }
+  if(S)S.shared=!!v&&!!(d&&d.shared);
+  toast(S.shared?'Share link is live.':'Back to private.');
+  shareModal();   // re-render the modal in its new state
+}
+function copyShare(){ const i=$('shareurl'); if(!i)return; i.select();
+  try{ navigator.clipboard?navigator.clipboard.writeText(i.value):document.execCommand('copy');
+       toast('Link copied. ✓'); }catch(e){ toast('Copy failed — select + copy by hand.','err'); } }
+// The PDF fetch goes through JS so a 402 (credits) or 429 lands as guidance, not a broken tab.
+async function downloadPdf(){
+  if(!SID)return;
+  const th=chatSay('status','synthesizing the PDF…');
+  let r;
+  try{ r=await fetch(`/api/plan/${SID}/plan.pdf`); }catch(e){ if(th)th.remove(); toast('Network hiccup — try again.','err'); return; }
+  if(th)th.remove();
+  if(!r.ok){
+    let d={}; try{d=await r.json();}catch(e){}
+    if(d.needPurchase){ chatBot((d.error||'Out of PDF credits.')+' (Credits and subscriptions live on the pricing page.)'); return; }
+    if(gateV2(d))return;
+    toast((d&&d.error)||'Could not build the PDF.','err'); return;
+  }
+  const wm=r.headers.get('X-FILG-Watermark')==='1';
+  const blob=await r.blob();
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+  const fm=(r.headers.get('Content-Disposition')||'').match(/filename="([^"]+)"/);
+  a.download=(fm&&fm[1])||'business-plan.pdf';
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href),4000);
+  toast(wm?'PDF downloaded — free copy, watermarked. $7 unlocks 3 clean ones.':'PDF downloaded. ✓');
 }
 
 // ── Two projections of the same tree: the decision graph, and a left-to-right document reader ──
@@ -1167,13 +1413,16 @@ function toolBody(mode){
 }
 
 // ── boot ─────────────────────────────────────────────────────────────────────
-document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeModal();unfocus();if(PIVOT_FROM)clearGhost();}});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeModal();unfocus();if(PIVOT_FROM)clearGhost();
+  if(NAVCUR){NAVCUR=null;if(VIEWMODE==='graph')renderGraph();}}});
+document.addEventListener('keydown',graphKeys);   // graph wayfinding: arrows/Enter/F/+/−//
 // Enter submits (Shift+Enter for a newline) — sendPrompt handles full mode as the landing submit
 document.addEventListener('keydown',e=>{
   if(e.key!=='Enter'||e.shiftKey)return;
   if(e.target&&e.target.id==='ws-box'){ e.preventDefault(); sendPrompt(); }
 });
 initGraphInput();
+initMinimap(); initTrail();   // graph chrome: click-to-jump minimap + hover wayfinding trail
 loadKey();   // paint the key indicator (hosted vs BYOK) on load
 renderStackChips();   // the model-crew chip
 sendLabel();   // 'Start →' in full mode, 'Send →' once a plan exists

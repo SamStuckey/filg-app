@@ -116,6 +116,7 @@ def synthesize(session: dict, mock: bool = False) -> tuple[dict, float]:
 # ── Stage 2: render (fpdf2) ──────────────────────────────────────────────────
 class _PDF(FPDF):
     plan_title = ""
+    watermark = False   # free (unpurchased) copy: a "Built with FILG" line rides every page
 
     def header(self):
         if self.page_no() <= 2:   # no running header on cover (1) / contents (2)
@@ -137,6 +138,14 @@ class _PDF(FPDF):
         self.set_y(self.t_margin)
 
     def footer(self):
+        # The watermark is the free copy's price tag: every page carries the maker line. Unlocking
+        # ($7 credits or any subscription) renders the same PDF clean. Kept to a footer line — the
+        # doc must stay client-usable, or nobody shares it and the loop dies.
+        if self.watermark:
+            self.set_y(-13)
+            self.set_font("Inter", "", 8)
+            self.set_text_color(*MUTED)
+            self.cell(0, 6, "Free copy · Built with FILG · filg.ai", align="L")
         if self.page_no() <= 2:
             return
         self.set_y(-13)
@@ -321,10 +330,13 @@ def _render_toc(pdf: _PDF, outline) -> None:
         pdf.ln(3)
 
 
-def render(plan: dict, style: str = "filg") -> bytes:
-    """Render the plan dict to PDF bytes. `style` is a hook for future presets (MVP = 'filg')."""
+def render(plan: dict, style: str = "filg", watermark: bool = False) -> bytes:
+    """Render the plan dict to PDF bytes. `style` is a hook for future presets (MVP = 'filg').
+    `watermark=True` = the free copy: a "Built with FILG · filg.ai" line on every page; unlocking
+    ($7 credits / any subscription) renders the identical PDF clean."""
     pdf = _PDF(orientation="P", unit="mm", format="Letter")
     pdf.plan_title = plan["title"]
+    pdf.watermark = bool(watermark)
     pdf.set_margins(28, 22, 28)
     pdf.set_auto_page_break(True, margin=20)
     _fonts(pdf)

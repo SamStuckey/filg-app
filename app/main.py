@@ -577,14 +577,39 @@ async def share(job_id: str):
 
 @app.get("/p/{sid}", response_class=HTMLResponse)
 async def share_plan(sid: str):
-    """Public, read-only view of a plan the owner explicitly shared (private by default)."""
+    """Public, read-only view of a plan the owner explicitly shared (private by default). Carries the
+    two things nothing else in-market shows: the graded receipts and the decision path that led here —
+    the share page IS the pitch, watermarked with the maker line."""
     s = store.plan_get(sid)
     if not s or not s.get("shared"):
         return HTMLResponse(render.not_found("This plan isn't shared or doesn't exist."), status_code=404)
     idea = planner._working_idea(s)
     inner = markdown.markdown(planner.bundle_markdown(idea, s.get("files") or {}), extensions=["extra"])
     title = ((s.get("shaped") or {}).get("thesis") or s["idea"] or "Shared business plan")[:120]
-    return HTMLResponse(render.shared_plan_page(title, inner))
+    rows = ((s.get("research") or {}).get("rows") or [])
+    return HTMLResponse(render.shared_plan_page(title, inner, receipts=rows, path=_share_path(s)))
+
+
+def _share_path(s: dict) -> list[dict]:
+    """The committed decision path (root → active) as public-safe steps: kind + label + the operator's
+    pivot/steer note. This is the provenance trail — what the plan decided and why, not just the output.
+    Reads the STORED tree (nodes = dict keyed by id; kind derived via _kind), not the frontend view."""
+    tree = s.get("tree") or {}
+    nodes = tree.get("nodes") or {}
+    chain, cur = [], tree.get("active")
+    while cur is not None and cur in nodes:
+        chain.append(nodes[cur])
+        cur = nodes[cur].get("parent")
+    chain.reverse()
+    out = []
+    for n in chain:
+        kind = _kind(n)
+        label = (n.get("title")
+                 or {"idea": "The idea", "brainstorm": "Directions explored", "refined": "Refined idea",
+                     "fork": "Fork"}.get(kind, f"Part {int(n.get('step') or 0) + 1}"))
+        out.append({"kind": kind or "section", "label": label,
+                    "note": (n.get("feedback") or "").strip()})
+    return out
 
 
 # ── Interactive plan builder (idea → decision tree → downloadable file tree) ──
@@ -2173,17 +2198,25 @@ async def api_plan_pdf(sid: str, request: Request):
     authed = auth.user_from_request(request)
     email = (authed or {}).get("email", "")
     # Subscribers get the polished PDF free (it's part of the plan). Otherwise claim it: free if comped
-    # or already unlocked, else spend one of the account's credits. Billing off (dev) → always open.
-    # False → no access and no credits → ask for payment.
+    # or already unlocked, else spend one of the account's credits. No credits → a BYOK user still gets
+    # a FREE WATERMARKED copy (synth runs on their own key — the share loop needs an artifact that
+    # circulates; $7 removes the line). No credits and no key → payment, as before.
+    watermark = False
     if (billing.PDF_BILLING_ENABLED and not _is_subscriber(email)
             and not billing.claim_pdf(email, _plan_key(s))):
-        return JSONResponse(
-            {"error": "You're out of PDF credits. Unlock 3 plans for $7. Your raw export is free.",
-             "needPurchase": True, "price": billing.PDF_PRICE_CENTS}, status_code=402)
+        owner = (s.get("user") or email or "").strip().lower()
+        if keys.enabled() and owner and keys.has_key(owner):
+            watermark = True
+        else:
+            return JSONResponse(
+                {"error": "You're out of PDF credits. Unlock 3 plans for $7, or add your own API key "
+                          "for a free watermarked copy. Your raw export is always free.",
+                 "needPurchase": True, "price": billing.PDF_PRICE_CENTS}, status_code=402)
     try:
         with _run_slot(s.get("user"), s.get("stack")):
             plan, cost = plan_pdf.synthesize(s, mock=MOCK)
-            data = plan_pdf.render(plan, style=(request.query_params.get("style") or "filg"))
+            data = plan_pdf.render(plan, style=(request.query_params.get("style") or "filg"),
+                                   watermark=watermark)
             toks = pipeline.LEDGER.tokens()
     except BusyError as be:
         return _busy_response(be)
@@ -2197,7 +2230,8 @@ async def api_plan_pdf(sid: str, request: Request):
     fn = f"{_slug(s.get('idea'))}-business-plan.pdf"
     return Response(data, media_type="application/pdf",
                     headers={"Content-Disposition": f'attachment; filename="{fn}"',
-                             "X-FILG-Cost": str(nc), "X-FILG-Tokens": str(nt)})
+                             "X-FILG-Cost": str(nc), "X-FILG-Tokens": str(nt),
+                             "X-FILG-Watermark": "1" if watermark else "0"})
 
 
 def _page_head(deep: bool = False) -> str:
