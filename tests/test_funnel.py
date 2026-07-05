@@ -440,3 +440,10 @@ def test_v2_shell_and_assets_serve(client):
     assert client.get("/static/v2.css").status_code == 200
     # the live shell (/) is untouched by the v2 addition
     assert client.get("/").status_code == 200
+    # research mode is a DISPLAY over the one chat: the in-drawer pane + the expanded drawer exist,
+    # and the js carries the three display states + the auto-exit spine
+    assert 'id=rpane' in page.text and 'id=rdrawer' in page.text and 'id=rexpand' in page.text
+    js = client.get("/static/v2.js").text
+    for needle in ("enterResearch", "exitResearch", "expandResearch", "collapseResearch",
+                   "renderResearch", "offerExitResearch", "RMODE='split'"):
+        assert needle in js, needle

@@ -223,7 +223,8 @@ function setMode(m){
   MODE=m;
   document.querySelectorAll('#modechips .mchip').forEach(b=>b.classList.toggle('on',b.dataset.mode===m));
   $('ws-wrap').className='promptwrap'+(m!=='build'?' '+m:'');
-  if(m==='build'){ closeTool(); } else { openTool(m); }
+  if(m==='research'){ closeTool(true); enterResearch(); return; }   // research lives in the drawer, not a tool
+  if(m==='build'){ closeTool(true); exitResearch(); } else { if(RMODE)exitResearch(); openTool(m); }
 }
 async function sendPrompt(){
   if(isFull())return startFromLanding();   // full mode: the first prompt IS the landing submit
@@ -235,6 +236,13 @@ async function sendPrompt(){
     chatStatus('Pivoting from '+pivotSrcLabel(from)); return pivotSpread(from,prompt); }
   // the kill gate armed "give it substance": the input IS the substance — straight to /revet
   if(REVET_ARMED){ box.value=''; return revetSend(prompt); }
+  // research mode: the first question slides the chat up into the split; every message re-focuses
+  // the stack on what's relevant (fuzzy-finder feel), and remembers whether anything matched
+  let rRelated=null;
+  if(RMODE){
+    if(RMODE==='full'){ RMODE='split'; applyRmode(); }
+    RQUERY=prompt; rRelated=renderResearch();
+  }
   // browsing an earlier node? it rides along as context (a steer pivots from it, a question is about it)
   const {t}=nodesOf(S);
   const fromNode=(FOCUS&&FOCUS!==t.active)?FOCUS:null;
@@ -249,6 +257,15 @@ async function sendPrompt(){
     chatBot(d.fork.clash||'That pulls against the committed idea — pick a path on the graph.');
     focusActive(true); return; }
   const dec=d.decision||{};
+  // the topic turned back to BUILDING → research mode bows out on its own (drawer collapses /
+  // chat slides back to full height, the Build pill re-lights), then the action runs normally
+  if(RMODE&&['steer','next','commit','diverge','pick','restart_keep','restart_hard'].includes(dec.intent))
+    exitResearch();
+  // a question that isn't about the research → answer it, then offer the way out. Two signals:
+  // the router aimed it away from research, or nothing in the stack matched the question.
+  dec._offResearch=!!RMODE&&dec.intent==='ask'&&(
+    (dec.target!=='research'&&dec.target!=='board')||
+    (rRelated===false&&researchItems().length>0));
   // when an in-chat check follows immediately, the check IS the reply — skip the say bubble
   const checks=(dec.intent==='commit'&&dec.confirm)||dec.intent==='restart_hard';
   if(!checks)chatBot(dec.say||'On it.');
@@ -284,7 +301,7 @@ async function dispatch(dec,fromNode,prompt){
       SEL=new Set(ids); renderView();
       return doMerge();
     }
-    case 'ask': return askInChat(prompt||dec.steer||'',dec.target,fromNode);   // a question gets an ANSWER, in the chat
+    case 'ask': return askInChat(prompt||dec.steer||'',dec.target,fromNode,dec._offResearch);   // a question gets an ANSWER, in the chat
     case 'steer': default:
       if(fromNode){ chatStatus('Pivoting from '+pivotSrcLabel(fromNode));
         return pivotSpread(fromNode,dec.steer||''); }   // feedback on an earlier node = pivot from it
@@ -295,9 +312,9 @@ async function dispatch(dec,fromNode,prompt){
 const BIG_STEP_ASK='Next up is the big step: deep research + building out the full plan. Go?';
 // A routed question: product questions go to /api/help, everything else to the plan-grounded
 // advisor. The reply lands as a chat bubble — a question must never die in a tool drawer.
-async function askInChat(q,target,fromNode){
+async function askInChat(q,target,fromNode,offerExit){
   if(!q)return;
-  if(target==='research')return lookupInChat(q);   // research mode = a real web lookup, graded by the gate
+  if(target==='research')return lookupInChat(q,offerExit);   // research mode = a real web lookup, graded by the gate
   if(target==='board')return boardInChat(q);       // board mode = convene the actual multi-persona board
   const th=chatSay('status','thinking…');
   const url=(target==='help')?'/api/help':`/api/plan/${SID}/chat`;
@@ -310,6 +327,7 @@ async function askInChat(q,target,fromNode){
   const reply=(d&&d.reply)||'';
   chatSay('bot',mdToHtml(reply));
   if(target==='help')chatPush('bot',reply);   // the advisor endpoint logs its own turn; /api/help doesn't
+  if(offerExit)offerExitResearch();   // answered in place — now offer the way back to building
 }
 async function boardInChat(q){
   const th=chatSay('status','convening your board…');
@@ -327,7 +345,7 @@ async function boardInChat(q){
     (d.skeptic?`\n🧐 Skeptic: ${d.skeptic.take||d.skeptic.rationale||''} [${d.skeptic.verdict||''}]`:'')+
     (d.consensus?`\nConsensus: ${d.consensus}`:'')+(d.verdict?`\nNet verdict: ${d.verdict}`:''));
 }
-async function lookupInChat(q){
+async function lookupInChat(q,offerExit){
   const th=chatSay('status','searching + grading sources…');
   const {ok,d}=await api('POST',`/api/plan/${SID}/lookup`,{message:q});
   if(th)th.remove();
@@ -339,6 +357,13 @@ async function lookupInChat(q){
     `<span class="lktier${c.flagged?' bad':''}" title="${esc(c.reason||'')}">${esc(c.tier)}</span></div>`).join('');
   chatSay('bot',`<p>Graded lookup — every stat labeled, vendor numbers flagged:</p>${rows}`);
   chatPush('bot','Graded lookup:\n'+cs.map(c=>`${c.flagged?'⚠':'✓'} ${c.text} [${c.tier}] ${c.url}`).join('\n'));
+  // the pulled claims JOIN the research stack (display-side, deduped) and the list re-focuses
+  if(RMODE){
+    const seen=new Set(researchItems().map(x=>x.text+'|'+(x.url||'')));
+    LOOKUPS.push(...cs.filter(c=>!seen.has(c.text+'|'+(c.url||''))));
+    renderResearch();
+  }
+  if(offerExit)offerExitResearch();   // it answered, but nothing local matched — offer the way back
 }
 async function steer(note){
   if(!note) return;
@@ -533,6 +558,7 @@ let HIST_OPEN=new Set();   // which nodes' "how this was built" is expanded (sur
 function histKeep(id,el){ if(el.open)HIST_OPEN.add(id); else HIST_OPEN.delete(id); }
 function resetGraph(){ GSEEN=new Set(); FOCUS=null; BROWSING=false; LAST_ACTIVE=null; WAS_RESEARCHING=false;
   PIVOT_FROM=null; REVET_ARMED=false;
+  LOOKUPS=[]; RQUERY=''; if(RMODE)exitResearch(true);   // research display is per-plan state
   WIP_LABEL=null; WIP_PENDING=null; WIPLOG=[]; LANES=[]; LANES_DONE=new Set(); PROG_N=0;
   Object.keys(NODECACHE).forEach(k=>delete NODECACHE[k]); Object.keys(NODELOG).forEach(k=>delete NODELOG[k]);
   HIST_OPEN=new Set();
@@ -1012,6 +1038,7 @@ function render(s){
   }
   if(!researching&&VIEWMODE==='docs')DOCTAB=t.active;   // the reader follows the build
   renderView();
+  if(RMODE)renderResearch();   // fresh graded rows (a build just landed) show up in the stack live
 }
 function promptFocus(){   // put the cursor back in the chat box so the user can just start typing
   const a=document.activeElement;
@@ -1019,23 +1046,98 @@ function promptFocus(){   // put the cursor back in the chat box so the user can
   const b=$('ws-box'); if(b&&!$('workspace').hidden)b.focus();
 }
 
-// ── Tool drawers (research / board / help) — one box, colored context ────────
+// ═══ RESEARCH MODE — one chat, three displays ═══════════════════════════════
+// The conversation is ALWAYS the same single chat (#chatlog is never cleared); research mode only
+// changes what the left drawer shows. States:
+//   'full'     — the research stack covers the chat history (the box stays; click Research pill)
+//   'split'    — first question slides the chat up: top = research (relevance-focused), bottom = chat
+//   'expanded' — the stack slides out into its own left-anchored drawer, chat gets the full column
+// The stack = the plan's graded rows + any claims pulled by chat lookups this session. Relevance is
+// deterministic term overlap (fuzzy-finder FEEL, not fuzzy matching). Build-intent prompts exit the
+// mode automatically; an off-research question gets an in-chat offer to exit.
+let RMODE=null, RQUERY='', LOOKUPS=[], R_OFFERED=false;
+function enterResearch(){ if(!RMODE)RMODE='full'; R_OFFERED=false; applyRmode(); renderResearch(); }
+function exitResearch(quiet){
+  if(!RMODE)return;
+  RMODE=null; RQUERY=''; applyRmode();
+  MODE='build';
+  document.querySelectorAll('#modechips .mchip').forEach(b=>b.classList.toggle('on',b.dataset.mode==='build'));
+  $('ws-wrap').className='promptwrap';
+  if(!quiet)chatStatus('Back to build mode.');
+}
+function expandResearch(){ RMODE='expanded'; applyRmode(); renderResearch(); }
+function collapseResearch(){ RMODE='split'; applyRmode(); renderResearch(); }
+function applyRmode(){
+  const L=$('left'); if(!L)return;
+  L.classList.toggle('rfull',RMODE==='full');
+  L.classList.toggle('rsplit',RMODE==='split');
+  $('rpane').setAttribute('aria-hidden',String(!(RMODE==='full'||RMODE==='split')));
+  const dr=$('rdrawer');
+  dr.classList.toggle('open',RMODE==='expanded');
+  dr.setAttribute('aria-hidden',String(RMODE!=='expanded'));
+  if(RMODE!=='full'){ const log=$('chatlog'); if(log)log.scrollTop=log.scrollHeight; }
+}
+function researchItems(){
+  const rows=((S&&S.research&&S.research.rows)||[]).map(r=>(
+    {text:r.text,url:r.url,ok:r.mark==='ok',tier:r.mark==='ok'?'cited':'vendor'}));
+  return rows.concat(LOOKUPS.map(c=>(
+    {text:c.text,url:c.url,ok:!c.flagged,tier:c.tier||(c.flagged?'vendor':'cited'),fresh:true})));
+}
+const _RSTOP=new Set(('the,a,an,and,or,but,of,to,in,on,for,with,is,are,was,were,be,been,do,does,did,'+
+  'how,what,why,when,where,who,which,i,my,me,you,your,we,our,us,it,its,this,that,these,those,about,'+
+  'should,would,could,can,will,there,here,from,into,than,then,them,they,have,has,had,not,no,yes,'+
+  'much,many,more,most,some,any,all,per,get,got,make,made,want,like,just,really,going').split(','));
+function _rterms(s){ return String(s||'').toLowerCase().replace(/[^a-z0-9$%\s]/g,' ')
+  .split(/\s+/).filter(w=>w.length>2&&!_RSTOP.has(w)); }
+function _rscore(qterms,item){
+  const t=new Set(_rterms(item.text+' '+(item.url||'')));
+  let n=0; qterms.forEach(w=>{ if(t.has(w))n++; });
+  return n;
+}
+// Paint the stack into whichever surface is live (in-drawer pane and expanded drawer share markup).
+// Returns true if the current RQUERY matched anything — the caller uses that as the relevance signal.
+function renderResearch(){
+  const items=researchItems();
+  const qt=_rterms(RQUERY);
+  const scored=items.map((it,i)=>({it,i,s:qt.length?_rscore(qt,it):0}));
+  if(qt.length)scored.sort((a,b)=>b.s-a.s||a.i-b.i);   // focused items float up, the rest dim below
+  const anyHit=scored.some(x=>x.s>0);
+  const html=items.length?scored.map(({it,s})=>
+    `<div class="rrow${s>0?' hit':(qt.length&&anyHit?' dim':'')}${it.ok?'':' flagged'}">`+
+    `${it.ok?'✅':'⚠️'} ${esc(it.text)}`+
+    (it.url?` <a href="${esc(it.url)}" target=_blank rel=noopener>src</a>`:'')+
+    `<span class=rtier>${esc(it.tier)}${it.fresh?' · lookup':''}</span></div>`).join('')
+    :'<p class=thinking>No graded research yet — it lands with the deep build. Ask a question and I\'ll dig (every claim goes through the gate).</p>';
+  ['rlist','rlist2'].forEach(id=>{ const el=$(id); if(el)el.innerHTML=html; if(el)el.scrollTop=0; });
+  return anyHit;
+}
+// An off-research question: answer it, then offer the way back to building. One chat — exiting is
+// a display change, never a history change.
+function offerExitResearch(){
+  if(R_OFFERED||!RMODE)return; R_OFFERED=true;
+  const txt="That one isn't really about the research — want to switch back to building?";
+  chatPush('bot',txt);
+  const m=chatSay('bot',esc(txt)+
+    '<div class=cbtns><button type=button class=go>Back to build</button>'+
+    '<button type=button class=nah>Stay in research</button></div>');
+  if(!m)return;
+  m.querySelector('.go').onclick=()=>{ m.classList.add('asked'); exitResearch(); };
+  m.querySelector('.nah').onclick=()=>{ m.classList.add('asked'); R_OFFERED=false;
+    chatStatus('Staying in research mode.'); };
+}
+
+// ── Tool drawers (board / help) — one box, colored context ──────────────────
 function openTool(mode){
   const dr=$('tooldrawer'); dr.hidden=false; dr.className='tooldrawer '+mode;
   $('drawerback').style.display='block';
-  $('tool-title').textContent={research:'Check the facts',board:'Board of Directors',help:'Help'}[mode]||'Tool';
+  $('tool-title').textContent={board:'Board of Directors',help:'Help'}[mode]||'Tool';
   $('tool-body').innerHTML=toolBody(mode);
 }
-function closeTool(){ $('tooldrawer').hidden=true; $('drawerback').style.display='none';
-  if(MODE!=='build'){ MODE='build'; document.querySelectorAll('#modechips .mchip').forEach(b=>b.classList.toggle('on',b.dataset.mode==='build'));
+function closeTool(keepMode){ $('tooldrawer').hidden=true; $('drawerback').style.display='none';
+  if(!keepMode&&MODE!=='build'){ MODE='build'; document.querySelectorAll('#modechips .mchip').forEach(b=>b.classList.toggle('on',b.dataset.mode==='build'));
     $('ws-wrap').className='promptwrap'; } }
 function toolBody(mode){
-  if(mode==='research'){
-    const rows=((S&&S.research&&S.research.rows)||[]);
-    if(!rows.length)return '<p class=thinking>No graded research yet — it lands after you commit to the deep run. Ask a question in the box and I\'ll dig.</p>';
-    return '<ul class=ev>'+rows.map(x=>`<li>${x.mark==='ok'?'✅':'⚠️'} ${esc(x.text)} <span class="badge ${x.mark==='ok'?'b-ok':'b-warn'}">${x.mark==='ok'?'cited':'vendor'}</span></li>`).join('')+'</ul>';
-  }
-  if(mode==='board'){ return '<p class=thinking>Your board of advisors reviews each part and can be convened. (Re-homing into v2 next.) Type a question in the box to aim them.</p>'; }
+  if(mode==='board'){ return '<p class=thinking>Your board of advisors reviews each part and can be convened. Type a question in the box to aim them.</p>'; }
   return '<p>Type your idea on the landing page, then watch it spread into a few directions, merge the ones you like, and research + build the plan. The prompt box always wins: steer, jump ahead, or start over from it anytime. It runs on us to start.</p>';
 }
 
