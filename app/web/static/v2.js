@@ -38,7 +38,17 @@ function chatSay(role,html){const log=$('chatlog'); if(!log)return null;
 function chatPush(role,text){ if(SID)api('POST',`/api/plan/${SID}/chatlog`,{role,content:text}); }   // fire-and-forget: the record survives a reload
 function chatUser(t){chatPush('user',t);return chatSay('user',esc(t));}
 function chatBot(t){chatPush('bot',t);return chatSay('bot',esc(t));}
-function chatErr(t){return chatSay('err',esc(t));}   // transient — errors aren't part of the durable record
+// transient — errors aren't part of the durable record. Consecutive IDENTICAL errors fold into one
+// bubble with a counter (four red copies of the same failure reads as a broken app, not a message).
+let LAST_ERR=null;
+function chatErr(t){
+  if(LAST_ERR&&LAST_ERR.text===t&&LAST_ERR.el&&LAST_ERR.el.isConnected){
+    LAST_ERR.n++; LAST_ERR.el.textContent=t+'  (×'+LAST_ERR.n+')';
+    const log=$('chatlog'); if(log)log.scrollTop=log.scrollHeight;
+    return LAST_ERR.el;
+  }
+  const el=chatSay('err',esc(t)); LAST_ERR={el,text:t,n:1}; return el;
+}
 function chatStatus(t){chatPush('status',t);return chatSay('status',esc(t));}
 function replayChat(list){ const log=$('chatlog'); if(!log)return; log.innerHTML='';
   (list||[]).forEach(m=>chatSay(m.role==='user'?'user':(m.role==='status'?'status':'bot'),esc(m.content||''))); }
@@ -485,11 +495,16 @@ async function doMerge(){
   try{localStorage.removeItem(selKey);}catch(e){}   // consumed — the refined node records the picks
   beginWip('Merging your picks + first-pass research',{join:picks,poll:true}); poll();
 }
+let COMMIT_BUSY=false;   // the big-step button is click-spammable while a request is in flight
 async function commit(thesis,fromNode){
-  const body={}; if(thesis)body.thesis=thesis; if(fromNode)body.node=fromNode;   // build out of THAT node
-  const {ok,d}=await api('POST',`/api/plan/${SID}/commit`,body);
-  if(!ok){ if(gateV2(d))return; chatErr((d&&d.error)||'Could not start the build.'); return; }
-  beginWip('Deep research: pulling + grading sources',{parent:fromNode||(nodesOf(S).t||{}).active,poll:true}); poll();
+  if(COMMIT_BUSY)return;
+  COMMIT_BUSY=true;
+  try{
+    const body={}; if(thesis)body.thesis=thesis; if(fromNode)body.node=fromNode;   // build out of THAT node
+    const {ok,d}=await api('POST',`/api/plan/${SID}/commit`,body);
+    if(!ok){ if(gateV2(d))return; chatErr((d&&d.error)||'Could not start the build.'); return; }
+    beginWip('Deep research: pulling + grading sources',{parent:fromNode||(nodesOf(S).t||{}).active,poll:true}); poll();
+  }finally{ COMMIT_BUSY=false; }
 }
 // ── Pivot-from-a-node: an armed ghost child ("enter feedback to pivot…") + the direct spread ──
 let PIVOT_FROM=null;

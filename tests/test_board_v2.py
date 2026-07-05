@@ -116,3 +116,34 @@ def test_commit_rejected_leaves_the_tree_untouched(client):
     opt = next(n["id"] for n in s2["tree"]["nodes"] if n["kind"] == "option")
     r3 = client.post(f"/api/plan/{sid}/commit", json={"node": opt})
     assert r3.status_code == 200
+
+
+def test_commit_resolves_a_drifted_pointer(client):
+    """'Build the plan' means the nearest buildable idea, not 'hope the pointer is right': with a
+    refined node in the tree but the active pointer stranded on the brainstorm fork (the corruption
+    the old mutate-before-validate bug left behind), commit resolves to the refined node and starts
+    the build there — no 400 loop."""
+    from app import store
+    r = client.post("/api/brainstorm", json={"idea": GRAB_BAG, "email": "drift@x.com"})
+    sid = r.json()["id"]
+    s = client.get(f"/api/plan/{sid}").json()
+    fork = s["tree"]["active"]
+    opts = [n["id"] for n in s["tree"]["nodes"] if n["kind"] == "option"][:1]
+    client.post(f"/api/plan/{sid}/merge", json={"options": opts})
+    s = wait_status(client, sid)
+    refined = s["tree"]["active"]
+    assert s["activeNode"]["kind"] == "refined"
+    # simulate the stranded pointer a corrupted session carries
+    raw = store.plan_get(sid)
+    raw["tree"]["active"] = fork
+    store.plan_save(sid, tree=raw["tree"])
+    r2 = client.post(f"/api/plan/{sid}/commit", json={})
+    assert r2.status_code == 200, r2.json()
+    s2 = wait_status(client, sid)
+    assert s2["tree"]["active"] != fork          # the pointer healed onto the build's branch
+    # the deep build grew out of the REFINED node (it's on the new active's ancestry)
+    parents = {n["id"]: n.get("parent") for n in s2["tree"]["nodes"]}
+    cur, chain = s2["tree"]["active"], set()
+    while cur:
+        chain.add(cur); cur = parents.get(cur)
+    assert refined in chain

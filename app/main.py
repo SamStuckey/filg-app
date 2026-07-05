@@ -1179,16 +1179,48 @@ async def api_plan_commit(sid: str, request: Request):
     at_id = (body.get("node") or "").strip()
     target = nodes.get(at_id) if at_id else None
     a = target or nodes.get(tree.get("active")) or {}
+    build_from = a
+
+    def _thesis_of(n: dict) -> str:
+        k = _kind(n or {})
+        if k == "refined":
+            return (n.get("thesis") or "").strip()
+        if k == "option":
+            dr = n.get("direction") or {}
+            return (dr.get("one_liner") or dr.get("title") or "").strip()
+        return ""
+
     if not thesis:
-        if _kind(a) == "refined":
-            thesis = a.get("thesis") or ""
-        elif _kind(a) == "option":
-            dr = a.get("direction") or {}
-            thesis = dr.get("one_liner") or dr.get("title") or ""
+        thesis = _thesis_of(a)
+        # POINTER-DRIFT RESILIENCE (2026-07-06): "build the plan" must mean the nearest buildable
+        # idea, not "hope the active pointer is exactly right". A drifted/stranded pointer (the old
+        # mutate-before-validate bug corrupted live sessions) landed commits on forks/sections and
+        # every retry re-failed. Resolve instead: walk UP the ancestors for a refined/option node,
+        # then fall back to the NEWEST buildable node anywhere. Only refuse when the tree genuinely
+        # has nothing to build from (a raw brainstorm with no picks).
+        cur = a
+        while not thesis and cur is not None:
+            cur = nodes.get(cur.get("parent")) if cur.get("parent") else None
+            if cur is not None:
+                t = _thesis_of(cur)
+                if t:
+                    thesis, build_from = t, cur
+        if not thesis:
+            # anywhere-fallback targets REFINED nodes only: a refined idea is a converged CHOICE;
+            # an option is an unchosen candidate — never build one the operator didn't pick
+            for n in reversed(list(nodes.values())):   # dict order = creation order → newest first
+                if _kind(n) == "refined":
+                    t = _thesis_of(n)
+                    if t:
+                        thesis, build_from = t, n
+                        break
     if len(thesis) < 8:
-        return JSONResponse({"error": "Refine an idea or pick a direction to build first."}, status_code=400)
-    if target is not None:
-        tree["active"] = at_id               # the jump happens only when the build actually starts
+        return JSONResponse(
+            {"error": "Refine an idea or pick a direction to build first "
+                      f"(the current step is a {_kind(a) or 'missing'} node and there is no refined "
+                      "idea to build from yet)."}, status_code=400)
+    if build_from.get("id") and build_from["id"] != tree.get("active"):
+        tree["active"] = build_from["id"]    # the jump happens only when the build actually starts
     tok = uuid.uuid4().hex[:8]
     tree["_run"] = tok                       # this run's epoch — a pivot mid-run invalidates it
     store.plan_save(sid, status="researching", stage="researching", tree=tree)
