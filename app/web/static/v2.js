@@ -244,6 +244,8 @@ async function sendPrompt(){
   const box=$('ws-box'), prompt=box.value.trim(); if(!prompt) return;
   $('ws-err').textContent='';
   chatUser(prompt);
+  box.value='';   // submitted — the bubble is the record; clearing NOW says "I heard you"
+                  // (routing failure below restores it so nothing typed is ever lost)
   // an armed "Pivot from here" ghost: the input IS the pivot feedback — spread from that node directly
   if(PIVOT_FROM){ const from=PIVOT_FROM; box.value=''; clearGhost();
     chatStatus('Pivoting from '+pivotSrcLabel(from)); return pivotSpread(from,prompt); }
@@ -271,8 +273,8 @@ async function sendPrompt(){
   const body={prompt,mode:MODE}; if(fromNode)body.node=fromNode;
   const {ok,d}=await api('POST',`/api/plan/${SID}/route`,body);
   btn.disabled=false; sendLabel();
-  if(!ok){ if(gateV2(d))return; chatErr((d&&d.error)||'Could not route that.'); return; }
-  box.value='';
+  if(!ok){ if(!box.value)box.value=prompt;   // give the words back — the send failed
+    if(gateV2(d))return; chatErr((d&&d.error)||'Could not route that.'); return; }
   if(d.fork){ PENDING_FORK=d.fork;
     chatBot(d.fork.clash||'That pulls against the committed idea — pick a path on the graph.');
     focusActive(true); return; }
@@ -1089,7 +1091,10 @@ function pill(show){ const p=$('gpill'); if(p)p.hidden=!show; }
 function nodeBody(n){
   const {t}=nodesOf(S);
   let body;
-  if(n.id===t.active){ const surf=stageSurface(S); body=surf?surf.html:''; }
+  // during a transitional stage (merging / researching) stageSurface has no verb to offer — but the
+  // node's CONTENT is already here; an empty wide box mid-WIP read as a swallow (Sam's QA,
+  // 2026-07-06). Show what the node IS, read-only; the WIP node owns the action.
+  if(n.id===t.active){ const surf=stageSurface(S); body=surf?surf.html:transitionalBody(); }
   else body=pastBody(n)+`<div class=ctarow><button class="stage-cta secondary" onclick="pivotFromHere('${n.id}')">⑂ Pivot from here</button></div>`;
   body+=cmtsHtml(n.id);   // inline comments on this doc, awaiting the next build verb (backlog #8)
   body+=boardNotesHtml(n.id);   // this step's convenes — the persisted history, visible on the node
@@ -1113,6 +1118,30 @@ function boardNotesHtml(id){
     `</div>`).join('');
   return `<details class=nhist${HIST_OPEN.has(id+':b')?' open':''} ontoggle="histKeep('${id}:b',this)">`+
     `<summary>🪑 board notes on this step (${list.length})</summary>${rows}</details>`;
+}
+// The active node's content while a background op runs on it — no CTAs (double-firing a merge or
+// commit mid-run is the failure this read-only view prevents), but everything readable, right away.
+function transitionalBody(){
+  const a=S&&S.activeNode; if(!a)return '';
+  if(a.kind==='brainstorm'){
+    const opts=(a.options||[]).map(o=>{const x=o.direction||{};const on=SEL.has(o.id);
+      return `<div class="opt${on?' sel':''}" style="cursor:default"><div>`+
+        `<h3>${on?'✓ ':''}${esc(x.title||'')}</h3><p>${esc(x.one_liner||'')}</p>`+
+        `${x.mold?`<span class=mold>${esc(x.mold)}</span>`:''}</div></div>`;}).join('');
+    const piv=a.feedback?`<p class=react style="font-size:14px">↳ Pivoting on: “${esc(a.feedback)}”</p>`:'';
+    return piv+setAsideHtml(a.set_aside)+`<p class=eyebrow>The directions offered</p>`+
+      `<div class=optgrid>${opts}</div><p class=thinking>✓ = your picks — merging them now.</p>`;
+  }
+  if(a.kind==='refined'){
+    const kept=(a.kept||[]).map(k=>`<li>${esc(k)}</li>`).join('');
+    const rows=((a.research&&a.research.rows)||[]).slice(0,4).map(x=>
+      `<li>${x.mark==='ok'?'✅':'⚠️'} ${esc(x.text)} <span class="badge ${x.mark==='ok'?'b-ok':'b-warn'}">${x.mark==='ok'?'cited':'vendor'}</span></li>`).join('');
+    return `<p class=react>${esc(a.thesis||'')}</p>`+(a.mold?`<span class=mold>${esc(a.mold)}</span>`:'')+
+      (kept?`<p class=eyebrow style="margin-top:14px">Kept</p><ul class=kept>${kept}</ul>`:'')+
+      (rows?`<ul class=ev>${rows}</ul>`:'')+
+      `<p class=thinking>Deep research + the full build are running on this idea now.</p>`;
+  }
+  return '';
 }
 function pastBody(n){
   const d=NODECACHE[n.id];
