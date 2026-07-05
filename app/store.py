@@ -134,7 +134,7 @@ def init() -> None:
                 # NOT EXISTS) — add any missing ones, ignore if already present.
                 have = {r["name"] for r in con.execute("PRAGMA table_info(plan_sessions)")}
                 for col in ("shaped", "vetting", "directors", "board", "tree", "chat", "progress",
-                            "custom_directors", "qa", "skeptic"):
+                            "custom_directors", "qa", "skeptic", "stage"):
                     if col not in have:
                         con.execute(f"ALTER TABLE plan_sessions ADD COLUMN {col} TEXT")
                 if "shared" not in have:

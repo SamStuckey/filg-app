@@ -38,6 +38,7 @@ import markdown
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool  # long engine calls must not block the event loop
 
 # import the engine + guardrail (prototype/) and the app-side skill/persona/board layer (app/).
 _APP_DIR = Path(__file__).resolve().parent
@@ -50,8 +51,11 @@ import board     # noqa: E402 — Board of Directors orchestration
 import director_forge  # noqa: E402 — forge a custom Board director from a description (distill→draft→QA)
 import gibberish  # noqa: E402 — pre-LLM "is this even an idea?" gate (saves a run, hands back a roast)
 import intake     # noqa: E402 — shape + vet (the kill-gate); /revet re-runs it after added substance
+import brainstorm # noqa: E402 — diverge/merge: the top of the funnel (1-3 directions → one refined idea)
+import router     # noqa: E402 — the single prompt box (intent routing) + the pivot-fork integration gate
 import plan_pdf   # noqa: E402 — styled PDF generation (synthesis + fpdf2 render)
 import advisor    # noqa: E402 — "chat with your plan" (grounded advisory layer)
+import context    # noqa: E402 — THE CONTEXT ENGINE: every model-facing view of session state
 import skeptic    # noqa: E402 — adversarial assumption-checking on the live research path
 import provider   # noqa: E402 — BYOK: per-run LLM provider (FILG's key vs a user's OpenRouter key)
 import pipeline   # noqa: E402 — engine: per-run cost ledger (run_ledger) for safe concurrency
@@ -71,6 +75,12 @@ MOCK = os.environ.get("FILG_MOCK") == "1"
 # (preferred, so it doesn't collide with a dev's own ANTHROPIC_API_KEY / Claude Code login), else
 # ANTHROPIC_API_KEY. No hosted key → fully BYOK (the user must bring their own key from the first submit).
 HOSTED_FREE = bool(provider.hosted_key())
+# One startup line so a local run never has to guess its wiring (the #1 source of confusing 500s is a
+# hosted key that didn't reach the process env).
+print(f"[filg] mock={'ON (canned, no spend)' if MOCK else 'off (REAL runs)'}"
+      f" · hosted key={'wired' if HOSTED_FREE else 'MISSING (free/anon runs will fail in real mode)'}"
+      f" · BYOK store={'on' if keys.enabled() else 'off (no FILG_KEY_SECRET)'}"
+      f" · auth={'on' if auth.AUTH_ENABLED else ('dev as ' + os.environ.get('FILG_DEV_EMAIL', '(anonymous)'))}")
 
 
 def _plan_key(s: dict) -> str | None:
@@ -237,7 +247,10 @@ def _humanize_error(e: Exception) -> tuple[str, bool]:
 def _engine_error(e: Exception, status_code: int = 500):
     """Standard JSON error for an engine route — humanized message + a needKey flag the frontend uses
     to reopen the key modal. A subscriber's fair-use BudgetError is surfaced as a 402 (every route
-    already routes unexpected exceptions here, so no per-route wiring is needed)."""
+    already routes unexpected exceptions here, so no per-route wiring is needed). The full trace goes
+    to stdout (Render logs / local terminal); the client only sees the friendly string."""
+    if not isinstance(e, BudgetError):
+        traceback.print_exc()
     if isinstance(e, BudgetError):
         return _budget_response(e)
     msg, need_key = _humanize_error(e)
@@ -599,6 +612,8 @@ def _plan_state(s: dict) -> dict:
         "qa": s.get("qa"),   # final QA-pass report {notes, fixed} on the finished plan
 
         "tree": _tree_view(s["tree"]) if s.get("tree") else None,
+        "stage": s.get("stage"),                      # funnel position: brainstorm | refined | building | done
+        "activeNode": _active_node_view(s),           # the active node's funnel payload (option cards / refined idea / fork)
         "chat": s.get("chat") or [], "chatStarters": advisor.STARTERS,
         "progress": s.get("progress") or [],
         "cost": s.get("cost") or 0, "tokens": s.get("tokens") or 0,   # live session usage meter
@@ -617,28 +632,68 @@ def _new_node(content: dict, parent: str | None) -> dict:
     return {"id": uuid.uuid4().hex[:8], "parent": parent, "children": [], **content}
 
 
+_kind = context.kind   # one owner for "what kind is this node" — the context engine
+
+
 def _tree_view(tree: dict) -> dict:
-    """Trim the stored node tree to what the frontend needs to draw + navigate it. `show` flips on
-    once a real branch exists (a node with 2+ children, or 2+ roots) — matching 'reveal the tree once
-    they branch'."""
+    """Trim the stored node tree to what the frontend needs to draw + navigate it. Carries each node's
+    `kind` so the graph can render option/refined/section/fork nodes differently. `show` is on from the
+    first render (even a single node) so the decision-graph surface is always there."""
     nodes = tree.get("nodes") or {}
     return {"active": tree.get("active"),
-            "nodes": [{"id": n["id"], "parent": n.get("parent"), "step": n["step"],
-                       "title": n.get("title"), "feedback": n.get("feedback")}
+            "nodes": [{"id": n["id"], "parent": n.get("parent"), "step": n.get("step", 0),
+                       "kind": _kind(n), "title": n.get("title"), "feedback": n.get("feedback"),
+                       # a refined node names the options it JOINED — the graph draws it as a merge
+                       # of those branches, not a sibling branch off the brainstorm fork
+                       **({"selected": n.get("selected")} if n.get("selected") else {})}
                       for n in nodes.values()],
-            "show": bool(nodes)}   # show from the first render (even a single 'setup' node) so the tool's there
+            "show": bool(nodes)}
+
+
+def _active_node_view(s: dict) -> dict | None:
+    """The active node's full funnel payload, so the frontend can render the current stage (the option
+    cards, the refined idea, a pending fork) without a second fetch. Section nodes carry no extra
+    payload (the existing `proposal`/`sections` fields already cover them)."""
+    t = s.get("tree") or {}
+    a = (t.get("nodes") or {}).get(t.get("active"))
+    if not a:
+        return None
+    k = _kind(a)
+    view = {"id": a["id"], "kind": k, "title": a.get("title")}
+    if k == "brainstorm":
+        view["spread"] = a.get("spread")
+        view["feedback"] = a.get("feedback")   # the pivot ask this spread answers (if any)
+        view["options"] = [{"id": c, "direction": ((t["nodes"].get(c) or {}).get("direction"))}
+                           for c in a.get("children", []) if _kind(t["nodes"].get(c) or {}) == "option"]
+    elif k == "option":
+        view["direction"] = a.get("direction")
+    elif k == "refined":
+        for f in ("thesis", "founder_edge", "mold", "kept", "dropped", "research", "selected"):
+            view[f] = a.get(f)
+    elif k == "fork":
+        view["question"] = a.get("question")
+        view["options"] = a.get("options")
+    return view
 
 
 def _mirror(tree: dict) -> dict:
     """Flat session fields (step/files/proposal/history/board/status) for the active node, so the
-    existing _plan_state + frontend renders keep working off the active branch unchanged."""
+    existing _plan_state + frontend renders keep working off the active branch unchanged. A funnel node
+    (brainstorm/option/refined/fork) isn't a plan section, so it mirrors to neutral 'building' state with
+    no proposal — the funnel payload rides on _active_node_view instead."""
     a = tree["nodes"][tree["active"]]
+    if _kind(a) != "section":
+        return {"step": 0, "files": {}, "history": [], "board": [], "proposal": None,
+                "qa": None, "status": "building"}
     done = a["step"] >= planner.N
     return {"step": a["step"], "files": a["files"], "history": a["history"], "board": a["board"],
             "proposal": (None if done else {"section": a["section"], "title": a["title"],
                                             "draft": a["draft"], "change": a.get("change")}),
             "qa": a.get("qa") if done else None,   # the final QA-pass report, surfaced on the finished branch
-            "status": "done" if done else "building"}
+            "status": "done" if done else "building",
+            # the funnel stage must land on 'done' too, or the frontend keeps offering the next
+            # chapter forever ('Part 8 of 7' + Keep going — the off-ramp bug, 2026-07-04)
+            **({"stage": "done"} if done else {})}
 
 
 def _regrade_setup(s: dict, node: dict, cost: float) -> tuple[dict | None, float]:
@@ -704,6 +759,157 @@ def _plan_research(session_id: str, idea: str, user: str) -> None:
         store.plan_save(session_id, status="error", error=_humanize_error(e)[0])
 
 
+# ── The diverge/converge funnel (brainstorm → merge → commit), layered on the same node tree ──
+def _diverge_tree(diverge: dict, parent: str | None = None) -> tuple[dict, str]:
+    """A `brainstorm` fork node with one `option` child per direction. Returns (nodes_by_id,
+    brainstorm_node_id). The active pointer sits on the brainstorm node (the fork being decided)."""
+    b = _new_node({"kind": "brainstorm", "step": 0, "title": "A few directions",
+                   "spread": diverge.get("spread"), "draft": None, "files": {}, "history": [],
+                   "board": []}, parent)
+    nodes = {b["id"]: b}
+    for d in (diverge.get("directions") or []):
+        o = _new_node({"kind": "option", "step": 0, "title": d.get("title") or "Direction",
+                       "direction": d, "draft": d.get("one_liner"), "files": {}, "history": [],
+                       "board": []}, b["id"])
+        b["children"].append(o["id"])
+        nodes[o["id"]] = o
+    return nodes, b["id"]
+
+
+def _refined_node(m: dict, selected: list, parent: str | None) -> dict:
+    """The reconciled single idea (+ the adversarial cull + a light research skim) as one `refined`
+    node, a child of the brainstorm fork. `selected` records which option ids fed the merge."""
+    return _new_node({"kind": "refined", "step": 0, "title": "Refined idea", "thesis": m["thesis"],
+                      "founder_edge": m.get("founder_edge"), "mold": m.get("mold"),
+                      "kept": m.get("kept"), "dropped": m.get("dropped"), "research": m.get("research"),
+                      "selected": selected, "draft": m["thesis"], "files": {}, "history": [],
+                      "board": []}, parent)
+
+
+def _meter_bg(user: str, prov, cost: float, toks: int, *, is_run: bool = False,
+              research_cost: float = 0.0) -> None:
+    """Meter a background funnel op that ran on FILG's hosted key. A subscriber's usage counts against
+    their monthly cap; a free user's daily kill-switch is always fed (record_spend); only a COMMIT (the
+    deep research run) counts as a metered free 'run'. Ops on a user's own key aren't FILG's spend."""
+    if prov is None or not getattr(prov, "bills_filg", False):
+        return
+    if _is_subscriber(user):
+        usage.record_monthly(_acct(user), _period(user), cost, toks)
+        return
+    if is_run:
+        usage.record_run(auth.normalize_email(user), research_cost)
+        usage.record_spend(round(cost - research_cost, 4))
+    else:
+        usage.record_spend(cost)
+
+
+def _bg_progress(sid: str, base_cost: float, base_tokens: int, progress: list):
+    """A progress sink for a background funnel op: append the line + persist the running (base + this
+    run's) cost/tokens so the session meter ticks live during the op."""
+    def on_progress(line: str) -> None:
+        progress.append(line)
+        store.plan_save(sid, progress=list(progress), tokens=base_tokens + pipeline.LEDGER.tokens(),
+                        cost=round(base_cost + pipeline.LEDGER.cost(), 4))
+    return on_progress
+
+
+def _fresh_tree_or_abandon(sid: str, tok: str | None):
+    """Run-epoch check for a finishing background run: re-read the session and return
+    (session, tree) to attach into — the FRESH tree, so nothing written mid-run is clobbered.
+    If the user moved on (pivoted / started another run: the tree's `_run` token changed),
+    return None and mark the abandonment in the progress log. The in-flight spend is already
+    metered; only the RESULT is discarded — the user's newer state always wins."""
+    s1 = store.plan_get(sid) or {}
+    tree = s1.get("tree") or {}
+    if tok and tree.get("_run") != tok:
+        prog = list(s1.get("progress") or []) + ["✂ run abandoned — you moved on before it finished"]
+        store.plan_save(sid, progress=prog)
+        return None
+    return s1, tree
+
+
+def _run_merge(sid: str, option_ids: list, user: str, tok: str | None = None) -> None:
+    """Background: reconcile the chosen directions into one refined idea (+ light research skim), then
+    attach a `refined` node under the brainstorm fork and advance the active pointer to it."""
+    try:
+        s0 = store.plan_get(sid) or {}
+        base_cost, base_tokens = s0.get("cost") or 0, s0.get("tokens") or 0
+        progress = list(s0.get("progress") or [])
+        nodes0 = (s0.get("tree") or {}).get("nodes") or {}
+        directions = [(nodes0.get(i) or {}).get("direction") for i in option_ids]
+        directions = [d for d in directions if d]
+        prov = _provider_for(user)
+        stk = tiers.clamp_stack(s0.get("stack"), tier=_tier(user), byok=bool(prov and not prov.bills_filg))
+        with provider.use(prov), provider.use_stack(stk), pipeline.run_ledger():
+            m, cost = brainstorm.merge(s0["idea"], directions, mock=MOCK,
+                                       on_progress=_bg_progress(sid, base_cost, base_tokens, progress))
+            toks = pipeline.LEDGER.tokens()
+        _meter_bg(user, prov, cost, toks)
+        fresh = _fresh_tree_or_abandon(sid, tok)
+        if fresh is None:
+            return                                # the user pivoted mid-run — their newer state wins
+        _s1, tree = fresh
+        nodes = tree.get("nodes") or {}
+        parent = tree.get("active")
+        refined = _refined_node(m, option_ids, parent)
+        nodes[refined["id"]] = refined
+        if parent and nodes.get(parent):
+            nodes[parent].setdefault("children", []).append(refined["id"])
+        tree["active"] = refined["id"]
+        store.plan_save(sid, status="building", stage="refined", tree=tree, progress=progress,
+                        cost=round(base_cost + cost, 4), tokens=base_tokens + toks)
+    except Exception as e:  # noqa: BLE001
+        traceback.print_exc()
+        store.plan_save(sid, status="error", error=_humanize_error(e)[0])
+
+
+def _deep_build(sid: str, thesis: str, user: str, tok: str | None = None) -> None:
+    """Background: the COMMIT step — the one deep research run + first section draft, attached to the
+    tree under the active (refined) node so the funnel history is preserved. Same engine as the legacy
+    welcome run, but it grows the existing tree instead of reseeding a fresh root."""
+    try:
+        s0 = store.plan_get(sid) or {}
+        base_cost, base_tokens = s0.get("cost") or 0, s0.get("tokens") or 0
+        progress = list(s0.get("progress") or [])
+        prov = _provider_for(user)
+        stk = tiers.clamp_stack(s0.get("stack"), tier=_tier(user), byok=bool(prov and not prov.bills_filg))
+        with provider.use(prov), provider.use_stack(stk), pipeline.run_ledger():
+            prep = planner.prepare(thesis, mock=MOCK,
+                                   on_progress=_bg_progress(sid, base_cost, base_tokens, progress))
+            toks = pipeline.LEDGER.tokens()
+        _meter_bg(user, prov, prep["cost"], toks, is_run=True, research_cost=prep["research_cost"])
+        fresh = _fresh_tree_or_abandon(sid, tok)
+        if fresh is None:
+            return                                # the user pivoted mid-run — their newer state wins
+        _s1, tree = fresh
+        nodes = tree.get("nodes") or {}
+        parent = tree.get("active")
+        root = _new_node(planner.root_node(prep["proposal"]), parent)   # a plain section node (kind absent)
+        nodes[root["id"]] = root
+        if parent and nodes.get(parent):
+            nodes[parent].setdefault("children", []).append(root["id"])
+        tree["active"] = root["id"]
+        store.plan_save(sid, status="building", stage="building", research=prep["research"], step=0,
+                        proposal=prep["proposal"], shaped=prep["shaped"], vetting=prep["vetting"],
+                        tree=tree, progress=progress, cost=round(base_cost + prep["cost"], 4),
+                        tokens=base_tokens + toks)
+    except Exception as e:  # noqa: BLE001
+        traceback.print_exc()
+        store.plan_save(sid, status="error", error=_humanize_error(e)[0])
+
+
+# ── The context engine (app/context.py) owns every model-facing view of session state. These
+# aliases keep main.py's historical names; DO NOT grow new context strings here — add to the
+# engine's renderers/views so every consumer inherits the change (see tests/test_context.py).
+_node_snippet = context.snippet
+_journey_digest = context.journey
+_route_context = context.screen
+
+
+def _path_snippets(nodes: dict, at_id: str | None) -> list[str]:   # legacy signature shim
+    return context.path({"tree": {"nodes": nodes}}, at_id)
+
+
 @app.post("/api/plan/start")
 async def api_plan_start(request: Request):
     body = await request.json()
@@ -754,6 +960,309 @@ async def api_plan_start(request: Request):
     store.plan_save(sid, stack=provider.stack_name(body.get("stack")))  # honor the crew picked at intake
     threading.Thread(target=_plan_research, args=(sid, idea, user), daemon=True).start()
     return {"id": sid}
+
+
+@app.post("/api/brainstorm")
+async def api_brainstorm(request: Request):
+    """Top of the funnel — ANONYMOUS, no email/login required. Spread a raw prompt into 1-3 loose,
+    vetted-shape directions (pure LLM, no web, cheap) and seed the decision tree with a brainstorm fork
+    + one option node per direction. This is the free, frictionless entry point."""
+    body = await request.json()
+    idea = (body.get("idea") or "").strip()
+    if len(idea) < 12:
+        return JSONResponse({"error": "Tell me a bit more about the idea."}, status_code=400)
+    if gibberish.looks_like_gibberish(idea):   # total nonsense → free roast, no run
+        return JSONResponse({"gibberish": True, **gibberish.roast(idea)})
+    user, _verified = _identity(request, body.get("email"))   # may be "" (anonymous) — that's allowed here
+    directors = [k for k in (body.get("directors") or []) if k in personas.KEYS]
+    sid = uuid.uuid4().hex[:12]
+    store.plan_create(sid, user, idea, directors=directors)
+    store.plan_save(sid, stack=provider.stack_name(body.get("stack")))
+    def _work():   # off the event loop: other requests (node reads, polls) stay live while this thinks
+        with _run_slot(user, body.get("stack")):
+            d, cost = brainstorm.diverge(idea, mock=MOCK)
+            return d, cost, pipeline.LEDGER.tokens()
+    try:
+        d, cost, toks = await run_in_threadpool(_work)
+    except BusyError as be:
+        return _busy_response(be)
+    except Exception as e:  # noqa: BLE001
+        return _engine_error(e)
+    _meter_bg(user, _provider_for(user), cost, toks)
+    # The tree roots at a BASE `idea` node (the raw prompt). Every spread — including later pivots and
+    # step-one rebuilds — branches beneath it, so alternate takes always share a common ancestor and
+    # no branch is ever orphaned.
+    base = _new_node({"kind": "idea", "step": 0, "title": "Your idea", "draft": idea,
+                      "files": {}, "history": [], "board": []}, None)
+    nodes, bid = _diverge_tree(d, base["id"])
+    base["children"].append(bid)
+    nodes[base["id"]] = base
+    store.plan_save(sid, status="building", stage="brainstorm", tree={"nodes": nodes, "active": bid},
+                    cost=round(cost, 4), tokens=toks)
+    return _plan_state(store.plan_get(sid))
+
+
+@app.post("/api/plan/{sid}/rebrainstorm")
+async def api_plan_rebrainstorm(sid: str, request: Request):
+    """Re-spread WITHIN the same tree: a pivot, a 'show me other directions', or a 'start over but
+    keep X'. Runs diverge and attaches a new brainstorm fork off the PIVOT POINT (the active node; a
+    re-spread while already on a fork lands as its sibling), so the old branch stays in the graph."""
+    s = store.plan_get(sid)
+    if not s or not _owns(request, s):
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    body = await request.json()
+    idea = (body.get("idea") or s.get("idea") or "").strip()
+    feedback = (body.get("feedback") or "").strip()
+    if not feedback and len(idea) < 12:
+        return JSONResponse({"error": "Tell me a bit more about the idea."}, status_code=400)
+    tree = s.get("tree") or {"nodes": {}, "active": None}
+    nodes = tree.get("nodes") or {}
+    # the pivot point: an explicitly named node (the one the user had open) beats the active one
+    at = nodes.get((body.get("node") or "").strip()) or nodes.get(tree.get("active")) or {}
+    # THE PIVOT CONTRACT: context = the pivot node + its ancestors (root → node, last item = chosen);
+    # siblings/descendants dropped; the pivot feedback OUTWEIGHS all of it.
+    path = _path_snippets(nodes, at.get("id")) if at else []
+    path_block = "\n".join(f"- {p}" for p in path) or f"- the original idea: {s.get('idea', '')[:160]}"
+    if feedback:
+        div_input = (
+            f"THE OPERATOR IS PIVOTING. Their pivot instruction OUTWEIGHS everything below — the new "
+            f"directions must be a genuine change of course that honors it:\n{feedback}\n\n"
+            f"COMMITTED PATH (root \u2192 the pivot point; treat each item, especially the LAST, as "
+            f"chosen context — nothing outside this path applies):\n{path_block}")
+    else:
+        div_input = (f"{idea}\n\nCOMMITTED PATH (root \u2192 the pivot point; treat each item as "
+                     f"chosen context):\n{path_block}")
+    def _work():
+        with _run_slot(s.get("user"), s.get("stack")):
+            d, cost = brainstorm.diverge(div_input, mock=MOCK)
+            return d, cost, pipeline.LEDGER.tokens()
+    try:
+        d, cost, toks = await run_in_threadpool(_work)
+    except BusyError as be:
+        return _busy_response(be)
+    except Exception as e:  # noqa: BLE001
+        return _engine_error(e)
+    _meter_bg(s.get("user"), _provider_for(s.get("user")), cost, toks)
+    # every node is branchable: the new spread is a CHILD of the pivot node itself, always
+    parent = at.get("id")
+    # permanent evidence line — pivots are core IP, every hop must be verifiable in the server log
+    print(f"[pivot] sid={sid} node_in={(body.get('node') or None)!r} resolved={at.get('id')}/"
+          f"{_kind(at) if at else None} parent={parent} feedback={feedback[:80]!r}")
+    new_nodes, bid = _diverge_tree(d, parent)
+    new_nodes[bid]["feedback"] = feedback or idea[:120]   # the pivot ask, visible on the fork forever
+    nodes.update(new_nodes)
+    if parent and nodes.get(parent):
+        nodes[parent].setdefault("children", []).append(bid)
+    tree["nodes"] = nodes
+    tree["active"] = bid
+    tree["_run"] = uuid.uuid4().hex[:8]      # pivoting abandons any run still in flight — you moved on
+    _fold_usage(sid, s, cost, toks, tree=tree, stage="brainstorm", **_mirror(tree))
+    return _plan_state(store.plan_get(sid))
+
+
+@app.post("/api/plan/{sid}/merge")
+async def api_plan_merge(sid: str, request: Request):
+    """Converge: reconcile the checked directions into one refined idea (+ adversarial cull + a light
+    research skim). Runs in the background (the skim hits the web); the frontend polls /api/plan/{sid}."""
+    s = store.plan_get(sid)
+    if not s or not _owns(request, s):
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    body = await request.json()
+    nodes = (s.get("tree") or {}).get("nodes") or {}
+    valid = [i for i in (body.get("options") or [])
+             if isinstance(i, str) and _kind(nodes.get(i) or {}) == "option"]
+    if not valid:
+        return JSONResponse({"error": "Pick at least one direction to try."}, status_code=400)
+    tok = uuid.uuid4().hex[:8]
+    tree = s.get("tree") or {"nodes": {}, "active": None}
+    tree["_run"] = tok                       # this run's epoch — a pivot mid-run invalidates it
+    store.plan_save(sid, status="researching", stage="merging", tree=tree)
+    threading.Thread(target=_run_merge, args=(sid, valid, s.get("user"), tok), daemon=True).start()
+    return {"id": sid}
+
+
+@app.post("/api/plan/{sid}/commit")
+async def api_plan_commit(sid: str, request: Request):
+    """'I'm sold, build the plan' — the one deep research run + first plan page. Uses the active refined
+    node's thesis (or a direction/thesis passed in the body). Background; the frontend polls."""
+    s = store.plan_get(sid)
+    if not s or not _owns(request, s):
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    body = await request.json()
+    thesis = (body.get("thesis") or "").strip()
+    tree = s.get("tree") or {}
+    nodes = tree.get("nodes") or {}
+    # building from an explicitly named node (the one the user had open) jumps the active pointer
+    # there first, so the deep build grows out of THAT node
+    at_id = (body.get("node") or "").strip()
+    if at_id and nodes.get(at_id):
+        tree["active"] = at_id
+        store.plan_save(sid, tree=tree)
+    a = nodes.get(tree.get("active")) or {}
+    if not thesis:
+        if _kind(a) == "refined":
+            thesis = a.get("thesis") or ""
+        elif _kind(a) == "option":
+            dr = a.get("direction") or {}
+            thesis = dr.get("one_liner") or dr.get("title") or ""
+    if len(thesis) < 8:
+        return JSONResponse({"error": "Refine an idea or pick a direction to build first."}, status_code=400)
+    tok = uuid.uuid4().hex[:8]
+    tree["_run"] = tok                       # this run's epoch — a pivot mid-run invalidates it
+    store.plan_save(sid, status="researching", stage="researching", tree=tree)
+    threading.Thread(target=_deep_build, args=(sid, thesis, s.get("user"), tok), daemon=True).start()
+    return {"id": sid}
+
+
+@app.post("/api/plan/{sid}/route")
+async def api_plan_route(sid: str, request: Request):
+    """The single prompt box. Classify a free-text prompt against the funnel stage + active tool mode
+    into one action (steer/commit/diverge/restart_keep/restart_hard/ask). A plan-stage steer that hard-
+    clashes with the committed idea returns a `fork` (discard vs pivot) instead of applying. Returns the
+    decision; the frontend acts on it (calls /merge, /commit, /next, /redraft, a tool, etc.)."""
+    s = store.plan_get(sid)
+    if not s or not _owns(request, s):
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    body = await request.json()
+    prompt = (body.get("prompt") or "").strip()
+    if not prompt:
+        return JSONResponse({"error": "Type something."}, status_code=400)
+    mode = body.get("mode") or "build"
+    node_id = (body.get("node") or "").strip() or None   # the node the user has open (browse context)
+    stage = s.get("stage") or ("building" if s.get("proposal") else "plan")
+    rstage = {"brainstorm": "brainstorm", "merging": "merge", "refined": "refined",
+              "building": "plan", "done": "plan"}.get(stage, "plan")
+    def _work():
+        with _run_slot(s.get("user"), s.get("stack")):
+            decision, cost = router.route(prompt, stage=rstage, mode=mode,
+                                          context=_route_context(s, node_id), mock=MOCK)
+            fork = None
+            if decision["intent"] == "steer" and rstage == "plan" and decision.get("steer"):
+                idea = planner._working_idea(s)
+                ic, ic_cost = router.check_integration(
+                    decision["steer"], idea, planner.bundle_markdown(idea, s.get("files") or {}), mock=MOCK)
+                cost = round(cost + ic_cost, 4)
+                if not ic["integrable"]:
+                    fork = {"clash": ic["clash"], "skeptic_say": ic["skeptic_say"],
+                            "steer": decision["steer"]}
+            return decision, fork, cost, pipeline.LEDGER.tokens()
+    try:
+        decision, fork, cost, toks = await run_in_threadpool(_work)
+    except BusyError as be:
+        return _busy_response(be)
+    except Exception as e:  # noqa: BLE001
+        return _engine_error(e)
+    _fold_usage(sid, s, cost, toks)
+    out = {"decision": decision, "cost": cost, "tokens": toks}
+    if fork:
+        out["fork"] = fork
+    return out
+
+
+_MOCK_LOOKUP = [
+    {"text": "Companies spend an average of $75 per employee per month on office snacks",
+     "url": "https://snackvendor.example.com/report", "tier": "vendor", "flagged": True,
+     "reason": "vendor-published stat promoting its own category"},
+    {"text": "U.S. office food-service spending grew 4% year over year",
+     "url": "https://bls.gov/example", "tier": "primary", "flagged": False, "reason": ""},
+]
+
+
+@app.post("/api/plan/{sid}/lookup")
+async def api_plan_lookup(sid: str, request: Request):
+    """A fast, GRADED research lookup from the chat's research mode: one web-search lane on the
+    question, every claim through the source-credibility gate (the moat), labeled — never laundered."""
+    s = store.plan_get(sid)
+    if not s or not _owns(request, s):
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    if (wall := _key_wall(s)):
+        return wall
+    body = await request.json()
+    question = (body.get("message") or "").strip()
+    if not question:
+        return JSONResponse({"error": "Ask a research question."}, status_code=400)
+    if len(question) > 500:
+        return JSONResponse({"error": "Keep it under 500 characters."}, status_code=400)
+    if MOCK:
+        return {"claims": [dict(c) for c in _MOCK_LOOKUP], "cost": 0, "tokens": 0}
+
+    def _work():
+        with _run_slot(s.get("user"), s.get("stack")):
+            claims = pipeline.research_lane(planner._working_idea(s), question)
+            verdicts = pipeline.gate_claims(claims)
+            return verdicts, round(pipeline.LEDGER.cost(), 4), pipeline.LEDGER.tokens()
+    try:
+        verdicts, cost, toks = await run_in_threadpool(_work)
+    except BusyError as be:
+        return _busy_response(be)
+    except Exception as e:  # noqa: BLE001
+        return _engine_error(e)
+    _meter(s.get("user"), cost)
+    nc, nt = _fold_usage(sid, s, cost, toks)
+    return {"claims": [{"text": v.claim.text, "url": v.claim.source_url, "tier": v.tier,
+                        "flagged": bool(v.flagged), "reason": v.reason or ""} for v in verdicts],
+            "cost": nc, "tokens": nt}
+
+
+@app.post("/api/plan/{sid}/chatlog")
+async def api_plan_chatlog(sid: str, request: Request):
+    """Append one message to the session's conversation record (the v2 left-panel chat). Pure logging,
+    no AI call — the client posts what it rendered so the conversation survives a reload. Distinct from
+    /chat (the v1 advisor, which generates a reply)."""
+    s = store.plan_get(sid)
+    if not s or not _owns(request, s):
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    body = await request.json()
+    role = body.get("role")
+    content = str(body.get("content") or "").strip()[:2000]
+    if role not in ("user", "bot", "status") or not content:
+        return JSONResponse({"error": "role must be user/bot/status, content required"}, status_code=400)
+    chat = list(s.get("chat") or [])
+    chat.append({"role": role, "content": content})
+    store.plan_save(sid, chat=chat[-400:])   # a long session stays bounded
+    return {"ok": True}
+
+
+@app.get("/api/plan/{sid}/node/{nid}")
+async def api_plan_node(sid: str, nid: str, request: Request):
+    """Lazy node content for the decision-graph zoom: given a node id, return its full page (the
+    section's built content, the option's direction, the refined idea, or a fork's options)."""
+    s = store.plan_get(sid)
+    if not s or not _owns(request, s):
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    n = ((s.get("tree") or {}).get("nodes") or {}).get(nid)
+    if not n:
+        return JSONResponse({"error": "unknown node"}, status_code=404)
+    k = _kind(n)
+    out = {"id": n["id"], "kind": k, "title": n.get("title"), "parent": n.get("parent"),
+           "children": n.get("children") or [], "feedback": n.get("feedback"), "step": n.get("step", 0)}
+    if k == "section":
+        sec = next((x for x in planner.SECTIONS if x["key"] == n.get("section")), None)
+        content = (n.get("files") or {}).get(sec["file"]) if sec else None
+        out.update({"section": n.get("section"), "sub": (sec or {}).get("sub"),
+                    "draft": n.get("draft"), "content": content})
+    elif k == "option":
+        out["direction"] = n.get("direction")
+    elif k == "refined":
+        for f in ("thesis", "founder_edge", "mold", "kept", "dropped", "research", "selected"):
+            out[f] = n.get(f)
+    elif k == "brainstorm":
+        out["spread"] = n.get("spread")
+        out["feedback"] = n.get("feedback")   # the pivot ask this spread was answering (if any)
+        # the fork's story, self-contained: every direction offered + which were picked (a pick =
+        # named in any join's `selected` anywhere in the tree)
+        nodes = (s.get("tree") or {}).get("nodes") or {}
+        chosen = set()
+        for x in nodes.values():
+            chosen.update(x.get("selected") or [])
+        out["options"] = [{"id": c["id"], "direction": c.get("direction"), "picked": c["id"] in chosen}
+                          for c in (nodes.get(i) for i in (n.get("children") or []))
+                          if c and _kind(c) == "option"]
+    elif k == "idea":
+        out["draft"] = n.get("draft")   # the raw prompt the whole tree grew from
+    elif k == "fork":
+        out.update({"question": n.get("question"), "options": n.get("options")})
+    return out
 
 
 @app.get("/api/plans")
@@ -901,7 +1410,7 @@ async def api_plan_next(sid: str, request: Request):
     active = tree["nodes"][tree["active"]]
     if active["step"] >= planner.N:
         return JSONResponse({"error": "This plan is already complete."}, status_code=409)
-    try:
+    def _work():
         with _run_slot(s.get("user"), s.get("stack")):
             if killed:   # forced past the gate with no substance → waste-of-time mode (comedic, skips research → ~$0)
                 child, cost = planner.wod_forward(active)
@@ -910,7 +1419,9 @@ async def api_plan_next(sid: str, request: Request):
                                               directors=s.get("directors") or None,
                                               founder=planner._founder(s), mock=MOCK,
                                               extra_personas=s.get("custom_directors"))
-            toks = pipeline.LEDGER.tokens()
+            return child, cost, pipeline.LEDGER.tokens()
+    try:
+        child, cost, toks = await run_in_threadpool(_work)
     except BusyError as be:
         return _busy_response(be)
     except Exception as e:  # noqa: BLE001
@@ -1027,12 +1538,14 @@ async def api_plan_redraft(sid: str, request: Request):
     active = tree["nodes"][tree["active"]]
     if active["step"] >= planner.N:
         return JSONResponse({"error": "This plan is already complete."}, status_code=409)
-    try:
+    def _work():
         with _run_slot(s.get("user"), s.get("stack")):
             sib, cost = planner.rebranch(planner._working_idea(s), s["research"], active, feedback,
                                          founder=planner._founder(s), mock=MOCK)
-            regrade, cost = _regrade_setup(s, sib, cost)   # setup reframed → re-grade the verdict on the new angle
-            toks = pipeline.LEDGER.tokens()
+            regrade, cost2 = _regrade_setup(s, sib, cost)   # setup reframed → re-grade the verdict on the new angle
+            return sib, regrade, cost2, pipeline.LEDGER.tokens()
+    try:
+        sib, regrade, cost, toks = await run_in_threadpool(_work)
     except BusyError as be:
         return _busy_response(be)
     except Exception as e:  # noqa: BLE001
@@ -1127,11 +1640,13 @@ async def api_plan_board(sid: str, request: Request):
         "Vet the plan so far — what's the one thing I should change before continuing?"
     work_idea = planner._working_idea(s)
     plan_text = planner.bundle_markdown(work_idea, s.get("files") or {})
-    try:
+    def _work():
         with _run_slot(s.get("user"), s.get("stack")):
             res, cost = board.convene(work_idea, plan_text, question, directors, mock=MOCK,
                                       extra_personas=customs)
-            toks = pipeline.LEDGER.tokens()
+            return res, cost, pipeline.LEDGER.tokens()
+    try:
+        res, cost, toks = await run_in_threadpool(_work)
     except BusyError as be:
         return _busy_response(be)
     except Exception as e:  # noqa: BLE001
@@ -1309,8 +1824,9 @@ async def api_plan_chat(sid: str, request: Request):
     s = store.plan_get(sid)
     if not s or not _owns(request, s):
         return JSONResponse({"error": "unknown session"}, status_code=404)
-    if s["status"] in ("researching", "error"):
-        return JSONResponse({"error": "Finish building the plan first."}, status_code=409)
+    if s["status"] == "error":
+        return JSONResponse({"error": "This plan hit an error — start over or re-run it first."},
+                            status_code=409)
     if (wall := _key_wall(s)):
         return wall
     body = await request.json()
@@ -1319,17 +1835,32 @@ async def api_plan_chat(sid: str, request: Request):
         return JSONResponse({"error": "Ask a question."}, status_code=400)
     if len(message) > 2000:
         return JSONResponse({"error": "Keep it under 2000 characters."}, status_code=400)
+    # v2 logs the user's bubble itself via /chatlog before routing here — log_user=false stops the
+    # double entry, and the trailing duplicate is trimmed from what the model sees
+    echo_user = bool(body.get("log_user", True))
     history = list(s.get("chat") or [])
-    try:
+    hist_model = (history[:-1] if (not echo_user and history
+                                   and (history[-1].get("content") or "") == message) else history)
+
+    journey = _journey_digest(s)   # the decision tree — options, picks, pivots — else the advisor is blind to it
+    situation = context.situation(s, (body.get("node") or "").strip() or None,
+                                  (str(body.get("working") or "").strip() or None))
+
+    def _work():
         with _run_slot(s.get("user"), s.get("stack")):
-            reply, cost = advisor.chat_reply(s, message, history=history, mock=MOCK)
-            toks = pipeline.LEDGER.tokens()
+            reply, cost = advisor.chat_reply(s, message, history=hist_model, mock=MOCK,
+                                             journey=journey, situation=situation)
+            return reply, cost, pipeline.LEDGER.tokens()
+    try:
+        reply, cost, toks = await run_in_threadpool(_work)
     except BusyError as be:
         return _busy_response(be)
     except Exception as e:  # noqa: BLE001
         traceback.print_exc()
         return JSONResponse({"error": str(e)}, status_code=500)
-    history += [{"role": "user", "content": message}, {"role": "assistant", "content": reply}]
+    history = list(store.plan_get(sid).get("chat") or [])   # re-read: a run may have logged mid-flight
+    history += (([{"role": "user", "content": message}] if echo_user else [])
+                + [{"role": "assistant", "content": reply}])
     _meter(s.get("user"), cost)  # FILG-key chat counts toward the daily kill switch; BYOK is the user's spend
     nc, nt = _fold_usage(sid, s, cost, toks, chat=history)
     return {"reply": reply, "messages": history, "cost": nc, "tokens": nt}
@@ -1611,11 +2142,9 @@ async def api_plan_pdf(sid: str, request: Request):
                              "X-FILG-Cost": str(nc), "X-FILG-Tokens": str(nt)})
 
 
-def _render_page(deep: bool = False) -> str:
-    """The single-page app shell. Served at `/` and at clean deep-link paths like `/plan/{id}` so the
-    frontend can use real History-API URLs (no `#`) and direct-load / refresh still works. `deep`
-    (a `/plan/{id}` load) marks the document up front so the intake never flashes before the plan
-    routes in — the boot loader shows instead until render() clears it."""
+def _page_head(deep: bool = False) -> str:
+    """The `__FILG_HEAD__` block: the window.FILG config + optional deep-link + Supabase script. Shared
+    by the live shell (_render_page) and the v2 surface so both boot with the same config."""
     cfg = json.dumps({"authEnabled": auth.AUTH_ENABLED,
                       "pdfBilling": billing.PDF_BILLING_ENABLED, "pdfPrice": billing.PDF_PRICE_CENTS,
                       "byokEnabled": keys.enabled(),
@@ -1634,12 +2163,33 @@ def _render_page(deep: bool = False) -> str:
         head += "<script>document.documentElement.className+=' route-plan'</script>"
     if auth.AUTH_ENABLED:
         head += '<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>'
-    return PAGE.replace("__FILG_HEAD__", head)
+    return head
+
+
+def _render_page(deep: bool = False) -> str:
+    """The single-page app shell. Served at `/` and at clean deep-link paths like `/plan/{id}` so the
+    frontend can use real History-API URLs (no `#`) and direct-load / refresh still works."""
+    return PAGE.replace("__FILG_HEAD__", _page_head(deep))
 
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
     return _render_page()
+
+
+@app.get("/v2", response_class=HTMLResponse)
+async def v2():
+    """The UX-overhaul surface: the unified two-panel build (left = prompt box + tree + tools, right =
+    the decision graph). Wired to the funnel routes (/api/brainstorm → /merge → /commit) + /route.
+    Served alongside the live app so the new experience can be built + shown without destabilizing it."""
+    return V2_PAGE.replace("__FILG_HEAD__", _page_head())
+
+
+@app.get("/v2/plan/{sid}", response_class=HTMLResponse)
+async def v2_plan(sid: str):
+    """Deep link into a v2 plan: same shell, the frontend reads the id from the path and restores the
+    session — graph, documents, and the conversation log."""
+    return V2_PAGE.replace("__FILG_HEAD__", _page_head())
 
 
 @app.get("/plan/{sid}", response_class=HTMLResponse)
@@ -1662,3 +2212,4 @@ async def account_page(tab: str = ""):
 # The shell lives in app/web/index.html (CSS/JS split into app/web/static, served via the /static
 # mount above). Read once at import; _render_page injects __FILG_HEAD__ per request.
 PAGE = (_WEB_DIR / "index.html").read_text(encoding="utf-8")
+V2_PAGE = (_WEB_DIR / "v2.html").read_text(encoding="utf-8")   # the UX-overhaul two-panel surface (/v2)

@@ -19,6 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))                       # app/  → skills, personas
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "prototype"))  # prototype/ → engine
+import context  # noqa: E402 — the context engine (graded-evidence blocks)
 import personas  # noqa: E402
 import planner  # noqa: E402 — bundle_markdown + working idea/edge helpers
 import skill_registry as skills  # noqa: E402
@@ -41,13 +42,7 @@ def _board_roster(session: dict) -> str:
     return "\n".join(f"- {personas.get(k)['name']}: {personas.get(k)['blurb']}" for k in keys)
 
 
-def _research_blocks(session: dict) -> tuple[str, str]:
-    rows = ((session.get("research") or {}).get("rows")) or []
-    cited = "\n".join(f"- {r['text']} [{r.get('url', '')}]" for r in rows if r.get("mark") == "ok") \
-        or "- (none cleared)"
-    flagged = "\n".join(f"- {r['text']} [{r.get('url', '')}]" for r in rows if r.get("mark") == "warn") \
-        or "- (none flagged)"
-    return cited, flagged
+_research_blocks = context.evidence   # graded evidence comes from the context engine, labels intact
 
 
 def _convo(history: list, limit: int = 12) -> str:
@@ -59,25 +54,41 @@ def _convo(history: list, limit: int = 12) -> str:
 
 
 def chat_reply(session: dict, message: str, history: list | None = None,
-               mock: bool = False) -> tuple[str, float]:
-    """Answer `message` about the plan in `session`. `history` is the prior chat thread. Returns
-    (reply, cost)."""
+               mock: bool = False, journey: str = "", situation: str = "") -> tuple[str, float]:
+    """Answer `message` about the plan in `session`. `history` is the prior chat thread; `journey`
+    is the decision-tree digest (the path walked + options offered/picked at every fork); `situation`
+    is where the operator is RIGHT NOW (a mid-flight build, an earlier node being read) — it decides
+    whether the reply may coach forward at all. Returns (reply, cost)."""
     idea = planner._working_idea(session)
     edge = planner._founder(session) or "(not captured)"
     vet = session.get("vetting") or {}
     plan_text = planner.bundle_markdown(idea, session.get("files") or {})
 
     if mock:
-        return (f"On “{message.strip()[:80]}”: grounded in your plan for {idea}, the straight read is to "
-                f"lead with your edge ({edge}) and pressure-test the riskiest assumption "
-                f"({vet.get('biggest_risk') or 'your main assumption'}) before scaling. "
-                f"Next step: {vet.get('first_test') or 'run one cheap test this week'}. (mock)"), 0.0
+        picked = journey.count("✓ PICKED")
+        calm = "READING" in situation or "MID-FLIGHT" in situation   # rule 5: no forward coaching here
+        aware = (" (I can see you're reading an earlier node — answering in place.)" if "READING" in situation
+                 else " (A build is running — answering without adding work.)" if "MID-FLIGHT" in situation
+                 else "")
+        base = (f"On “{message.strip()[:80]}”: grounded in your plan for {idea}"
+                + (f" (journey: {picked} picked direction{'s' if picked != 1 else ''} in view)" if journey else "")
+                + (f" (you are on: {situation.splitlines()[0][12:80]})" if situation.startswith("They are ON") else "")
+                + f", the straight read is to lead with your edge ({edge}) and pressure-test the "
+                f"riskiest assumption ({vet.get('biggest_risk') or 'your main assumption'}) before scaling.")
+        nxt = ("" if calm else
+               f" Next step: {vet.get('first_test') or 'run one cheap test this week'}.")
+        return base + nxt + aware + " (mock)", 0.0
 
     from pipeline import LEDGER, call, SONNET  # heavy; real mode only
     start = len(LEDGER.rows)
     cited, flagged = _research_blocks(session)
+    journey_block = (f"THE JOURNEY SO FAR (the decision tree they walked — every fork lists the "
+                     f"directions offered and which they PICKED):\n{journey}\n\n") if journey else ""
+    situation_block = (f"WHERE THEY ARE RIGHT NOW (this decides whether you may coach forward at "
+                       f"all — see rule 5):\n{situation}\n\n") if situation else ""
     prompt = (
         f"THE PLAN (the operator's finished business plan for: {idea}):\n{plan_text}\n\n"
+        f"{journey_block}{situation_block}"
         f"GRADED RESEARCH — CITED:\n{cited}\n\nFLAGGED (vendor) CLAIMS:\n{flagged}\n\n"
         f"KILL-GATE: verdict={vet.get('verdict', 'n/a')} · biggest_risk={vet.get('biggest_risk', 'n/a')} "
         f"· cheapest_first_test={vet.get('first_test', 'n/a')}\n\n"
