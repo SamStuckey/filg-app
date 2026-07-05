@@ -77,6 +77,40 @@ def test_commit_runs_deep_build_and_starts_the_plan(client):
     assert "brainstorm" in kinds and "refined" in kinds and "section" in kinds
 
 
+def test_funnel_convene_survives_the_commit(client):
+    # a board convene DURING the funnel (refined stage) rides the node tree into the deep build,
+    # so the built plan's exports + board-notes steering still see it
+    s = _brainstorm(client)
+    sid = s["id"]
+    client.post(f"/api/plan/{sid}/merge", json={"options": [o["id"] for o in s["activeNode"]["options"]]})
+    wait_status(client, sid)
+    b = client.post(f"/api/plan/{sid}/board", json={"question": "worth committing?"}).json()
+    assert b["verdict"]
+    client.post(f"/api/plan/{sid}/commit", json={})
+    s = wait_status(client, sid)
+    assert s["stage"] == "building"
+    assert len(s["board"]) == 1 and s["board"][0]["section"] == "convene"
+
+
+def test_build_receipts_persist_on_the_node(client):
+    # backlog §v2 #10: each background op's receipts are stored server-side on the node it built,
+    # so a reload / deep link restores the "how this was built" record (was a client-only stash)
+    s = _brainstorm(client)
+    sid = s["id"]
+    client.post(f"/api/plan/{sid}/merge", json={"options": [s["activeNode"]["options"][0]["id"]]})
+    s = wait_status(client, sid)
+    refined_id = s["activeNode"]["id"]
+    assert s["activeNode"]["log"]                        # merge's receipts rode onto the refined node
+    client.post(f"/api/plan/{sid}/commit", json={})
+    s = wait_status(client, sid)
+    log = s["activeNode"]["log"]
+    assert log and any(ln.startswith("Verdict:") for ln in log)
+    assert not any(ln.startswith("§") for ln in log)     # layout sentinels never persist
+    # a PAST node's receipts come back on the lazy /node fetch
+    r = client.get(f"/api/plan/{sid}/node/{refined_id}")
+    assert r.status_code == 200 and r.json()["log"]
+
+
 def test_commit_from_body_thesis(client):
     s = _brainstorm(client)
     sid = s["id"]
@@ -406,3 +440,10 @@ def test_v2_shell_and_assets_serve(client):
     assert client.get("/static/v2.css").status_code == 200
     # the live shell (/) is untouched by the v2 addition
     assert client.get("/").status_code == 200
+    # research mode is a DISPLAY over the one chat: the in-drawer pane + the expanded drawer exist,
+    # and the js carries the three display states + the auto-exit spine
+    assert 'id=rpane' in page.text and 'id=rdrawer' in page.text and 'id=rexpand' in page.text
+    js = client.get("/static/v2.js").text
+    for needle in ("enterResearch", "exitResearch", "expandResearch", "collapseResearch",
+                   "renderResearch", "offerExitResearch", "RMODE='split'"):
+        assert needle in js, needle

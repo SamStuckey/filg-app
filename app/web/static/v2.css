@@ -132,7 +132,9 @@ textarea:focus{border-color:var(--accent)}
 #gview.ease{transition:transform .6s cubic-bezier(.22,.8,.3,1)}
 .gnode.focus{overflow:auto;z-index:7;cursor:default;opacity:1;
   border-color:var(--accent);box-shadow:0 26px 80px rgba(0,0,0,.35);padding:14px 18px 18px;
-  overscroll-behavior:contain}   /* width/max-height set inline: panel-fit at natural scale (k=1) */
+  overscroll-behavior:contain;   /* width/max-height set inline: panel-fit at natural scale (k=1) */
+  user-select:text}              /* an OPEN doc is a document: selectable (select-to-comment, #8) */
+.gnode.focus .draft{cursor:text}
 /* an open doc keeps its selection story: green rim on a picked option, red-tinted on a passed one */
 .gnode.focus.sel{border-color:var(--green);
   box-shadow:0 0 0 1px color-mix(in srgb,var(--green) 45%,transparent),0 26px 80px rgba(0,0,0,.35)}
@@ -275,3 +277,54 @@ textarea:focus{border-color:var(--accent)}
 .modal .muted{color:var(--muted);font-size:13px;margin:0 0 10px}
 .modal .err{min-height:16px}
 .modal a{color:var(--accent)}
+
+/* ── Inline doc comments (backlog #8): select text in a rendered doc → note popover + comment rows ── */
+#cmtpop{position:fixed;z-index:60;width:280px;background:var(--card);border:1px solid var(--line);
+  border-radius:10px;box-shadow:0 8px 28px rgba(0,0,0,.18);padding:10px;display:none}
+#cmtpop.show{display:block}
+#cmtpop .cmtq{font-size:12px;color:var(--muted);font-style:italic;margin-bottom:6px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#cmtpop textarea{font-size:13px}
+#cmtpop .cmtacts{display:flex;gap:8px;justify-content:flex-end;margin-top:8px}
+#cmtpop .cmtacts button{border:1px solid var(--line);background:var(--card);color:var(--fg);
+  border-radius:7px;padding:5px 12px;font-size:13px}
+#cmtpop .cmtacts .primary{background:var(--accent);color:#fff;border:none;font-weight:600}
+.cmts{margin-top:12px;border-top:1px dashed var(--line);padding-top:8px}
+.cmts .cmtrow{font-size:13px;margin:4px 0;display:flex;gap:6px;align-items:baseline}
+.cmts .cmtq{color:var(--muted);font-style:italic}
+.cmts .cmtn{flex:1}
+.cmts .cmtx{border:none;background:none;color:var(--muted);font-size:15px;cursor:pointer;padding:0 4px}
+.cmts .cmtx:hover{color:var(--red)}
+
+/* ── #12: chapter labels grouping the section tabs in the reader (display only) ── */
+.dchap{align-self:center;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--muted);margin:0 2px 0 10px;white-space:nowrap}
+.dchap:first-child{margin-left:0}
+
+/* ── v2 research mode: ONE chat, three displays. The list lives IN the chat drawer (full → the
+   history is covered; split → top half research, bottom half chat) or slides out into its own
+   left-anchored drawer (expanded). All transitions are flex/opacity so the chat "slides". ── */
+.rpane{display:flex;flex-direction:column;min-height:0;flex:0 1 0%;opacity:0;overflow:hidden;
+  transition:flex .45s ease,opacity .3s ease;pointer-events:none}
+.left.rfull .rpane,.left.rsplit .rpane{opacity:1;pointer-events:auto}
+.left.rfull .rpane{flex:1 1 auto}
+.left.rfull .chatlog{flex:0 1 0%;min-height:0;opacity:0;pointer-events:none}
+.left.rsplit .rpane{flex:0 0 46%;border-bottom:1px dashed var(--line);padding-bottom:6px;margin-bottom:4px}
+.chatlog{transition:flex .45s ease,opacity .3s ease}
+.rpane-head{display:flex;justify-content:space-between;align-items:center;font-size:11px;font-weight:700;
+  text-transform:uppercase;letter-spacing:.06em;color:var(--muted);padding:6px 2px 6px;flex:0 0 auto}
+.rpane-head .ghost.small{font-size:12px;padding:3px 9px}
+.rlist{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:6px;padding:2px 2px 8px}
+.rlist .thinking{font-size:13px}
+.rrow{font-size:13px;line-height:1.45;border:1px solid var(--line);border-radius:8px;padding:7px 9px;
+  background:var(--card);transition:opacity .25s ease,border-color .25s ease,background .25s ease}
+.rrow.hit{border-color:var(--yellow);background:color-mix(in srgb,var(--yellow) 10%,var(--card))}
+.rrow.dim{opacity:.42}
+.rrow a{color:var(--accent);font-size:12px;margin-left:6px;text-decoration:none}
+.rrow .rtier{font-size:11px;color:var(--muted);margin-left:6px;text-transform:uppercase;letter-spacing:.04em}
+.rrow.flagged .rtier{color:var(--yellow)}
+.rdrawer{flex:0 0 0%;width:0;min-width:0;overflow:hidden;opacity:0;pointer-events:none;
+  border-right:1px solid var(--line);background:var(--bg);display:flex;flex-direction:column;
+  padding:14px 0 14px;transition:flex .45s ease,opacity .3s ease}
+.rdrawer.open{flex:0 0 340px;width:340px;opacity:1;pointer-events:auto;padding:14px}
+.workspace.full .rpane,.workspace.full .rdrawer{display:none}   /* no research surface on the landing */
