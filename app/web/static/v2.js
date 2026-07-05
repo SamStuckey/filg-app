@@ -223,9 +223,16 @@ function setMode(m){
   MODE=m;
   document.querySelectorAll('#modechips .mchip').forEach(b=>b.classList.toggle('on',b.dataset.mode===m));
   $('ws-wrap').className='promptwrap'+(m!=='build'?' '+m:'');
-  if(m==='research'){ closeTool(true); enterResearch(); return; }   // research lives in the drawer, not a tool
-  if(m==='build'){ closeTool(true); exitResearch(); } else { if(RMODE)exitResearch(); openTool(m); }
+  // research and board are DISPLAY STATES of the chat drawer (one chat, three displays each);
+  // only help is still a tool drawer. Entering one display quietly drops the other.
+  if(m==='research'){ closeTool(true); _bDrop(); enterResearch(); return; }
+  if(m==='board'){ closeTool(true); _rDrop(); enterBoard(); return; }
+  if(m==='build'){ closeTool(true); exitResearch(); exitBoard(); }
+  else { _rDrop(); _bDrop(); openTool(m); }
 }
+// silent display drops for mode switches — no 'Back to build' status, no MODE stomp
+function _rDrop(){ if(RMODE){ RMODE=null; RQUERY=''; applyRmode(); } }
+function _bDrop(){ if(BMODE){ BMODE=null; BQUERY=''; applyBmode(); } }
 async function sendPrompt(){
   if(isFull())return startFromLanding();   // full mode: the first prompt IS the landing submit
   const box=$('ws-box'), prompt=box.value.trim(); if(!prompt) return;
@@ -243,6 +250,13 @@ async function sendPrompt(){
     if(RMODE==='full'){ RMODE='split'; applyRmode(); }
     RQUERY=prompt; rRelated=renderResearch();
   }
+  // board mode: same contract — the first question slides the chat up into the split, and every
+  // message re-focuses the convene stack on what's relevant
+  let bRelated=null;
+  if(BMODE){
+    if(BMODE==='full'){ BMODE='split'; applyBmode(); }
+    BQUERY=prompt; bRelated=renderBoard();
+  }
   // browsing an earlier node? it rides along as context (a steer pivots from it, a question is about it)
   const {t}=nodesOf(S);
   const fromNode=(FOCUS&&FOCUS!==t.active)?FOCUS:null;
@@ -257,15 +271,20 @@ async function sendPrompt(){
     chatBot(d.fork.clash||'That pulls against the committed idea — pick a path on the graph.');
     focusActive(true); return; }
   const dec=d.decision||{};
-  // the topic turned back to BUILDING → research mode bows out on its own (drawer collapses /
-  // chat slides back to full height, the Build pill re-lights), then the action runs normally
-  if(RMODE&&['steer','next','commit','diverge','pick','restart_keep','restart_hard'].includes(dec.intent))
-    exitResearch();
-  // a question that isn't about the research → answer it, then offer the way out. Two signals:
-  // the router aimed it away from research, or nothing in the stack matched the question.
+  // the topic turned back to BUILDING → the research/board display bows out on its own (drawer
+  // collapses / chat slides back to full height, the Build pill re-lights), then the action runs
+  if(['steer','next','commit','diverge','pick','restart_keep','restart_hard'].includes(dec.intent)){
+    if(RMODE)exitResearch();
+    if(BMODE)exitBoard();
+  }
+  // a question that isn't about the live display → answer it, then offer the way out. Two signals:
+  // the router aimed it away, or nothing in the on-screen stack matched the question.
   dec._offResearch=!!RMODE&&dec.intent==='ask'&&(
     (dec.target!=='research'&&dec.target!=='board')||
     (rRelated===false&&researchItems().length>0));
+  dec._offBoard=!!BMODE&&dec.intent==='ask'&&(
+    (dec.target!=='board'&&dec.target!=='research')||
+    (bRelated===false&&boardItems().length>0));
   // when an in-chat check follows immediately, the check IS the reply — skip the say bubble
   const checks=(dec.intent==='commit'&&dec.confirm)||dec.intent==='restart_hard';
   if(!checks)chatBot(dec.say||'On it.');
@@ -301,7 +320,7 @@ async function dispatch(dec,fromNode,prompt){
       SEL=new Set(ids); renderView();
       return doMerge();
     }
-    case 'ask': return askInChat(prompt||dec.steer||'',dec.target,fromNode,dec._offResearch);   // a question gets an ANSWER, in the chat
+    case 'ask': return askInChat(prompt||dec.steer||'',dec.target,fromNode,dec._offResearch||dec._offBoard);   // a question gets an ANSWER, in the chat
     case 'steer': default:
       if(fromNode){ chatStatus('Pivoting from '+pivotSrcLabel(fromNode));
         return pivotSpread(fromNode,dec.steer||''); }   // feedback on an earlier node = pivot from it
@@ -327,11 +346,13 @@ async function askInChat(q,target,fromNode,offerExit){
   const reply=(d&&d.reply)||'';
   chatSay('bot',mdToHtml(reply));
   if(target==='help')chatPush('bot',reply);   // the advisor endpoint logs its own turn; /api/help doesn't
-  if(offerExit)offerExitResearch();   // answered in place — now offer the way back to building
+  if(offerExit)offerExitMode();   // answered in place — now offer the way back to building
 }
 async function boardInChat(q){
   const th=chatSay('status','convening your board…');
-  const {ok,d}=await api('POST',`/api/plan/${SID}/board`,{question:q});
+  const body={question:q};
+  if(BOARD_PICK)body.directors=[...BOARD_PICK];   // a re-picked bench rides the convene + persists
+  const {ok,d}=await api('POST',`/api/plan/${SID}/board`,body);
   if(th)th.remove();
   if(!ok){ if(gateV2(d))return; chatErr((d&&d.error)||'Could not convene the board.'); return; }
   const rows=(d.directors||[]).map(x=>`<div class=bdrow><b>${esc(x.name||x.key)}</b> ${esc(x.take||'')}</div>`).join('');
@@ -344,6 +365,13 @@ async function boardInChat(q){
   chatPush('bot','Board:\n'+(d.directors||[]).map(x=>`${x.name||x.key}: ${x.take||''}`).join('\n')+
     (d.skeptic?`\n🧐 Skeptic: ${d.skeptic.take||d.skeptic.rationale||''} [${d.skeptic.verdict||''}]`:'')+
     (d.consensus?`\nConsensus: ${d.consensus}`:'')+(d.verdict?`\nNet verdict: ${d.verdict}`:''));
+  // the convene is persisted on the active node server-side — mirror it locally so the board stack
+  // and the node's board notes update without a refetch
+  if(S){ S.board=(S.board||[]).concat([{section:'convene',title:'Board convened: “'+q.slice(0,90)+'”',
+    directors:d.directors,skeptic:d.skeptic,consensus:d.consensus,conflicts:d.conflicts,
+    verdict:d.verdict}]);
+    if(BMODE)renderBoard();
+    if(FOCUS)renderView(); }
 }
 async function lookupInChat(q,offerExit){
   const th=chatSay('status','searching + grading sources…');
@@ -363,7 +391,7 @@ async function lookupInChat(q,offerExit){
     LOOKUPS.push(...cs.filter(c=>!seen.has(c.text+'|'+(c.url||''))));
     renderResearch();
   }
-  if(offerExit)offerExitResearch();   // it answered, but nothing local matched — offer the way back
+  if(offerExit)offerExitMode();   // it answered, but nothing local matched — offer the way back
 }
 async function steer(note){
   if(!note) return;
@@ -562,6 +590,8 @@ function resetGraph(){ GSEEN=new Set(); FOCUS=null; BROWSING=false; LAST_ACTIVE=
   const gs=$('gsearch'); if(gs)gs.value=''; const gn2=$('gsearch-n'); if(gn2)gn2.hidden=true;
   const mm=$('minimap'); if(mm){mm.hidden=true;mm.innerHTML='';}
   LOOKUPS=[]; RQUERY=''; if(RMODE)exitResearch(true);   // research display is per-plan state
+  BQUERY=''; B_OFFERED=false; BOARD_PICK=null; STRESS_ON=false; FORGED=null;   // board display too
+  if(BMODE)exitBoard(true);
   WIP_LABEL=null; WIP_PENDING=null; WIPLOG=[]; LANES=[]; LANES_DONE=new Set(); PROG_N=0;
   Object.keys(NODECACHE).forEach(k=>delete NODECACHE[k]); Object.keys(NODELOG).forEach(k=>delete NODELOG[k]);
   HIST_OPEN=new Set();
@@ -1047,6 +1077,7 @@ function nodeBody(n){
   if(n.id===t.active){ const surf=stageSurface(S); body=surf?surf.html:''; }
   else body=pastBody(n)+`<div class=ctarow><button class="stage-cta secondary" onclick="pivotFromHere('${n.id}')">⑂ Pivot from here</button></div>`;
   body+=cmtsHtml(n.id);   // inline comments on this doc, awaiting the next build verb (backlog #8)
+  body+=boardNotesHtml(n.id);   // this step's convenes — the persisted history, visible on the node
   const log=NODELOG[n.id];
   // the open state survives re-renders — the WIP poll rebuilds this HTML every tick, and an
   // unremembered <details> flashes open then collapses
@@ -1054,6 +1085,19 @@ function nodeBody(n){
     `ontoggle="histKeep('${n.id}',this)"><summary>⚙ how this was built</summary><div class=nspew>`+
     log.map(l=>`<div>${esc(l)}</div>`).join('')+`</div></details>`;
   return body;
+}
+// The board history pinned to a node (server persists it per step; funnel nodes inherit forward).
+// The ACTIVE node's history is the flat mirror (S.board); a browsed past node's comes with its fetch.
+function boardNotesHtml(id){
+  const {t}=nodesOf(S);
+  const list=(id===t.active)?((S&&S.board)||[]):(((NODECACHE[id]||{}).board)||[]);
+  if(!list.length)return '';
+  const rows=list.slice().reverse().map(e=>
+    `<div class=bdrow><b>${esc(e.title||'Board review')}</b>${_vchip(e.verdict)}`+
+    (e.skeptic?`<div class="bdrow skept" style="border:none;padding-top:2px;margin-top:2px">🧐 ${esc((e.skeptic.take||e.skeptic.rationale||'').slice(0,180))}</div>`:'')+
+    `</div>`).join('');
+  return `<details class=nhist${HIST_OPEN.has(id+':b')?' open':''} ontoggle="histKeep('${id}:b',this)">`+
+    `<summary>🪑 board notes on this step (${list.length})</summary>${rows}</details>`;
 }
 function pastBody(n){
   const d=NODECACHE[n.id];
@@ -1294,6 +1338,8 @@ function render(s){
     WIPLOG=[]; LANES=[]; LANES_DONE=new Set(); WIP_LABEL=null; WIP_T0=null; WIP_PENDING=null;
   }
   if(S.activeNode)hydrateLog(S.activeNode.id,S.activeNode.log);   // server-persisted receipts survive a reload
+  // chat-lookup claims persist server-side now — the server's list is the superset, adopt it
+  if(S.lookups&&S.lookups.length>LOOKUPS.length)LOOKUPS=S.lookups.slice();
   WAS_RESEARCHING=researching;
   paintMeter(S);
   if(!researching){
@@ -1351,8 +1397,10 @@ function applyRmode(){
 function researchItems(){
   const rows=((S&&S.research&&S.research.rows)||[]).map(r=>(
     {text:r.text,url:r.url,ok:r.mark==='ok',tier:r.mark==='ok'?'cited':'vendor'}));
-  return rows.concat(LOOKUPS.map(c=>(
-    {text:c.text,url:c.url,ok:!c.flagged,tier:c.tier||(c.flagged?'vendor':'cited'),fresh:true})));
+  const seen=new Set(rows.map(x=>x.text+'|'+(x.url||'')));
+  const extra=LOOKUPS.filter(c=>!seen.has(c.text+'|'+(c.url||''))).map(c=>(
+    {text:c.text,url:c.url,ok:!c.flagged,tier:c.tier||(c.flagged?'vendor':'cited'),fresh:true}));
+  return rows.concat(extra);
 }
 const _RSTOP=new Set(('the,a,an,and,or,but,of,to,in,on,for,with,is,are,was,were,be,been,do,does,did,'+
   'how,what,why,when,where,who,which,i,my,me,you,your,we,our,us,it,its,this,that,these,those,about,'+
@@ -1382,33 +1430,227 @@ function renderResearch(){
   ['rlist','rlist2'].forEach(id=>{ const el=$(id); if(el)el.innerHTML=html; if(el)el.scrollTop=0; });
   return anyHit;
 }
-// An off-research question: answer it, then offer the way back to building. One chat — exiting is
-// a display change, never a history change.
-function offerExitResearch(){
-  if(R_OFFERED||!RMODE)return; R_OFFERED=true;
-  const txt="That one isn't really about the research — want to switch back to building?";
+// An off-topic question while a display is up: answer it, then offer the way back to building.
+// One chat — exiting is a display change, never a history change. Works for research AND board.
+function offerExitMode(){
+  const mode=RMODE?'research':(BMODE?'board':null);
+  if(!mode)return;
+  if(mode==='research'&&R_OFFERED)return;
+  if(mode==='board'&&B_OFFERED)return;
+  if(mode==='research')R_OFFERED=true; else B_OFFERED=true;
+  const txt=`That one isn't really about the ${mode} — want to switch back to building?`;
   chatPush('bot',txt);
   const m=chatSay('bot',esc(txt)+
     '<div class=cbtns><button type=button class=go>Back to build</button>'+
-    '<button type=button class=nah>Stay in research</button></div>');
+    `<button type=button class=nah>Stay in ${mode}</button></div>`);
   if(!m)return;
-  m.querySelector('.go').onclick=()=>{ m.classList.add('asked'); exitResearch(); };
-  m.querySelector('.nah').onclick=()=>{ m.classList.add('asked'); R_OFFERED=false;
-    chatStatus('Staying in research mode.'); };
+  m.querySelector('.go').onclick=()=>{ m.classList.add('asked'); exitResearch(); exitBoard(); };
+  m.querySelector('.nah').onclick=()=>{ m.classList.add('asked');
+    if(mode==='research')R_OFFERED=false; else B_OFFERED=false;
+    chatStatus(`Staying in ${mode} mode.`); };
 }
 
-// ── Tool drawers (board / help) — one box, colored context ──────────────────
+// ═══ BOARD MODE — one chat, three displays (the research contract, applied to the board room) ═══
+// 'full' = the convene stack covers the chat history; 'split' = first question slides the chat up;
+// 'expanded' = the stack slides into its own left drawer. The stack = the active path's persisted
+// board history (S.board mirrors the active node, convenes inherit forward) + the stress-test
+// result. Seats row re-picks the bench; ⚒ Forge + 🧪 Stress-test live in the header.
+let BMODE=null, BQUERY='', B_OFFERED=false, BOARD_PICK=null, FORGED=null, STRESS_ON=false;
+function enterBoard(){ if(!BMODE)BMODE='full'; B_OFFERED=false; applyBmode(); renderBoard(); }
+function exitBoard(quiet){
+  if(!BMODE)return;
+  BMODE=null; BQUERY=''; applyBmode();
+  MODE='build';
+  document.querySelectorAll('#modechips .mchip').forEach(b=>b.classList.toggle('on',b.dataset.mode==='build'));
+  $('ws-wrap').className='promptwrap';
+  if(!quiet)chatStatus('Back to build mode.');
+}
+function expandBoard(){ BMODE='expanded'; applyBmode(); renderBoard(); }
+function collapseBoard(){ BMODE='split'; applyBmode(); renderBoard(); }
+function applyBmode(){
+  const L=$('left'), pane=$('bpane'), dr=$('bdrawer');
+  if(!L||!pane||!dr){   // stale shell: fail LOUD, same contract as research
+    if(BMODE){ BMODE=null; toast('This page is stale — hard-refresh (⌘⇧R) to load the board surface.','err'); }
+    if(L){ L.classList.remove('bfull'); L.classList.remove('bsplit'); }
+    return;
+  }
+  L.classList.toggle('bfull',BMODE==='full');
+  L.classList.toggle('bsplit',BMODE==='split');
+  pane.setAttribute('aria-hidden',String(!(BMODE==='full'||BMODE==='split')));
+  dr.classList.toggle('open',BMODE==='expanded');
+  dr.setAttribute('aria-hidden',String(BMODE!=='expanded'));
+  if(BMODE!=='full'){ const log=$('chatlog'); if(log)log.scrollTop=log.scrollHeight; }
+}
+// The stack: newest first — the stress-test result (if any) rides on top, then every convene.
+function boardItems(){
+  const out=[];
+  const sk=S&&S.skeptic;
+  if(sk&&sk.status==='done'&&sk.result)out.push({stress:sk.result});
+  const hist=(S&&S.board)||[];
+  for(let i=hist.length-1;i>=0;i--)out.push({entry:hist[i]});
+  return out;
+}
+function _btext(it){   // the searchable text of a stack item, for the relevance focus
+  if(it.stress){ const r=it.stress;
+    return 'stress test assumptions '+((r.assessments||[]).map(a=>(a.assumption||'')+' '+(a.why||'')).join(' ')); }
+  const e=it.entry||{};
+  return [e.title,e.consensus,e.conflicts,e.verdict,
+    (e.skeptic&&(e.skeptic.take||e.skeptic.rationale))||'',
+    ...(e.directors||[]).map(x=>(x.name||'')+' '+(x.take||''))].join(' ');
+}
+function _vchip(v){ if(!v)return '';
+  const cls=/non.?starter|kill|broken/i.test(v)?'bad':(/concern|dissent|weak/i.test(v)?'warn':(/agree|pursue|surviv/i.test(v)?'ok':''));
+  return `<span class="bverdict ${cls}">${esc(v)}</span>`; }
+function _bcard(it,open){
+  if(it.stress)return _stressCard(it.stress);
+  const e=it.entry||{};
+  const dirs=(e.directors||[]).map(x=>`<div class=bdrow><b>${esc(x.name||x.key)}</b> ${esc(x.take||'')}</div>`).join('');
+  const sk=e.skeptic?`<div class="bdrow skept">🧐 <b>${esc(e.skeptic.name||'The Skeptic')}</b> `+
+    `${esc(e.skeptic.take||e.skeptic.rationale||'')} ${_vchip(e.skeptic.verdict)}</div>`:'';
+  const tail=(e.consensus?`<div class=bdrow><b>Consensus</b> ${esc(e.consensus)}</div>`:'')+
+    (e.conflicts?`<div class=bdrow><b>Clash</b> ${esc(e.conflicts)}</div>`:'');
+  return `<span class=bt>${esc(e.title||'Board review')}</span>${_vchip(e.verdict)}`+
+    `<details${open?' open':''}><summary>${(e.directors||[]).length||''} takes + the skeptic</summary>${dirs}${sk}${tail}</details>`;
+}
+function _stressCard(r){
+  const sm=r.summary||{};
+  const rows=(r.assessments||[]).map(a=>{
+    const ev=(a.evidence||[]).map(x=>`<a href="${esc(x.url||'')}" target=_blank rel=noopener>${esc((x.tier||'src').toLowerCase())}</a>`).join(' ');
+    return `<div class="sline ${esc(a.verdict||'')}"><b>${esc(a.verdict||'')}</b> ${esc(a.assumption||'')}`+
+      (a.why?`<div class=why>${esc(a.why)}</div>`:'')+(ev?`<div class=why>${ev}</div>`:'')+`</div>`;}).join('');
+  return `<span class=bt>🧪 Assumption stress-test</span>`+
+    `<div class=stressbar>${sm.broken||0} broken · ${sm.weakened||0} weakened · ${sm.survives||0} survived</div>`+
+    `<details><summary>the assessments</summary>${rows}</details>`;
+}
+// Paint the stack + the seats row into whichever board surface is live. Returns true if BQUERY
+// matched anything — same relevance signal contract as renderResearch.
+function renderBoard(){
+  const items=boardItems();
+  const qt=_rterms(BQUERY);
+  const scored=items.map((it,i)=>({it,i,s:qt.length?_rscore(qt,{text:_btext(it)}):0}));
+  if(qt.length)scored.sort((a,b)=>b.s-a.s||a.i-b.i);
+  const anyHit=scored.some(x=>x.s>0);
+  const html=items.length?scored.map(({it,s},idx)=>
+    `<div class="brow${s>0?' hit':(qt.length&&anyHit?' dim':'')}">${_bcard(it,idx===0&&!qt.length)}</div>`).join('')
+    :'<p class=thinking>No convenes yet — ask the board anything and the room fills up. '+
+     'Every review sticks to the step it judged.</p>';
+  ['blist','blist2'].forEach(id=>{ const el=$(id); if(el)el.innerHTML=html; if(el)el.scrollTop=0; });
+  renderSeats();
+  return anyHit;
+}
+// ── The bench: seated directors as toggle chips (standing archetypes + forged customs) ──
+function _benchCatalog(){
+  const customs=(S&&S.customDirectors)||[];
+  return (CFG.archetypes||[]).map(a=>({key:a.key,name:a.name||a.key,custom:false}))
+    .concat(customs.map(c=>({key:c.key,name:c.name||c.key,custom:true})));
+}
+function _benchInit(){ if(BOARD_PICK)return;
+  BOARD_PICK=new Set((S&&S.directors&&S.directors.length?S.directors:CFG.defaultBoard)||[]); }
+function renderSeats(){
+  _benchInit();
+  const chips=_benchCatalog().map(p=>
+    `<button type=button class="bseat${BOARD_PICK.has(p.key)?' on':''}${p.custom?' custom':''}" `+
+    `onclick="seatToggle('${esc(p.key)}')" title="${p.custom?'Custom-forged director':'Standing archetype'}">`+
+    `${esc(p.name)}</button>`).join('');
+  ['bseats','bseats2'].forEach(id=>{ const el=$(id); if(el)el.innerHTML=chips; });
+}
+function seatToggle(key){
+  _benchInit();
+  if(BOARD_PICK.has(key)){
+    if(BOARD_PICK.size<=1){ toast('The board needs at least one seat.','err'); return; }
+    BOARD_PICK.delete(key);
+  } else BOARD_PICK.add(key);
+  renderSeats();
+  toast('Bench updated — it rides the next convene.');
+}
+// ── ⚒ Director Forge: describe → forge (draft persona) → seat. Pro / own-key feature; the server
+// gates it and we surface the upgrade copy instead of a dead button. ──
+function forgeModal(){
+  if(!SID){ toast('Start a plan first.','err'); return; }
+  FORGED=null;
+  $('modal-body').innerHTML=
+    `<p class=muted>Describe the director you want at the table — a domain, a temperament, who they `+
+    `fight for. FILG forges a persona; nothing is seated until you approve.</p>`+
+    `<textarea id=forgedesc rows=3 placeholder="e.g. a grizzled dental-practice office manager who has seen every vendor pitch and cares only about no-show rates…"></textarea>`+
+    `<div class=err id=forgeerr></div><div id=forgeout></div>`;
+  $('modal-acts').innerHTML=`<button onclick="closeModal()">Cancel</button>`+
+    `<button class=primary id=forgego onclick="forgeGo()">⚒ Forge</button>`;
+  openModal('Forge a director');
+  setTimeout(()=>{const i=$('forgedesc');if(i)i.focus();},40);
+}
+async function forgeGo(){
+  const desc=(($('forgedesc')||{}).value||'').trim(), er=$('forgeerr'), btn=$('forgego');
+  if(desc.length<4){ er.textContent='Describe the director you want.'; return; }
+  er.textContent=''; btn.disabled=true; btn.textContent='Forging…';
+  const {ok,d}=await api('POST',`/api/plan/${SID}/director/forge`,{description:desc});
+  btn.disabled=false; btn.textContent='⚒ Forge';
+  if(!ok){
+    if(d&&d.upgrade){ er.textContent=d.error||'Forging is a Pro feature.'; return; }
+    if(gateV2(d))return;
+    er.textContent=(d&&d.error)||'The forge misfired — try again.'; return;
+  }
+  FORGED=d.persona||null;
+  if(!FORGED){ er.textContent='The forge came back empty — try rewording.'; return; }
+  $('forgeout').innerHTML=`<div class=forgecard><b>${esc(FORGED.name||'')}</b>`+
+    (FORGED.first?` <span class=muted>· goes by ${esc(FORGED.first)}</span>`:'')+
+    `<p style="margin:6px 0 0">${esc(FORGED.blurb||'')}</p>`+
+    ((FORGED.domains||[]).length?`<div class=doms>Owns: ${esc((FORGED.domains||[]).join(', '))}</div>`:'')+`</div>`;
+  $('modal-acts').innerHTML=`<button onclick="forgeModal()">↻ Different one</button>`+
+    `<button class=primary onclick="forgeSeat()">Seat them</button>`;
+}
+async function forgeSeat(){
+  if(!FORGED)return;
+  const {ok,d}=await api('POST',`/api/plan/${SID}/director/save`,{persona:FORGED});
+  if(!ok){ toast((d&&d.error)||'Could not seat them.','err'); return; }
+  const name=FORGED.name; FORGED=null; closeModal();
+  if(d&&d.id){ S=d; BOARD_PICK=null; }   // the save returns fresh plan state — adopt it, re-init the bench
+  renderBoard();
+  toast(name+' has a seat. ✓');
+  chatStatus(name+' joined the board.');
+}
+// ── 🧪 Assumption stress-test: kick, poll, land the card in the stack + a chat summary ──
+async function stressGo(){
+  if(!SID){ toast('Start a plan first.','err'); return; }
+  if(STRESS_ON){ toast('A stress-test is already running.'); return; }
+  const {ok,d}=await api('POST',`/api/plan/${SID}/stress-test`,{});
+  if(!ok){
+    if(d&&d.upgrade){ toast(d.error||'The stress-test is a Pro feature.','err'); return; }
+    if(d&&d.running){ STRESS_ON=true; stressPoll(); return; }   // rejoin one already in flight
+    if(gateV2(d))return;
+    toast((d&&d.error)||'Could not start the stress-test.','err'); return;
+  }
+  STRESS_ON=true;
+  chatStatus('🧪 Stress-testing the assumptions under your plan…');
+  stressPoll();
+}
+async function stressPoll(){
+  const sid=SID;
+  const {ok,d}=await api('GET',`/api/plan/${sid}/stress-test`);
+  if(sid!==SID)return;   // the plan changed under the poll — drop it
+  if(!ok||!d){ STRESS_ON=false; return; }
+  if(d.status==='running'){ setTimeout(stressPoll,1200); return; }
+  STRESS_ON=false;
+  if(d.status==='error'){ toast(d.error||'The stress-test failed.','err'); return; }
+  if(d.status==='done'&&d.result){
+    if(S)S.skeptic={status:'done',result:d.result};
+    const sm=(d.result.summary)||{};
+    chatBot(`Stress-test done: ${sm.broken||0} broken · ${sm.weakened||0} weakened · `+
+      `${sm.survives||0} survived. The full read is in the board room.`);
+    if(BMODE)renderBoard();
+  }
+}
+
+// ── Tool drawer (help only now — research and board are chat-drawer display states) ──────────
 function openTool(mode){
   const dr=$('tooldrawer'); dr.hidden=false; dr.className='tooldrawer '+mode;
   $('drawerback').style.display='block';
-  $('tool-title').textContent={board:'Board of Directors',help:'Help'}[mode]||'Tool';
+  $('tool-title').textContent={help:'Help'}[mode]||'Tool';
   $('tool-body').innerHTML=toolBody(mode);
 }
 function closeTool(keepMode){ $('tooldrawer').hidden=true; $('drawerback').style.display='none';
   if(!keepMode&&MODE!=='build'){ MODE='build'; document.querySelectorAll('#modechips .mchip').forEach(b=>b.classList.toggle('on',b.dataset.mode==='build'));
     $('ws-wrap').className='promptwrap'; } }
 function toolBody(mode){
-  if(mode==='board'){ return '<p class=thinking>Your board of advisors reviews each part and can be convened. Type a question in the box to aim them.</p>'; }
   return '<p>Type your idea on the landing page, then watch it spread into a few directions, merge the ones you like, and research + build the plan. The prompt box always wins: steer, jump ahead, or start over from it anytime. It runs on us to start.</p>';
 }
 

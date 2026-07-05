@@ -656,6 +656,10 @@ def _plan_state(s: dict) -> dict:
         "stage": s.get("stage"),                      # funnel position: brainstorm | refined | building | done
         "activeNode": _active_node_view(s),           # the active node's funnel payload (option cards / refined idea / fork)
         "chat": s.get("chat") or [], "chatStarters": advisor.STARTERS,
+        "lookups": s.get("lookups") or [],   # persisted chat-lookup claims — the research stack survives a reload
+        # the stress-test's durable state (status + result only; live progress rides its poll route)
+        "skeptic": ({"status": (s.get("skeptic") or {}).get("status"),
+                     "result": (s.get("skeptic") or {}).get("result")} if s.get("skeptic") else None),
         "progress": s.get("progress") or [],
         "cost": s.get("cost") or 0, "tokens": s.get("tokens") or 0,   # live session usage meter
         "stack": s.get("stack") or provider.DEFAULT_STACK,            # chosen model stack
@@ -1254,7 +1258,9 @@ async def api_plan_lookup(sid: str, request: Request):
     if len(question) > 500:
         return JSONResponse({"error": "Keep it under 500 characters."}, status_code=400)
     if MOCK:
-        return {"claims": [dict(c) for c in _MOCK_LOOKUP], "cost": 0, "tokens": 0}
+        claims = [dict(c) for c in _MOCK_LOOKUP]
+        _save_lookups(sid, s, claims)
+        return {"claims": claims, "cost": 0, "tokens": 0}
 
     def _work():
         with _run_slot(s.get("user"), s.get("stack")):
@@ -1269,9 +1275,21 @@ async def api_plan_lookup(sid: str, request: Request):
         return _engine_error(e)
     _meter(s.get("user"), cost)
     nc, nt = _fold_usage(sid, s, cost, toks)
-    return {"claims": [{"text": v.claim.text, "url": v.claim.source_url, "tier": v.tier,
-                        "flagged": bool(v.flagged), "reason": v.reason or ""} for v in verdicts],
-            "cost": nc, "tokens": nt}
+    claims = [{"text": v.claim.text, "url": v.claim.source_url, "tier": v.tier,
+               "flagged": bool(v.flagged), "reason": v.reason or ""} for v in verdicts]
+    _save_lookups(sid, s, claims)
+    return {"claims": claims, "cost": nc, "tokens": nt}
+
+
+def _save_lookups(sid: str, s: dict, claims: list) -> None:
+    """Persist chat-lookup claims on the session (deduped by text|url, bounded) so the research stack
+    survives a reload — they used to live only in the client's memory."""
+    if not claims:
+        return
+    have = list(s.get("lookups") or [])
+    seen = {f"{c.get('text')}|{c.get('url')}" for c in have}
+    have += [c for c in claims if f"{c.get('text')}|{c.get('url')}" not in seen]
+    store.plan_save(sid, lookups=have[-60:])
 
 
 @app.post("/api/plan/{sid}/chatlog")
@@ -1306,7 +1324,8 @@ async def api_plan_node(sid: str, nid: str, request: Request):
     k = _kind(n)
     out = {"id": n["id"], "kind": k, "title": n.get("title"), "parent": n.get("parent"),
            "children": n.get("children") or [], "feedback": n.get("feedback"), "step": n.get("step", 0),
-           "log": n.get("log") or []}   # the persisted build receipts — survive a reload (§v2 #10)
+           "log": n.get("log") or [],   # the persisted build receipts — survive a reload (§v2 #10)
+           "board": n.get("board") or []}   # this step's board history — the node view shows the convenes
     if k == "section":
         sec = next((x for x in planner.SECTIONS if x["key"] == n.get("section")), None)
         content = (n.get("files") or {}).get(sec["file"]) if sec else None

@@ -33,6 +33,18 @@ __FILG_HEAD__
         <button type=button class="ghost small" id=rexpand onclick="expandResearch()" title="Slide the research out into its own drawer">⇥ Expand</button></div>
       <div class=rlist id=rlist></div>
     </div>
+    <!-- Board room (same one-chat/three-displays contract as research): the pill shows the convene
+         history + the stress-test; a question splits the drawer; ⇥ Expand slides it out. -->
+    <div class=rpane id=bpane aria-hidden=true>
+      <div class=rpane-head><span>Board room</span>
+        <span class=bacts>
+          <button type=button class="ghost small" onclick="forgeModal()" title="Forge a custom director">⚒ Forge</button>
+          <button type=button class="ghost small" onclick="stressGo()" title="Adversarial assumption stress-test">🧪 Stress-test</button>
+          <button type=button class="ghost small" onclick="expandBoard()" title="Slide the board out into its own drawer">⇥ Expand</button>
+        </span></div>
+      <div class=bseats id=bseats title="Who's seated — click to bench/seat for the next convene"></div>
+      <div class=rlist id=blist></div>
+    </div>
     <div class=chatlog id=chatlog aria-live=polite></div>
     <div class="promptwrap" id=ws-wrap>
       <div class=modechips id=modechips>
@@ -53,6 +65,16 @@ __FILG_HEAD__
     <div class=rpane-head><span>Graded research</span>
       <button type=button class="ghost small" onclick="collapseResearch()" title="Tuck the research back into the chat drawer">⇤ Tuck in</button></div>
     <div class=rlist id=rlist2></div>
+  </aside>
+  <aside class=rdrawer id=bdrawer aria-hidden=true>
+    <div class=rpane-head><span>Board room</span>
+      <span class=bacts>
+        <button type=button class="ghost small" onclick="forgeModal()" title="Forge a custom director">⚒ Forge</button>
+        <button type=button class="ghost small" onclick="stressGo()" title="Adversarial assumption stress-test">🧪 Stress-test</button>
+        <button type=button class="ghost small" onclick="collapseBoard()" title="Tuck the board back into the chat drawer">⇤ Tuck in</button>
+      </span></div>
+    <div class=bseats id=bseats2 title="Who's seated — click to bench/seat for the next convene"></div>
+    <div class=rlist id=blist2></div>
   </aside>
   <div class=drawerback id=drawerback onclick="closeTool()"></div>
   <aside class=tooldrawer id=tooldrawer hidden>
