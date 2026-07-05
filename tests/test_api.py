@@ -9,34 +9,6 @@ from conftest import frontend, wait_status
 GRAB_BAG = "I like basketball, Magic the Gathering, and food, and I'm good at sales"
 
 
-def test_coupon_redeem_grants_credits_and_caps():
-    # A coupon grants COUPON_CREDITS plan unlocks and burns one of the code's uses. The ONLY cap is
-    # total uses (no per-account limit — an account may redeem repeatedly).
-    from app import store
-    store.init()
-    n = store.COUPON_CREDITS
-    code = "TESTCAP2"
-    con = store._connect()
-    with con:
-        con.execute("INSERT OR REPLACE INTO coupons (code, max_uses, used, active, created_at) "
-                    "VALUES (?,3,0,1,'t')", (code,))
-    con.close()
-    ok, _ = store.redeem_coupon(code, "a@x.com")
-    assert ok and store.credits_left("a@x.com") == n and store.coupon_status(code)["used"] == 1
-    ok2, _ = store.redeem_coupon(code, "a@x.com")                # no per-account cap → redeem again
-    assert ok2 and store.credits_left("a@x.com") == 2 * n and store.coupon_status(code)["used"] == 2
-    ok3, _ = store.redeem_coupon(code, "b@x.com")                # a different account uses the 3rd
-    assert ok3 and store.coupon_status(code)["used"] == 3
-    ok4, reason4 = store.redeem_coupon(code, "c@x.com")          # 100... here 3 uses exhausted → spent
-    assert not ok4 and reason4 == "spent" and store.credits_left("c@x.com") == 0
-    assert store.redeem_coupon("NOPE", "d@x.com") == (False, "invalid")
-    # the standing comp code is the $13-era one again; the $7-era code is retired
-    assert store.coupon_status("FUCKYOUIMNOTGIVINGYOU13BUCKS")["max_uses"] == 100
-    assert store.coupon_status("FUCKYOUIMNOTGIVINGYOU13BUCKS")["active"] is True
-    seven = store.coupon_status("FUCKYOUIMNOTGIVINGYOU7BUCKS")
-    assert seven is None or seven["active"] is False
-
-
 def test_full_plan_flow_with_board(client):
     r = client.post("/api/plan/start",
                     json={"idea": GRAB_BAG, "email": "e2e@x.com", "directors": ["closer", "cfo"]})
@@ -138,8 +110,8 @@ def test_pdf_unlock_is_per_plan_13_flat():
     assert store.claim_pdf("brancher@x.com", "sidX:leaf1") is True     # free re-download
     assert store.has_purchased("brancher@x.com", "sidX:leaf2") is False   # a new branch isn't unlocked
     assert store.claim_pdf("brancher@x.com", "sidX:leaf2") is False       # …and pays its own $13
-    # coupon credits: one credit = one plan unlock, spent at claim time
-    store.grant_credits("brancher@x.com", store.COUPON_CREDITS)
+    # fallback credits (admin grants / legacy events): one credit = one plan unlock, spent at claim
+    store.grant_credits("brancher@x.com", 3)
     assert store.credits_left("brancher@x.com") == 3
     assert store.claim_pdf("brancher@x.com", "sidX:leaf2") is True and store.credits_left("brancher@x.com") == 2
     assert store.claim_pdf("brancher@x.com", "sidX:leaf2") is True and store.credits_left("brancher@x.com") == 2  # re-download free
@@ -353,12 +325,15 @@ def test_share_and_delete(client):
     assert client.get("/p/sh1").status_code == 404            # gone after delete
 
 
-def test_tables_favicon_and_headings(client):
+def test_shell_branding_and_favicon(client):
+    # The root shell IS the (former v2) build surface: brand favicon, the landing headline, the mode
+    # chips, and the disclaimer fine-print all present from first paint.
     html = frontend(client)
-    assert "<table><thead><tr>" in html and ".md table{" in html  # client renders + styles md tables
-    assert 'rel="icon"' in html and "class=logomark" in html      # custom favicon + header mark
-    assert "<h3>Board of Directors</h3>" in html and "Add-ons ·" not in html
-    assert "Let’s go." in html and "You, 30 seconds ago" in html  # brand pull-quote
+    assert 'rel="icon"' in html                                   # brand favicon
+    assert "Let's build your business." in html                   # the landing headline
+    for mode in ("build", "summary", "research", "board", "help"):
+        assert f"data-mode={mode}" in html                        # the one-chat display modes
+    assert "disclaimerModal" in html and "confidently wrong" in html   # the ported disclaimer
 
 
 def test_healthz(client):
@@ -366,22 +341,17 @@ def test_healthz(client):
     assert d["ok"] is True and d["mock"] is True
 
 
-def test_advisor_uses_drawer_not_native_prompt(client):
-    # Ask-an-expert / convene must use the flyout drawer, never the native prompt() dialog.
+def test_build_surface_wiring_present(client):
+    # The load-bearing client machinery of the unified surface: inline doc comments ride the next
+    # build verb, the working node streams its leaf fan-out, the kill gate coaches in the chat, and
+    # the wall/fork/allowance gates all have real UI handlers.
     html = frontend(client)
-    assert 'class=drawer' in html and 'id=drawer-out' in html
-    assert "function openDrawer" in html and "function submitDrawer" in html
-    assert "prompt('Ask the advisor" not in html and "prompt('Ask your board" not in html
-
-
-def test_inline_comment_and_runner_ui_present(client):
-    # #7 inline comments + the permanent main-column runner are client-side; guard their wiring stays.
-    html = frontend(client)
-    assert "id=cmtpop" in html and "function saveComment" in html and "function commentsSteer" in html
-    assert "function onDraftSelect" in html and "function renderComments" in html
-    assert 'id=runner' in html and "classList.toggle('min')" in html   # permanent runner + collapse toggle
-    assert "function _drainProgress" in html and "leafDone" in html     # leaf fan-out viz wiring
-    assert "function forceNext" in html and "function talkItOut" in html  # softened kill-gate off-ramps
+    assert "cmtSteer" in html and "cmtpop" in html              # inline doc comments (#8)
+    assert "leafStackHtml" in html and "drainProgress" in html  # the live build spew + leaf fan-out
+    assert "killGateChat" in html and "armRevet" in html        # the kill gate, chat-native
+    assert "gateV2" in html and "needAccount" in html           # the account wall UX
+    assert "pricingModal" in html and "fairUseModal" in html    # the fork + the allowance prompt
+    assert "claimPending" in html and "disclaimerModal" in html # plan claiming + the disclaimer
 
 
 def test_model_stack_selection(client):
@@ -406,20 +376,18 @@ def test_no_native_browser_dialogs(client):
     html = frontend(client)
     bad = re.findall(r"(?<![\w.])(?:alert|confirm|prompt)\s*\(", html)
     assert not bad, f"native dialog call(s) leaked back in: {bad}"
-    assert "function toast(" in html and "function uiConfirm(" in html and "function uiPrompt(" in html
+    assert "function toast(" in html and "function uiConfirm(" in html and "function chatConfirm(" in html
 
 
 def test_accessibility_essentials_present(client):
-    # Guards the UX-pass a11y baseline (WCAG/POUR) against regression.
+    # Guards the a11y baseline (WCAG/POUR) on the unified surface.
     html = frontend(client)
     assert "focus-visible{outline" in html            # visible keyboard focus
     assert "prefers-reduced-motion" in html           # honors reduced motion
-    assert "role=dialog aria-modal=true" in html      # drawer is a real dialog
-    assert 'aria-live=polite' in html                 # screen-reader status
-    for lbl in ("<label for=idea", "<label for=email", "<label for=drawerq"):
-        assert lbl in html                            # inputs are labeled
-    assert "aria-pressed" in html                     # toggle chips expose state
-    assert "DRAWER_TRIGGER" in html                   # focus restored on drawer close
+    assert "role=dialog aria-modal=true" in html      # the modal is a real dialog
+    assert "aria-live=polite" in html                 # the chat announces politely
+    assert 'aria-label="Talk to FILG"' in html        # the prompt box is labeled
+    assert "role=tablist" in html                     # view tabs expose their role
 
 
 def test_kill_gate_blocks_until_resubstantiated(client):
@@ -537,7 +505,7 @@ def test_clean_plan_url_serves_spa(client):
     r = client.get("/plan/abc123def")
     assert r.status_code == 200 and "window.FILG" in r.text
     home = frontend(client)
-    assert "routeFromPath" in home and "popstate" in home   # path router + back/fwd wired
+    assert "routeV2" in home and "popstate" in home         # path router + back/fwd wired
     assert "location.hash" not in home                       # hash routing fully removed
 
 

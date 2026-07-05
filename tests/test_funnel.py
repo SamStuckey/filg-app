@@ -431,26 +431,33 @@ def test_bg_run_attaches_to_the_fresh_tree_not_a_stale_copy(client):
     assert any(n.get("kind") == "refined" for n in s2["tree"]["nodes"].values())
 
 
-# ── the v2 two-panel surface shell + assets serve ────────────────────────────
-def test_v2_shell_and_assets_serve(client):
-    page = client.get("/v2")
-    assert page.status_code == 200 and "window.FILG=" in page.text   # shares the config head
-    assert '/static/v2.js' in page.text and '/static/v2.css' in page.text
-    assert client.get("/static/v2.js").status_code == 200
-    assert client.get("/static/v2.css").status_code == 200
-    # the live shell (/) is untouched by the v2 addition
-    assert client.get("/").status_code == 200
-    # research AND board are DISPLAYS over the one chat: both in-drawer panes + expanded drawers
-    # exist, and the js carries the three display states + the auto-exit spine for each
-    # (offerExitResearch generalized to offerExitMode when the board room landed, 2026-07-06)
+# ── the root shell (the former v2 surface — v1 retired 2026-07-06) + assets serve ──
+def test_root_shell_and_assets_serve(client):
+    page = client.get("/")
+    assert page.status_code == 200 and "window.FILG=" in page.text   # the config head
+    assert '/static/app.js' in page.text and '/static/styles.css' in page.text
+    assert client.get("/static/app.js").status_code == 200
+    assert client.get("/static/styles.css").status_code == 200
+    # deep-link paths serve the same shell (History-API routing survives refresh)
+    assert "window.FILG=" in client.get("/plan/abc123").text
+    assert "window.FILG=" in client.get("/account/plans").text
+    # old /v2 links (shares, bookmarks, pre-move Stripe returns) redirect to the clean paths
+    r = client.get("/v2", follow_redirects=False)
+    assert r.status_code == 301 and r.headers["location"] == "/"
+    r = client.get("/v2/plan/abc123", follow_redirects=False)
+    assert r.status_code == 301 and r.headers["location"] == "/plan/abc123"
+    r = client.get("/v2/account/settings", follow_redirects=False)
+    assert r.status_code == 301 and r.headers["location"] == "/account/settings"
+    # research / board / help / summary are DISPLAYS over the one chat: panes + drawers all present
     assert 'id=rpane' in page.text and 'id=rdrawer' in page.text and 'id=rexpand' in page.text
     assert 'id=bpane' in page.text and 'id=bdrawer' in page.text and 'id=bseats' in page.text
-    # help is a banner over the chat (hpane) — the old right-hand tool drawer is GONE (2026-07-06)
-    assert 'id=hpane' in page.text and 'tooldrawer' not in page.text
-    js = client.get("/static/v2.js").text
+    assert 'id=hpane' in page.text and 'id=spane' in page.text and 'tooldrawer' not in page.text
+    js = client.get("/static/app.js").text
     for needle in ("enterResearch", "exitResearch", "expandResearch", "collapseResearch",
                    "renderResearch", "offerExitMode", "RMODE='split'",
                    "enterBoard", "exitBoard", "expandBoard", "collapseBoard",
                    "renderBoard", "BMODE='split'", "forgeModal", "stressGo", "boardNotesHtml",
-                   "enterHelp", "renderHelp", "faqPush", "HELP_BLURB"):
+                   "enterHelp", "renderHelp", "faqPush", "HELP_BLURB",
+                   "enterSummary", "exitSummary", "summaryHtml",
+                   "openAccount", "acctExport", "acctPrompt"):
         assert needle in js, needle

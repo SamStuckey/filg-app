@@ -37,7 +37,7 @@ from pathlib import Path
 
 import markdown
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool  # long engine calls must not block the event loop
 
@@ -220,11 +220,20 @@ def _concurrency_cap(user: str) -> int:
     return CONCURRENCY_CAP
 
 
+def _slot_user(s: dict) -> str:
+    """The concurrency-bucket identity for a session's op: the owner, or a per-plan anonymous key.
+    The anonymous taste has no email — keying its slot on the bare "" made EVERY anonymous visitor
+    share one 3-slot bucket (three strangers brainstorming → the fourth 429s). Per-plan keys keep the
+    cap per visitor-ish; total anonymous spend stays bounded by the daily kill switch."""
+    return (s.get("user") or "").strip() or f"anon:{s.get('id')}"
+
+
 @contextlib.contextmanager
 def _run_slot(user: str, stack: str | None = None):
     """Reserve a concurrency slot for `user`, bind their provider + model stack + a fresh per-run cost
     ledger, then release the slot on exit. Raises BusyError if they're already at their plan's limit.
-    The premium stack is clamped off FILG's free key so a free run can't spend Opus on FILG's dime."""
+    The premium stack is clamped off FILG's free key so a free run can't spend Opus on FILG's dime.
+    `user` may be a `_slot_user` anonymous key — it resolves like a keyless free identity."""
     cap = _concurrency_cap(user)
     tier = _tier(user)
     if tier and not _is_byok(user):   # allowance spent AND no own key to fall back to → block (fair-use)
@@ -347,6 +356,11 @@ async def api_run(request: Request):
 
     # Identity: a verified Supabase user wins; otherwise fall back to the email typed in the body.
     authed = auth.user_from_request(request)
+    # Legacy teardown endpoint: in the auth-on regime it takes a verified account (an open POST with
+    # any typed email would be unauthenticated spend on the hosted key). Dev/auth-off keeps the old
+    # body-email behavior.
+    if auth.AUTH_ENABLED and not (authed and authed["email"]):
+        return JSONResponse({"error": "Sign in first.", "needAccount": True}, status_code=401)
     user = authed["email"] if authed and authed["email"] else (body.get("email") or "").strip().lower()
     if "@" not in user:
         return JSONResponse({"error": "Enter an email so we can send your result."}, status_code=400)
@@ -381,7 +395,7 @@ async def api_me(request: Request):
                 "sub_enabled": billing.PDF_BILLING_ENABLED, "tiers": tiers.catalog()}
     tier = _tier(authed["email"])
     return {"signed_in": True, "email": authed["email"],
-            "pdf_unlocked": _has_pdf_access(authed["email"]),   # comp (coupon) OR subscription → unlimited
+            "pdf_unlocked": _has_pdf_access(authed["email"]),   # comp grant OR subscription → unlimited
             "pdf_credits": billing.credits_left(authed["email"]),   # paid plan-unlock credits remaining
             "pdf_billing": billing.PDF_BILLING_ENABLED, "pdf_price": billing.PDF_PRICE_CENTS,
             "auth_enabled": auth.AUTH_ENABLED,
@@ -394,7 +408,7 @@ async def api_me(request: Request):
 @app.post("/api/plan/{sid}/buy-pdf")
 async def api_buy_pdf(sid: str, request: Request):
     """Start the $13 Checkout that unlocks THIS plan's clean PDF (re-download free forever). Requires
-    a signed-in owner of a finished plan. If the plan is already unlocked (or there's a coupon credit
+    a signed-in owner of a finished plan. If the plan is already unlocked (or there's a comp credit
     to spend on it), no payment is needed — the client just downloads. Raw export stays free."""
     authed = auth.user_from_request(request)
     if not authed or not authed["email"]:
@@ -409,13 +423,8 @@ async def api_buy_pdf(sid: str, request: Request):
         return JSONResponse({"error": "You can download this plan already.", "unlocked": True},
                             status_code=409)
     try:
-        body = await request.json()
-    except Exception:  # noqa: BLE001
-        body = {}
-    ret = f"/v2/plan/{sid}" if body.get("v2") else None   # come back to the surface that sent you
-    try:
         url = billing.create_pdf_checkout_url(authed["email"], user_id=authed["id"], plan_id=sid,
-                                              plan_key=_plan_key(s), return_path=ret)
+                                              plan_key=_plan_key(s))
     except billing.StripeError as e:
         return JSONResponse({"error": str(e)}, status_code=502)
     return {"url": url}
@@ -443,8 +452,7 @@ async def api_subscribe(request: Request):
     try:
         url = billing.create_subscription_checkout_url(
             authed["email"], tier=tier, price_cents=tiers.price_cents(tier),
-            label=tiers.label(tier), user_id=authed["id"],
-            return_path="/v2/account" if body.get("v2") else None)
+            label=tiers.label(tier), user_id=authed["id"])
     except billing.StripeError as e:
         return JSONResponse({"error": str(e)}, status_code=502)
     return {"url": url}
@@ -467,26 +475,6 @@ async def api_subscription_portal(request: Request):
     return {"url": url}
 
 
-@app.post("/api/coupon")
-async def api_coupon(request: Request):
-    """Redeem a coupon code to unlock the polished PDF for free (account-wide). Signed-in only. The
-    remaining-uses counter is never returned — a spent/invalid code gets the same coarse message."""
-    authed = auth.user_from_request(request)
-    if not authed or not authed["email"]:
-        return JSONResponse({"error": "Sign in first."}, status_code=401)
-    try:
-        body = await request.json()
-    except Exception:  # noqa: BLE001
-        body = {}
-    code = (body.get("code") or "").strip()
-    if not code:
-        return JSONResponse({"error": "Enter a code."}, status_code=400)
-    ok, _reason = store.redeem_coupon(code, auth.normalize_email(authed["email"]))
-    if not ok:
-        return JSONResponse({"error": "That code isn't valid."}, status_code=400)
-    return {"unlocked": True}
-
-
 @app.get("/api/plan/{sid}/nudges")
 async def api_plan_nudges(sid: str, request: Request):
     """Per-step quick-edit chips for the feedback modal — short, business + current-section specific.
@@ -500,7 +488,7 @@ async def api_plan_nudges(sid: str, request: Request):
         return {"chips": []}
     idea = planner._working_idea(s)
     try:
-        with _run_slot(s.get("user"), s.get("stack")):
+        with _run_slot(_slot_user(s), s.get("stack")):
             chips, cost = planner.nudges(idea, section, draft, mock=MOCK)
             toks = pipeline.LEDGER.tokens()
     except BusyError as be:
@@ -1062,6 +1050,19 @@ async def api_plan_start(request: Request):
     user, verified = _identity(request, body.get("email"))
     if "@" not in user:
         return JSONResponse({"error": "Enter an email so we can save your plan."}, status_code=400)
+    # The legacy one-shot welcome taste retired with v1 (2026-07-06): in the auth-on regime this
+    # route requires a verified account AND a key/subscription, same as every other deep-build verb.
+    # (The new funnel's free taste is /api/brainstorm → /merge; this route jumps straight to the
+    # deep research run, so an open POST here would be an unauthenticated spend hole on our key.)
+    if auth.AUTH_ENABLED:
+        if not verified:
+            return JSONResponse(
+                {"error": "Create a free account to build a plan — it saves to your account.",
+                 "needAccount": True}, status_code=401)
+        if _needs_key(user):
+            return JSONResponse(
+                {"error": "Keep building free on your own API key (OpenRouter or Anthropic), or "
+                          "subscribe to run on ours.", "needKey": True}, status_code=402)
     taste_id = auth.normalize_email(user)   # dedupe the free taste across +suffix / gmail-dot aliases
     if _is_byok(user):
         pass   # has a key → unlimited plans on their own spend
@@ -1120,7 +1121,7 @@ async def api_brainstorm(request: Request):
     store.plan_create(sid, user, idea, directors=directors)
     store.plan_save(sid, stack=provider.stack_name(body.get("stack")))
     def _work():   # off the event loop: other requests (node reads, polls) stay live while this thinks
-        with _run_slot(user, body.get("stack")):
+        with _run_slot(user or f"anon:{sid}", body.get("stack")):
             d, cost = brainstorm.diverge(idea, mock=MOCK)
             return d, cost, pipeline.LEDGER.tokens()
     try:
@@ -1178,7 +1179,7 @@ async def api_plan_rebrainstorm(sid: str, request: Request):
         div_input = (f"{idea}\n\nCOMMITTED PATH (root \u2192 the pivot point; treat each item as "
                      f"chosen context):\n{path_block}")
     def _work():
-        with _run_slot(s.get("user"), s.get("stack")):
+        with _run_slot(_slot_user(s), s.get("stack")):
             d, cost = brainstorm.diverge(div_input, mock=MOCK)
             return d, cost, pipeline.LEDGER.tokens()
     try:
@@ -1218,6 +1219,13 @@ async def api_plan_merge(sid: str, request: Request):
              if isinstance(i, str) and _kind(nodes.get(i) or {}) == "option"]
     if not valid:
         return JSONResponse({"error": "Pick at least one direction to try."}, status_code=400)
+    # The merge is the free taste's one web-touching step and runs in a background thread WITHOUT
+    # _run_slot — so the daily kill switch must be read here, before the spawn (invariant #3: the
+    # funnel feeds the meter, it must also read it). Subscribers are bounded by their monthly cap.
+    prov = _provider_for(s.get("user"))
+    if (prov is not None and getattr(prov, "bills_filg", False) and not MOCK
+            and not _is_subscriber(s.get("user")) and usage.kill_switch_tripped()):
+        return _engine_error(DailyCapError(), 402)
     tok = uuid.uuid4().hex[:8]
     tree = s.get("tree") or {"nodes": {}, "active": None}
     tree["_run"] = tok                       # this run's epoch — a pivot mid-run invalidates it
@@ -1329,7 +1337,7 @@ async def api_plan_route(sid: str, request: Request):
     rstage = {"brainstorm": "brainstorm", "merging": "merge", "refined": "refined",
               "building": "plan", "done": "plan"}.get(stage, "plan")
     def _work():
-        with _run_slot(s.get("user"), s.get("stack")):
+        with _run_slot(_slot_user(s), s.get("stack")):
             decision, cost = router.route(prompt, stage=rstage, mode=mode,
                                           context=_route_context(s, node_id), mock=MOCK)
             fork = None
@@ -2360,7 +2368,7 @@ def _slug(text: str) -> str:
 async def api_plan_pdf(sid: str, request: Request):
     """The core artifact: a styled, branded PDF of the finished plan. Synthesizes an exec summary,
     lays out the active branch's sections, and appends the graded-research evidence exhibit. Clean
-    copy paid via the $13 per-plan unlock (or a coupon credit); re-downloading an unlocked plan is
+    copy paid via the $13 per-plan unlock (or a comp credit); re-downloading an unlocked plan is
     free. The synthesis runs on the OWNER'S bound key (`_run_slot` binds their provider). Builds from
     `s["files"]` = the active branch's final decision set."""
     s = store.plan_get(sid)
@@ -2371,7 +2379,7 @@ async def api_plan_pdf(sid: str, request: Request):
     authed = auth.user_from_request(request)
     email = (authed or {}).get("email", "")
     # Subscribers get the polished PDF free (it's part of the plan). Otherwise claim it: free if comped
-    # or already unlocked ($13 bought this plan), else spend a coupon credit. No access → a BYOK user
+    # or already unlocked ($13 bought this plan), else spend a comp credit. No access → a BYOK user
     # still gets a FREE WATERMARKED copy (synth runs on their own key — the share loop needs an
     # artifact that circulates; the $13 unlock removes the line). No access and no key → payment.
     watermark = False
@@ -2408,9 +2416,8 @@ async def api_plan_pdf(sid: str, request: Request):
                              "X-FILG-Watermark": "1" if watermark else "0"})
 
 
-def _page_head(deep: bool = False) -> str:
-    """The `__FILG_HEAD__` block: the window.FILG config + optional deep-link + Supabase script. Shared
-    by the live shell (_render_page) and the v2 surface so both boot with the same config."""
+def _page_head() -> str:
+    """The `__FILG_HEAD__` block: the window.FILG config + the Supabase script when auth is on."""
     cfg = json.dumps({"authEnabled": auth.AUTH_ENABLED,
                       "pdfBilling": billing.PDF_BILLING_ENABLED, "pdfPrice": billing.PDF_PRICE_CENTS,
                       "byokEnabled": keys.enabled(),
@@ -2424,62 +2431,47 @@ def _page_head(deep: bool = False) -> str:
                                        or os.environ.get("SUPABASE_ANON_KEY", "")),
                       "archetypes": personas.catalog(), "defaultBoard": personas.DEFAULT_BOARD})
     head = f"<script>window.FILG={cfg}</script>"
-    # Set the routing class on <html> BEFORE the body paints → no intake flash on a deep-link/refresh.
-    if deep:
-        head += "<script>document.documentElement.className+=' route-plan'</script>"
     if auth.AUTH_ENABLED:
         head += '<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>'
     return head
 
 
-def _render_page(deep: bool = False) -> str:
-    """The single-page app shell. Served at `/` and at clean deep-link paths like `/plan/{id}` so the
-    frontend can use real History-API URLs (no `#`) and direct-load / refresh still works."""
-    return _page_text("index.html").replace("__FILG_HEAD__", _page_head(deep))
+def _shell() -> str:
+    """THE app shell (the former v2 surface, promoted to the root namespace 2026-07-06 — v1 retired).
+    Served at `/` and every clean deep-link path (`/plan/{id}`, `/account/<tab>`) so real History-API
+    URLs direct-load and refresh."""
+    return _page_text("index.html").replace("__FILG_HEAD__", _page_head())
 
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
-    return _render_page()
-
-
-@app.get("/v2", response_class=HTMLResponse)
-async def v2():
-    """The UX-overhaul surface: the unified two-panel build (left = prompt box + tree + tools, right =
-    the decision graph). Wired to the funnel routes (/api/brainstorm → /merge → /commit) + /route.
-    Served alongside the live app so the new experience can be built + shown without destabilizing it."""
-    return _page_text("v2.html").replace("__FILG_HEAD__", _page_head())
-
-
-@app.get("/v2/plan/{sid}", response_class=HTMLResponse)
-async def v2_plan(sid: str):
-    """Deep link into a v2 plan: same shell, the frontend reads the id from the path and restores the
-    session — graph, documents, and the conversation log."""
-    return _page_text("v2.html").replace("__FILG_HEAD__", _page_head())
-
-
-@app.get("/v2/account", response_class=HTMLResponse)
-@app.get("/v2/account/{tab}", response_class=HTMLResponse)
-async def v2_account(tab: str = ""):
-    """The v2 account surface (projects / files / API key / account) — same shell, the frontend reads
-    the tab from the path. Directly visitable so a refresh or a Stripe return lands on the right tab."""
-    return _page_text("v2.html").replace("__FILG_HEAD__", _page_head())
+    """The unified two-panel build surface: LEFT = the chat (research/board/help/summary displays),
+    RIGHT = the decision graph. The landing IS the workspace with the drawer expanded."""
+    return _shell()
 
 
 @app.get("/plan/{sid}", response_class=HTMLResponse)
 async def plan_page(sid: str):
-    """Serve the SPA shell for a deep-linked plan; the frontend reads the id from the path and loads
-    it. (Distinct from `/p/{id}` — the server-rendered public share — and `/r/{id}` teardowns.)"""
-    return _render_page(deep=True)
+    """Deep link into a plan: same shell, the frontend reads the id from the path and restores the
+    session — graph, documents, and the conversation log. (Distinct from `/p/{id}` — the public
+    share — and `/r/{id}` teardowns.)"""
+    return _shell()
 
 
 @app.get("/account", response_class=HTMLResponse)
 @app.get("/account/{tab}", response_class=HTMLResponse)
 async def account_page(tab: str = ""):
-    """Serve the SPA shell for the profile/account tabs (/account/plans, /account/api-config, …) so they
-    are directly visitable and survive a refresh. The frontend reads the tab from the path and opens it.
-    `deep=True` boots with the loader (no landing-page flash before the tab renders)."""
-    return _render_page(deep=True)
+    """The account surface (projects / files / API key / account) — same shell, the frontend reads
+    the tab from the path. Directly visitable so a refresh or a Stripe return lands on the right tab."""
+    return _shell()
+
+
+# v1 is RETIRED (2026-07-06) and the /v2 namespace folded into the root. Old /v2 links — shares,
+# bookmarks, Stripe return URLs minted before the move — redirect permanently to the clean paths.
+@app.get("/v2")
+@app.get("/v2/{rest:path}")
+async def v2_redirect(rest: str = ""):
+    return RedirectResponse(f"/{rest}" if rest else "/", status_code=301)
 
 
 # ── Single-page plan-builder frontend ──────────────────────────────────────

@@ -21,7 +21,7 @@ then drive states from here.
   python scripts/dev.py account <email>       # why am I (not) walled? tier / saved key / monthly usage
   python scripts/dev.py key <email> [--clear] # show or clear a saved BYOK key (flip free ↔ BYOK)
   python scripts/dev.py models [--check]      # show the model catalog (--check hits the cached Models API)
-  python scripts/dev.py buy <email>           # grant PDF credits (the $7/3-plan unlock) → test the export
+  python scripts/dev.py buy <email>           # grant an account-wide PDF comp → test the export
 """
 import os
 import sys

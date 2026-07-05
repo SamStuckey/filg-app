@@ -55,12 +55,12 @@ def init() -> None:
                     "  result TEXT,"               # JSON blob from the engine
                     "  error TEXT,"
                     "  created_at TEXT NOT NULL)")
-                # PDF access model: paid CREDITS (3 plan-unlocks per $7) + per-plan CLAIMS + comp grants.
-                # A "plan" = one finished branch, keyed plan_key "{sid}:{leaf-node-id}". Go back and change
-                # the plan → a NEW branch → a NEW plan_key → a fresh unlock (a credit or a new $7). Re-
-                # downloading a plan you already unlocked is FREE (it's in pdf_unlocks).
-                #   pdf_purchases — account-wide UNLIMITED comp grants (coupons): unlock every plan.
-                #   pdf_credits   — account-level paid plan-unlock credits; each $7 adds 3.
+                # PDF access model: a flat $13 unlocks ONE plan's clean PDF + comp grants + fallback
+                # credits. A "plan" = one finished branch, keyed plan_key "{sid}:{leaf-node-id}". Go
+                # back and change the plan → a NEW branch → a NEW plan_key → its own $13. Re-downloading
+                # a plan you already unlocked is FREE (it's in pdf_unlocks).
+                #   pdf_purchases — account-wide UNLIMITED comp grants (admin/dev.py): unlock every plan.
+                #   pdf_credits   — fallback plan-unlock credits (admin grants; legacy webhook events).
                 #   pdf_unlocks   — the set of (email, plan_key) already unlocked → free re-downloads.
                 con.execute(
                     "CREATE TABLE IF NOT EXISTS pdf_purchases ("
@@ -86,8 +86,9 @@ def init() -> None:
                     "  amount_cents INTEGER,"
                     "  created_at TEXT NOT NULL,"
                     "  PRIMARY KEY (email, plan_key))")
-                # Coupon codes that unlock the PDF for free (bypass Stripe). `used` is a private counter
-                # (admin-only, never surfaced in the UX); a code is spent once used >= max_uses.
+                # COUPONS RETIRED (2026-07-06, Sam): the redemption route and codes are gone. The table
+                # may exist on older disks — deactivate every code so nothing dormant can be redeemed if
+                # the route ever returns. Comp grants now happen only via dev.py / record_purchase.
                 con.execute(
                     "CREATE TABLE IF NOT EXISTS coupons ("
                     "  code TEXT PRIMARY KEY,"
@@ -95,17 +96,7 @@ def init() -> None:
                     "  used INTEGER NOT NULL DEFAULT 0,"
                     "  active INTEGER NOT NULL DEFAULT 1,"
                     "  created_at TEXT NOT NULL)")
-                # Seed the standing comp code. INSERT OR IGNORE → idempotent: re-deploys never reset the
-                # `used` counter (it lives on the persistent disk), so 100 uses means 100 across all time.
-                con.execute(
-                    "INSERT OR IGNORE INTO coupons (code, max_uses, used, active, created_at) "
-                    "VALUES (?,?,0,1,?)",
-                    ("FUCKYOUIMNOTGIVINGYOU13BUCKS", 100,
-                     datetime.now(timezone.utc).isoformat()))
-                # The PDF price is back to $13 (2026-07-06) — the $13-named code is live again and the
-                # $7-era code retires. INSERT OR IGNORE keeps a previously-seeded 13 row's counter.
-                con.execute("UPDATE coupons SET active=1 WHERE code='FUCKYOUIMNOTGIVINGYOU13BUCKS'")
-                con.execute("UPDATE coupons SET active=0 WHERE code='FUCKYOUIMNOTGIVINGYOU7BUCKS'")
+                con.execute("UPDATE coupons SET active=0")
                 # Interactive plan-builder sessions (idea → decision-tree → downloadable file tree).
                 con.execute(
                     "CREATE TABLE IF NOT EXISTS plan_sessions ("
@@ -212,13 +203,12 @@ def get(job_id: str) -> dict | None:
     return job
 
 
-# ── PDF access: $13 unlocks ONE plan's clean PDF (re-download free); comp grants; coupon credits ──
+# ── PDF access: $13 unlocks ONE plan's clean PDF (re-download free); admin comp grants ──
 PDF_CREDITS_PER_PURCHASE = 1   # a $13 purchase unlocks exactly the plan it was bought for
-COUPON_CREDITS = 3             # a comp coupon still hands out a few plan unlocks (Sam's call, not paid)
 
 
 def grant_credits(email: str, n: int = PDF_CREDITS_PER_PURCHASE) -> None:
-    """Add `n` plan-unlock credits to an account. Credits are the fallback currency (coupons; a paid
+    """Add `n` plan-unlock credits to an account. Credits are the fallback currency (admin grants; a paid
     unlock whose webhook lost its plan_key) — the normal $13 path unlocks the exact plan directly via
     unlock_for_session. Idempotency for re-delivered Stripe events is handled by the caller."""
     if not email or n <= 0:
@@ -302,7 +292,7 @@ def credits_left(email: str) -> int:
 
 
 def is_comped(email: str) -> bool:
-    """True iff the account holds an unlimited comp grant (a redeemed coupon) → every plan unlocked."""
+    """True iff the account holds an unlimited comp grant (admin/dev.py) → every plan unlocked."""
     if not email:
         return False
     init()
@@ -369,7 +359,7 @@ def claim_pdf(email: str, plan_key: str) -> bool:
 
 def record_purchase(email: str, *, stripe_session: str | None = None,
                     amount_cents: int | None = None) -> None:
-    """Grant an account-wide UNLIMITED comp (coupon redemption). For PAID purchases use grant_credits."""
+    """Grant an account-wide UNLIMITED comp (admin/dev.py). For PAID purchases use unlock_for_session."""
     if not email:
         return
     email = email.strip().lower()
@@ -383,52 +373,6 @@ def record_purchase(email: str, *, stripe_session: str | None = None,
                 (email, stripe_session, amount_cents, datetime.now(timezone.utc).isoformat()))
     finally:
         con.close()
-
-
-# ── Coupons (free plan unlocks — bypass Stripe) ──────────────────────────────
-def redeem_coupon(code: str, normalized_email: str) -> tuple[bool, str]:
-    """Redeem a coupon: grant COUPON_CREDITS plan-unlock credits (spendable on any plan, one each) and
-    burn one of the code's `max_uses` (the ONLY cap — 100 uses total, no per-account limit). Returns
-    (ok, reason); `reason` is coarse ('invalid' | 'spent') and never leaks the remaining-uses count."""
-    code = (code or "").strip()
-    if not code or not normalized_email:
-        return False, "invalid"
-    normalized_email = normalized_email.strip().lower()
-    init()
-    con = _connect()
-    try:
-        with con:  # single transaction → the SELECT + UPDATE can't race two redemptions past the cap
-            row = con.execute(
-                "SELECT max_uses, used, active FROM coupons WHERE code=?", (code,)).fetchone()
-            if not row or not row["active"]:
-                return False, "invalid"
-            if row["used"] >= row["max_uses"]:
-                return False, "spent"
-            now = datetime.now(timezone.utc).isoformat()
-            con.execute("UPDATE coupons SET used=used+1 WHERE code=?", (code,))
-            con.execute(
-                "INSERT INTO pdf_credits (email, credits, updated_at) VALUES (?,?,?) "
-                "ON CONFLICT(email) DO UPDATE SET credits=credits+excluded.credits, updated_at=excluded.updated_at",
-                (normalized_email, COUPON_CREDITS, now))
-        return True, "redeemed"
-    finally:
-        con.close()
-
-
-def coupon_status(code: str) -> dict | None:
-    """Admin-only view of a coupon (code, max_uses, used, remaining, active). For Sam, never the UX."""
-    init()
-    con = _connect()
-    try:
-        row = con.execute(
-            "SELECT code, max_uses, used, active FROM coupons WHERE code=?",
-            ((code or "").strip(),)).fetchone()
-    finally:
-        con.close()
-    if not row:
-        return None
-    return {"code": row["code"], "max_uses": row["max_uses"], "used": row["used"],
-            "remaining": max(0, row["max_uses"] - row["used"]), "active": bool(row["active"])}
 
 
 # ── Subscription accounts (paid tiers on FILG's key — see app/tiers.py) ───────
@@ -715,12 +659,12 @@ if __name__ == "__main__":  # quick self-test (no API)
     assert has_purchased("buyer@x.com", "pl1:leafA") is True                    # unlocked → free re-download
     assert claim_pdf("buyer@x.com", "pl1:leafA") is True and credits_left("buyer@x.com") == 0
     assert claim_pdf("buyer@x.com", "pl1:leafB") is False        # a NEW branch → pays its own $13
-    # coupon credits are the fallback currency: one credit = one plan unlock
-    grant_credits("buyer@x.com", COUPON_CREDITS)
+    # fallback credits (admin grants / legacy events): one credit = one plan unlock
+    grant_credits("buyer@x.com", 3)
     assert credits_left("buyer@x.com") == 3
     assert claim_pdf("buyer@x.com", "pl1:leafB") is True and credits_left("buyer@x.com") == 2  # 1 spent
     assert claim_pdf("buyer@x.com", "pl1:leafB") is True and credits_left("buyer@x.com") == 2  # re-download free
-    # an unlimited comp grant (coupon) unlocks every plan, no credits needed
+    # an unlimited comp grant unlocks every plan, no credits needed
     record_purchase("comp@x.com")
     assert is_comped("comp@x.com") and has_purchased("comp@x.com", "any:key") is True
     assert claim_pdf("comp@x.com", "z:z") is True and credits_left("comp@x.com") == 0

@@ -124,3 +124,39 @@ def test_gibberish_pivot_gets_the_roast(client):
     assert body.get("gibberish") is True and body.get("title") and body.get("body")
     # the tree is untouched — a roast is not a spread
     assert store.plan_get(sid)["tree"]["active"] == d["tree"]["active"]
+
+
+def test_legacy_start_walled_when_auth_on(client, monkeypatch):
+    """/api/plan/start (the retired v1 taste) jumps straight to the deep research run — with auth on
+    it must demand an account, then a key/subscription, never an open anonymous spend."""
+    _auth_on(monkeypatch, user=None)
+    r = client.post("/api/plan/start", json={"idea": IDEA, "email": "rando@x.com"})
+    assert r.status_code == 401 and r.json().get("needAccount") is True
+    # signed in but keyless + tierless in the paid regime → the key/subscribe fork
+    from app import access, keys as keys_mod
+    monkeypatch.setattr(keys_mod, "enabled", lambda: True)
+    monkeypatch.setattr(access, "_is_byok", lambda u: False)
+    _auth_on(monkeypatch, user="starter@x.com")
+    r = client.post("/api/plan/start", json={"idea": IDEA})
+    assert r.status_code == 402 and r.json().get("needKey") is True
+
+
+def test_merge_reads_the_kill_switch(client, monkeypatch):
+    """The taste's one web-touching step (merge) runs in a background thread — the daily kill switch
+    must be read at the route, before the spawn (metered-but-uncapped = an invariant-#3 breach)."""
+    import usage
+    d = client.post("/api/brainstorm", json={"idea": IDEA}).json()
+    sid, opts = d["id"], d["activeNode"]["options"]
+    monkeypatch.setattr(main, "MOCK", False)                       # the gate skips mock runs
+    monkeypatch.setattr(main, "_provider_for",
+                        lambda u: type("P", (), {"bills_filg": True})())
+    monkeypatch.setattr(usage, "kill_switch_tripped", lambda: True)
+    r = client.post(f"/api/plan/{sid}/merge", json={"options": [opts[0]["id"]]})
+    assert r.status_code == 402 and r.json().get("needKey") is True
+    assert store.plan_get(sid)["status"] != "researching"          # nothing spawned
+
+
+def test_legacy_run_walled_when_auth_on(client, monkeypatch):
+    _auth_on(monkeypatch, user=None)
+    r = client.post("/api/run", json={"idea": IDEA, "email": "rando@x.com"})
+    assert r.status_code == 401 and r.json().get("needAccount") is True
