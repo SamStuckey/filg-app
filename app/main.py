@@ -1640,11 +1640,13 @@ async def api_plan_board(sid: str, request: Request):
         "Vet the plan so far — what's the one thing I should change before continuing?"
     work_idea = planner._working_idea(s)
     plan_text = planner.bundle_markdown(work_idea, s.get("files") or {})
-    try:
+    def _work():
         with _run_slot(s.get("user"), s.get("stack")):
             res, cost = board.convene(work_idea, plan_text, question, directors, mock=MOCK,
                                       extra_personas=customs)
-            toks = pipeline.LEDGER.tokens()
+            return res, cost, pipeline.LEDGER.tokens()
+    try:
+        res, cost, toks = await run_in_threadpool(_work)
     except BusyError as be:
         return _busy_response(be)
     except Exception as e:  # noqa: BLE001

@@ -296,6 +296,7 @@ const BIG_STEP_ASK='Next up is the big step: deep research + building out the fu
 async function askInChat(q,target,fromNode){
   if(!q)return;
   if(target==='research')return lookupInChat(q);   // research mode = a real web lookup, graded by the gate
+  if(target==='board')return boardInChat(q);       // board mode = convene the actual multi-persona board
   const th=chatSay('status','thinking…');
   const url=(target==='help')?'/api/help':`/api/plan/${SID}/chat`;
   // the advisor answers WHERE the user is: the node they're reading + any build in flight
@@ -307,6 +308,22 @@ async function askInChat(q,target,fromNode){
   const reply=(d&&d.reply)||'';
   chatSay('bot',mdToHtml(reply));
   if(target==='help')chatPush('bot',reply);   // the advisor endpoint logs its own turn; /api/help doesn't
+}
+async function boardInChat(q){
+  const th=chatSay('status','convening your board…');
+  const {ok,d}=await api('POST',`/api/plan/${SID}/board`,{question:q});
+  if(th)th.remove();
+  if(!ok){ if(gateV2(d))return; chatErr((d&&d.error)||'Could not convene the board.'); return; }
+  const rows=(d.directors||[]).map(x=>`<div class=bdrow><b>${esc(x.name||x.key)}</b> ${esc(x.take||'')}</div>`).join('');
+  const sk=d.skeptic?`<div class="bdrow skept">🧐 <b>${esc(d.skeptic.name||'The Skeptic')}</b> `+
+    `${esc(d.skeptic.take||d.skeptic.rationale||'')}${d.skeptic.verdict?` <span class=lktier>${esc(d.skeptic.verdict)}</span>`:''}</div>`:'';
+  const tail=(d.consensus?`<div class=bdrow><b>Consensus</b> ${esc(d.consensus)}</div>`:'')+
+    (d.conflicts?`<div class=bdrow><b>Where they clash</b> ${esc(d.conflicts)}</div>`:'')+
+    (d.verdict?`<div class=bdrow><b>Net verdict</b> ${esc(d.verdict)}</div>`:'');
+  chatSay('bot',`<p>Your board weighed in:</p>${rows}${sk}${tail}`);
+  chatPush('bot','Board:\n'+(d.directors||[]).map(x=>`${x.name||x.key}: ${x.take||''}`).join('\n')+
+    (d.skeptic?`\n🧐 Skeptic: ${d.skeptic.take||d.skeptic.rationale||''} [${d.skeptic.verdict||''}]`:'')+
+    (d.consensus?`\nConsensus: ${d.consensus}`:'')+(d.verdict?`\nNet verdict: ${d.verdict}`:''));
 }
 async function lookupInChat(q){
   const th=chatSay('status','searching + grading sources…');

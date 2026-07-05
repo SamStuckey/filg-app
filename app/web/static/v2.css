@@ -77,7 +77,11 @@ textarea:focus{border-color:var(--accent)}
 .lkclaim a{color:var(--muted);font-size:11.5px;margin-left:4px}
 .lktier{display:inline-block;margin-left:6px;padding:1px 8px;border-radius:999px;font-size:10.5px;
   border:1px solid var(--line);color:var(--muted);vertical-align:1px}
-.lktier.bad{border-color:var(--yellow);color:var(--yellow)}   /* answered → buttons fold away, the bubble stays as history */
+.lktier.bad{border-color:var(--yellow);color:var(--yellow)}
+/* board-in-chat rows: one take per director, skeptic tinted, matrix lines bolded */
+.bdrow{margin-top:8px;padding-top:8px;border-top:1px solid var(--line);font-size:13px;line-height:1.45}
+.bdrow b{display:inline-block;margin-right:4px}
+.bdrow.skept{color:color-mix(in srgb,var(--red) 70%,var(--fg))}   /* answered → buttons fold away, the bubble stays as history */
 
 /* ── Right: the decision graph IS the panel ── */
 .right{flex:1;position:relative;overflow:hidden;min-width:0;opacity:1;transition:opacity .45s ease .2s;background:
