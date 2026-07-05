@@ -233,6 +233,10 @@ async function restorePlan(id){   // boot straight into an existing plan: graph 
   if(SEL.size)renderView();
   if(d.status==='researching')poll();   // a run was mid-flight — pick the poll back up
   focusActive(true);
+  // the drawer-collapse transition is still moving the panels — re-aim once the layout settles, or
+  // the camera measures stale geometry and pins the focused node UNDER the left drawer, which then
+  // intercepts its CTA clicks (the §v2 #15 deep-link watchpoint; reproduced by the monkey, seed 5)
+  setTimeout(()=>{ if(S&&!BROWSING)focusActive(true); },700);
 }
 
 // ── Prompt box + modes ───────────────────────────────────────────────────────
@@ -242,10 +246,17 @@ function setMode(m){
   $('ws-wrap').className='promptwrap'+(m!=='build'?' '+m:'');
   // research, board, AND help are DISPLAY STATES of the chat drawer (one chat, one display at a
   // time). Entering one quietly drops the others; there are no tool drawers anymore.
-  if(m==='research'){ _bDrop(); _hDrop(); enterResearch(); return; }
-  if(m==='board'){ _rDrop(); _hDrop(); enterBoard(); return; }
-  if(m==='help'){ _rDrop(); _bDrop(); enterHelp(); return; }
+  if(m==='research'){ _disarmTraps(); _bDrop(); _hDrop(); enterResearch(); return; }
+  if(m==='board'){ _disarmTraps(); _rDrop(); _hDrop(); enterBoard(); return; }
+  if(m==='help'){ _disarmTraps(); _rDrop(); _bDrop(); enterHelp(); return; }
   exitResearch(); exitBoard(); exitHelp(true);
+}
+// an armed pivot ghost / revet box makes the NEXT message a build input — leaving build mode with
+// one armed would swallow a research/board/help question into it (the monkey, seed 3, step 9).
+// Switching displays disarms both, out loud.
+function _disarmTraps(){
+  if(PIVOT_FROM){ clearGhost(); chatStatus('⑂ Pivot disarmed.'); }
+  if(REVET_ARMED)disarmRevet();
 }
 // silent display drops for mode switches — no 'Back to build' status, no MODE stomp
 function _rDrop(){ if(RMODE){ RMODE=null; RQUERY=''; applyRmode(); } }
@@ -509,9 +520,10 @@ async function commit(thesis,fromNode){
 // ── Pivot-from-a-node: an armed ghost child ("enter feedback to pivot…") + the direct spread ──
 let PIVOT_FROM=null;
 function pivotFromHere(id){ PIVOT_FROM=id; REVET_ARMED=false; FOCUS=null; BROWSING=true;
-  // arming a pivot is a BUILD act — research/board displays bow out and the chat says what's next
-  // (found in Sam's 2026-07-06 QA: pivot from research mode left the drawer in research)
-  exitResearch(true); exitBoard(true);
+  // arming a pivot is a BUILD act — EVERY display bows out and the chat says what's next
+  // (Sam's QA: pivot from research stayed in research; the monkey then caught the same
+  // hole for help mode on its first walk — seed 1, step 26)
+  exitResearch(true); exitBoard(true); exitHelp(true);
   renderGraph();
   chatStatus('⑂ Pivot armed from '+pivotSrcLabel(id)+' — enter your pivot: what should change?');
   const b=$('ws-box'); if(b){b.placeholder='Your pivot: what should change from here?';b.focus();} }

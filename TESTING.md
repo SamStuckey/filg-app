@@ -69,3 +69,23 @@ python app/planner.py        # planner self-test (tree + waste-of-time mode), no
 New gated behavior (taste cap, email-dedup, degrade-to-key) gets pytest cases the same way the
 kill-gate test does: seed the state, assert the response. Prefer a test over a manual check whenever the
 behavior is deterministic.
+
+## The interaction monkey (scripts/monkey.py)
+
+Humans break the surface with random interaction CHAINS (arm a pivot → switch pills → browse an old
+node → pivot elsewhere → reload), not happy paths. The monkey replays that: a SEEDED random walk
+over the real click vocabulary, asserting eight invariants after every action (no JS errors, one
+lit pill, armed pivot ⇒ ghost + build mode, focused body never empty, WIP box ⇔ work in flight,
+tree coherent, send button recovers, one WIP max). Failures print the seed + action log — same
+seed, same walk, fully replayable — plus a screenshot.
+
+    FILG_MOCK=1 FILG_DB=/tmp/monkey.db uvicorn app.main:app --port 8600 &
+    python scripts/monkey.py --seeds 1,2,3,4,5 --steps 50   # random walks
+    python scripts/monkey.py --chains                        # the known-nasty fixed chains
+    python scripts/monkey.py --seed 3 --steps 50             # replay one failure exactly
+
+First session (2026-07-06) it caught three real bugs inside 30 steps each: pivot armed from help
+mode left the display up; pivot armed then a pill switch would swallow the next question as pivot
+feedback; a reload aimed the camera with mid-transition geometry and pinned the focused node under
+the left drawer (the §v2 #15 watchpoint). Run a few seeds after any surface work; add each real
+user report as a fixed chain in CHAINS.
