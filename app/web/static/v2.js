@@ -223,16 +223,17 @@ function setMode(m){
   MODE=m;
   document.querySelectorAll('#modechips .mchip').forEach(b=>b.classList.toggle('on',b.dataset.mode===m));
   $('ws-wrap').className='promptwrap'+(m!=='build'?' '+m:'');
-  // research and board are DISPLAY STATES of the chat drawer (one chat, three displays each);
-  // only help is still a tool drawer. Entering one display quietly drops the other.
-  if(m==='research'){ closeTool(true); _bDrop(); enterResearch(); return; }
-  if(m==='board'){ closeTool(true); _rDrop(); enterBoard(); return; }
-  if(m==='build'){ closeTool(true); exitResearch(); exitBoard(); }
-  else { _rDrop(); _bDrop(); openTool(m); }
+  // research, board, AND help are DISPLAY STATES of the chat drawer (one chat, one display at a
+  // time). Entering one quietly drops the others; there are no tool drawers anymore.
+  if(m==='research'){ _bDrop(); _hDrop(); enterResearch(); return; }
+  if(m==='board'){ _rDrop(); _hDrop(); enterBoard(); return; }
+  if(m==='help'){ _rDrop(); _bDrop(); enterHelp(); return; }
+  exitResearch(); exitBoard(); exitHelp(true);
 }
 // silent display drops for mode switches — no 'Back to build' status, no MODE stomp
 function _rDrop(){ if(RMODE){ RMODE=null; RQUERY=''; applyRmode(); } }
 function _bDrop(){ if(BMODE){ BMODE=null; BQUERY=''; applyBmode(); } }
+function _hDrop(){ if(HMODE){ HMODE=false; applyHmode(); } }
 async function sendPrompt(){
   if(isFull())return startFromLanding();   // full mode: the first prompt IS the landing submit
   const box=$('ws-box'), prompt=box.value.trim(); if(!prompt) return;
@@ -276,6 +277,7 @@ async function sendPrompt(){
   if(['steer','next','commit','diverge','pick','restart_keep','restart_hard'].includes(dec.intent)){
     if(RMODE)exitResearch();
     if(BMODE)exitBoard();
+    if(HMODE)exitHelp();
   }
   // a question that isn't about the live display → answer it, then offer the way out. Two signals:
   // the router aimed it away, or nothing in the on-screen stack matched the question.
@@ -345,7 +347,8 @@ async function askInChat(q,target,fromNode,offerExit){
   if(!ok){ if(gateV2(d))return; chatErr((d&&d.error)||'Could not answer that.'); return; }
   const reply=(d&&d.reply)||'';
   chatSay('bot',mdToHtml(reply));
-  if(target==='help')chatPush('bot',reply);   // the advisor endpoint logs its own turn; /api/help doesn't
+  if(target==='help'){ chatPush('bot',reply);   // the advisor endpoint logs its own turn; /api/help doesn't
+    faqPush(q,reply); }                         // …and the Q+A joins the personal FAQ banner
   if(offerExit)offerExitMode();   // answered in place — now offer the way back to building
 }
 async function boardInChat(q){
@@ -597,6 +600,7 @@ function resetGraph(){ GSEEN=new Set(); FOCUS=null; BROWSING=false; LAST_ACTIVE=
   LOOKUPS=[]; RQUERY=''; if(RMODE)exitResearch(true);   // research display is per-plan state
   BQUERY=''; B_OFFERED=false; BOARD_PICK=null; STRESS_ON=false; FORGED=null;   // board display too
   if(BMODE)exitBoard(true);
+  if(HMODE)exitHelp(true);   // display only — the FAQ itself is browser-level, it survives
   WIP_LABEL=null; WIP_PENDING=null; WIPLOG=[]; LANES=[]; LANES_DONE=new Set(); PROG_N=0;
   Object.keys(NODECACHE).forEach(k=>delete NODECACHE[k]); Object.keys(NODELOG).forEach(k=>delete NODELOG[k]);
   HIST_OPEN=new Set();
@@ -1659,18 +1663,49 @@ async function stressPoll(){
   }
 }
 
-// ── Tool drawer (help only now — research and board are chat-drawer display states) ──────────
-function openTool(mode){
-  const dr=$('tooldrawer'); dr.hidden=false; dr.className='tooldrawer '+mode;
-  $('drawerback').style.display='block';
-  $('tool-title').textContent={help:'Help'}[mode]||'Tool';
-  $('tool-body').innerHTML=toolBody(mode);
+// ── HELP — a banner above the chat (the split mechanism), not a drawer. The static how-to plus
+// the user's OWN past help Q&As as a personal FAQ: the question is the row, expand for the answer
+// (just that Q+A, never the full chat history). FAQ lives in localStorage — help is product-level,
+// not plan-level, so it follows the browser across plans. ──
+const HELP_BLURB='Type your idea on the landing page, then watch it spread into a few directions, '+
+  'merge the ones you like, and research + build the plan. The prompt box always wins: steer, jump '+
+  'ahead, or start over from it anytime. It runs on us to start.';
+let HMODE=false;
+function enterHelp(){ HMODE=true; applyHmode(); renderHelp(); }
+function exitHelp(quiet){
+  if(!HMODE)return;
+  HMODE=false; applyHmode();
+  MODE='build';
+  document.querySelectorAll('#modechips .mchip').forEach(b=>b.classList.toggle('on',b.dataset.mode==='build'));
+  $('ws-wrap').className='promptwrap';
+  if(!quiet)chatStatus('Back to build mode.');
 }
-function closeTool(keepMode){ $('tooldrawer').hidden=true; $('drawerback').style.display='none';
-  if(!keepMode&&MODE!=='build'){ MODE='build'; document.querySelectorAll('#modechips .mchip').forEach(b=>b.classList.toggle('on',b.dataset.mode==='build'));
-    $('ws-wrap').className='promptwrap'; } }
-function toolBody(mode){
-  return '<p>Type your idea on the landing page, then watch it spread into a few directions, merge the ones you like, and research + build the plan. The prompt box always wins: steer, jump ahead, or start over from it anytime. It runs on us to start.</p>';
+function applyHmode(){
+  const L=$('left'), pane=$('hpane');
+  if(!L||!pane){ if(HMODE){ HMODE=false; toast('This page is stale — hard-refresh (⌘⇧R) to load the help surface.','err'); }
+    if(L)L.classList.remove('hsplit'); return; }
+  L.classList.toggle('hsplit',HMODE);
+  pane.setAttribute('aria-hidden',String(!HMODE));
+  if(!HMODE){ const log=$('chatlog'); if(log)log.scrollTop=log.scrollHeight; }
+}
+function helpFaq(){ try{return JSON.parse(localStorage.getItem('filg_help_faq')||'[]');}catch(e){return [];} }
+function faqPush(q,a){
+  if(!q||!a)return;
+  const f=helpFaq().filter(x=>x.q!==q);   // re-asking replaces the old answer
+  f.push({q:q.slice(0,200),a:a.slice(0,1200),t:Date.now()});
+  try{localStorage.setItem('filg_help_faq',JSON.stringify(f.slice(-20)));}catch(e){}
+  if(HMODE)renderHelp();
+}
+function faqClear(){ try{localStorage.removeItem('filg_help_faq');}catch(e){} renderHelp(); }
+function renderHelp(){
+  const el=$('hlist'); if(!el)return;
+  const faq=helpFaq().slice().reverse();   // newest question first
+  el.innerHTML=`<div class=hblurb>${esc(HELP_BLURB)}</div>`+
+    (faq.length?`<div class=hfaqhead><span class=eyebrow>Your questions</span>`+
+      `<button type=button class="ghost small" onclick="faqClear()">Clear</button></div>`+
+      faq.map(x=>`<details class=hfaq><summary>${esc(x.q)}</summary>`+
+        `<div class=hfaqa>${mdToHtml(x.a)}</div></details>`).join('')
+      :`<p class=thinking>Ask anything about using FILG — your questions collect here as a personal FAQ.</p>`);
 }
 
 // ── boot ─────────────────────────────────────────────────────────────────────

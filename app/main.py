@@ -57,6 +57,7 @@ import plan_pdf   # noqa: E402 — styled PDF generation (synthesis + fpdf2 rend
 import advisor    # noqa: E402 — "chat with your plan" (grounded advisory layer)
 import context    # noqa: E402 — THE CONTEXT ENGINE: every model-facing view of session state
 import skeptic    # noqa: E402 — adversarial assumption-checking on the live research path
+import skill_registry as skills  # noqa: E402 — the skill bodies (help/system blocks)
 import provider   # noqa: E402 — BYOK: per-run LLM provider (FILG's key vs a user's OpenRouter key)
 import pipeline   # noqa: E402 — engine: per-run cost ledger (run_ledger) for safe concurrency
 import model_catalog  # noqa: E402 — model ids/prices/slugs + cached Models API availability
@@ -1409,32 +1410,10 @@ def _help_pricing() -> str:
 
 
 def _help_system() -> str:
-    return (
-        "You are the in-app help assistant for FILG (a tool that turns a rough business idea, or just "
-        "someone's skills and interests, into a vetted, buildable business plan). Help the user USE the "
-        "product. Be brief and concrete (2 to 5 sentences), friendly and plain.\n\n"
-        "How FILG works:\n"
-        "- Type your idea (or just what you're good at) and submit. FILG spreads it into directions, "
-        "researches the market, and grades every stat through a source-credibility gate, so vendor "
-        "marketing is labeled, not repeated as fact. It also vets the idea (pursue / pivot / kill).\n"
-        "- The plan builds one part at a time (7 parts: the setup, what you sell, why you win, pricing, "
-        "go-to-market, delivery, and a 30-day plan).\n"
-        "- On the main surface the LEFT is the chat (pills: Build / Research / Board / Help) and the "
-        "RIGHT is the decision graph: every draft, pivot, and fork is a node; click a node to read it, "
-        "'Keep going' rolls forward, 'Pivot' branches from any node. The graph has a minimap, fit-view "
-        "(F), and tree search (/). The classic page uses 'I'm with you' / 'Not feeling it' instead.\n"
-        "- Research pill: the graded evidence stack; ask a question and a fresh lookup runs through the "
-        "gate. Board pill: the convene history; the seats row re-picks the bench, Forge creates a custom "
-        "director, Stress-test runs the adversarial assumption pass. Board notes stick to each step.\n"
-        "- Share: a read-only public page of the plan (receipts + decision path) via the Share button; "
-        "private by default.\n"
-        "- Your key: add or change it in the key modal or the API config tab of your profile "
-        "(/account).\n\n"
-        + _help_pricing() + "\n\n"
-        "Only answer questions about USING FILG. If they ask for strategy on their specific business, "
-        "point them to the Build chat or the Board. Do not invent features or prices you're unsure "
-        "about. Write plainly: no em-dashes, no AI-tell words."
-    )
+    """The help system block: the `help` SKILL (app/skills/help/SKILL.md — how-to, money-answer rules,
+    the not-authoritative-on-pricing/legal disclaimer) + the PRICING FACTS generated from the live
+    ladder. Skill = judgment and rules; generated block = numbers. Neither can drift alone."""
+    return skills.system("help") + "\n\n" + _help_pricing()
 
 _HELP_MOCK = ("This is mock help (no key bound). In the real app: type your idea on the home page, then "
               "use 'I'm with you' to lock each part and build the next, or 'Not feeling it' to redo a part. "

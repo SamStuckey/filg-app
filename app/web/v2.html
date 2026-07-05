@@ -33,6 +33,12 @@ __FILG_HEAD__
         <button type=button class="ghost small" id=rexpand onclick="expandResearch()" title="Slide the research out into its own drawer">⇥ Expand</button></div>
       <div class=rlist id=rlist></div>
     </div>
+    <!-- Help: a banner above the chat (the split mechanism) — the one-paragraph how-to plus the
+         user's own past help Q&As as a personal FAQ. No drawer. -->
+    <div class=rpane id=hpane aria-hidden=true>
+      <div class=rpane-head><span>Help</span></div>
+      <div class=rlist id=hlist></div>
+    </div>
     <!-- Board room (same one-chat/three-displays contract as research): the pill shows the convene
          history + the stress-test; a question splits the drawer; ⇥ Expand slides it out. -->
     <div class=rpane id=bpane aria-hidden=true>
@@ -75,11 +81,6 @@ __FILG_HEAD__
       </span></div>
     <div class=bseats id=bseats2 title="Who's seated — click to bench/seat for the next convene"></div>
     <div class=rlist id=blist2></div>
-  </aside>
-  <div class=drawerback id=drawerback onclick="closeTool()"></div>
-  <aside class=tooldrawer id=tooldrawer hidden>
-    <div class=tool-head><span id=tool-title>Tool</span><button type=button class=ghost small onclick="closeTool()">Close</button></div>
-    <div class=tool-body id=tool-body></div>
   </aside>
   <main class=right id=right>
     <!-- The decision graph IS the right side. Documents and steps live INSIDE the nodes: the camera

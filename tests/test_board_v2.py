@@ -90,3 +90,10 @@ def test_help_pricing_facts_track_the_live_ladder():
     for dead in ("$13", "$35", "no monthly subscription"):
         assert dead not in block, f"dead monetization copy leaked into help: {dead}"
     assert "Keep going" in block and "Pivot" in block   # v2 verbs, not just the classic buttons
+    # 2026-07-06 QA round 2: money answers lead with the BYOK-vs-subscription fork, and help
+    # explicitly disclaims authority on pricing/billing/legal (the pricing page is binding)
+    assert "Lead with the FORK" in block
+    assert "NOT qualified" in block and "authoritative" in block
+    # help is a real SKILL now (app/skills/help), not a hardcoded prompt in main.py
+    import skill_registry
+    assert skill_registry.exists("help")

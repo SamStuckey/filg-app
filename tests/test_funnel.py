@@ -445,9 +445,12 @@ def test_v2_shell_and_assets_serve(client):
     # (offerExitResearch generalized to offerExitMode when the board room landed, 2026-07-06)
     assert 'id=rpane' in page.text and 'id=rdrawer' in page.text and 'id=rexpand' in page.text
     assert 'id=bpane' in page.text and 'id=bdrawer' in page.text and 'id=bseats' in page.text
+    # help is a banner over the chat (hpane) — the old right-hand tool drawer is GONE (2026-07-06)
+    assert 'id=hpane' in page.text and 'tooldrawer' not in page.text
     js = client.get("/static/v2.js").text
     for needle in ("enterResearch", "exitResearch", "expandResearch", "collapseResearch",
                    "renderResearch", "offerExitMode", "RMODE='split'",
                    "enterBoard", "exitBoard", "expandBoard", "collapseBoard",
-                   "renderBoard", "BMODE='split'", "forgeModal", "stressGo", "boardNotesHtml"):
+                   "renderBoard", "BMODE='split'", "forgeModal", "stressGo", "boardNotesHtml",
+                   "enterHelp", "renderHelp", "faqPush", "HELP_BLURB"):
         assert needle in js, needle
