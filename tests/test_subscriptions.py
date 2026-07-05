@@ -49,13 +49,17 @@ def test_budget_math_over_cap_and_upgrade_prompt():
     b = main._budget(email)
     assert b["over"] and b["spent_cents"] >= 1600 and b["tokens"] == 12345
     assert main._budget("noone@x.com") is None   # non-subscriber has no budget
-    # the allowance-exhausted response pitches the upgrade (more monthly credits) + the BYOK fallback
+    # Ultimate is HIDDEN for launch: the allowance-exhausted response pitches only the BYOK fallback
+    # (no upgrade rung on the public ladder), and checkout refuses the hidden tier.
     resp = main._budget_response(main.BudgetError(b))
     body = resp.body.decode()
-    assert resp.status_code == 402 and '"upgradeTier":"ultimate"' in body.replace(" ", "")
-    assert "Ultimate" in body and "fallback" in body
-    # at the top of the ladder there's nothing to upgrade to — the prompt drops the pitch
-    assert tiers.next_tier("ultimate") is None and tiers.next_tier(None) == "pro"
+    assert resp.status_code == 402 and "upgradeTier" not in body
+    assert "fallback" in body
+    assert tiers.next_tier("pro") is None and tiers.next_tier(None) == "pro"
+    assert tiers.purchasable("pro") and not tiers.purchasable("ultimate")
+    # …but an account already holding it keeps the full allowance + everything unlocked
+    assert tiers.monthly_cap_cents("ultimate") == 5500
+    assert tiers.allowed_stacks("ultimate") == provider.STACK_ORDER
 
 
 def test_pdf_free_for_subscribers(monkeypatch):
@@ -89,7 +93,8 @@ def test_subscriber_not_key_walled(monkeypatch):
 def test_me_logged_out_carries_catalog(client):
     d = client.get("/api/me").json()
     assert d["signed_in"] is False
-    assert len(d["tiers"]) == 2 and [t["id"] for t in d["tiers"]] == ["pro", "ultimate"]
+    # the public ladder for launch: just Pro (Ultimate defined but hidden until it earns features)
+    assert [t["id"] for t in d["tiers"]] == ["pro"]
     pro = d["tiers"][0]
     assert pro["price"] == 29.0 and any(s["opus"] for s in pro["stacks"])   # $29 includes Opus stacks
     assert d["pdf_price"] == 1300                                            # the $13 per-plan unlock
@@ -99,6 +104,12 @@ def test_subscribe_route_validates(client, monkeypatch):
     monkeypatch.setattr(billing, "PDF_BILLING_ENABLED", True)
     # unauthenticated (no token, auth disabled in tests) → 401 before any Stripe call
     assert client.post("/api/subscribe", json={"tier": "pro"}).status_code == 401
+    # a hidden tier is never sold, even to a signed-in user — 400 before any Stripe call
+    import app.auth as app_auth
+    monkeypatch.setattr(app_auth, "user_from_request",
+                        lambda req: {"id": "u", "email": "buyer@x.com"})
+    assert client.post("/api/subscribe", json={"tier": "ultimate"}).status_code == 400
+    assert client.post("/api/subscribe", json={"tier": "studio"}).status_code == 400
 
 
 def test_key_precedence_paid_allowance_first(monkeypatch):

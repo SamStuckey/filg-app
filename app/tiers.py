@@ -62,6 +62,14 @@ TIERS: dict[str, dict] = {
 }
 TIER_ORDER = ["pro", "ultimate"]   # cheap → premium (the pricing table's left→right order)
 
+# HIDDEN FOR LAUNCH (Sam, 2026-07-06): the public ladder is just BYOK (free) + Pro. Ultimate stays
+# fully defined — an account already carrying it keeps its allowance — but it doesn't appear in the
+# catalog, isn't purchasable, and the allowance-exhausted prompt stops pitching it. Re-light it from
+# the Render dashboard (FILG_SHOW_ULTIMATE=1) when there are features worth a second rung (coaching,
+# goal tracker, blocker-resolution helpers — the Phase-2 retention ideas).
+HIDDEN_TIERS = set() if os.environ.get("FILG_SHOW_ULTIMATE") == "1" else {"ultimate"}
+PUBLIC_TIER_ORDER = [t for t in TIER_ORDER if t not in HIDDEN_TIERS]
+
 # The retired 3-tier ladder's ids, folded onto the live ladder — an account row written before the
 # restructure keeps working (there were no live Stripe subscriptions, but dev grants + tests exist).
 _LEGACY = {"starter": "pro", "studio": "ultimate"}
@@ -110,13 +118,20 @@ def has_feature(tier: str | None, feature: str) -> bool:
     return feature in TIERS.get(canonical(tier), {}).get("features", set())
 
 
+def purchasable(tier: str | None) -> bool:
+    """Whether this tier may be BOUGHT right now (on the public ladder). Hidden tiers stay valid for
+    accounts that already hold them, but checkout refuses them."""
+    return canonical(tier) in PUBLIC_TIER_ORDER
+
+
 def next_tier(tier: str | None) -> str | None:
-    """The upgrade target from a tier (the allowance-exhausted prompt offers it), or None at the top."""
+    """The upgrade target from a tier (the allowance-exhausted prompt offers it), or None at the top.
+    Walks the PUBLIC ladder only — a hidden tier is never pitched."""
     t = canonical(tier)
     if t is None:
-        return TIER_ORDER[0]
-    i = TIER_ORDER.index(t)
-    return TIER_ORDER[i + 1] if i + 1 < len(TIER_ORDER) else None
+        return PUBLIC_TIER_ORDER[0] if PUBLIC_TIER_ORDER else None
+    later = [x for x in PUBLIC_TIER_ORDER if TIER_ORDER.index(x) > TIER_ORDER.index(t)]
+    return later[0] if later else None
 
 
 def clamp_stack(stack: str | None, *, tier: str | None = None, byok: bool = False) -> str:
@@ -135,10 +150,11 @@ def clamp_stack(stack: str | None, *, tier: str | None = None, byok: bool = Fals
 
 
 def catalog() -> list[dict]:
-    """Public tier catalog for the pricing UI: id, label, dollar price, unlocked stack keys (frontend
-    maps keys → display names via its STACKS_UI), premium features, and the monthly cap (cents)."""
+    """PUBLIC tier catalog for the pricing UI (hidden tiers excluded): id, label, dollar price,
+    unlocked stack keys (frontend maps keys → display names via its STACKS_UI), premium features,
+    and the monthly cap (cents)."""
     out = []
-    for t in TIER_ORDER:
+    for t in PUBLIC_TIER_ORDER:
         d = TIERS[t]
         out.append({
             "id": t,
@@ -158,7 +174,7 @@ if __name__ == "__main__":  # self-test (imports provider; run from prototype-on
     import provider  # noqa: F811 — ensure importable when run standalone
 
     assert TIER_ORDER == ["pro", "ultimate"]
-    # both live tiers unlock EVERYTHING — the ladder differs only in the monthly allowance
+    # both defined tiers unlock EVERYTHING — the ladder differs only in the monthly allowance
     assert allowed_stacks("pro") == provider.STACK_ORDER
     assert allowed_stacks("ultimate") == provider.STACK_ORDER
     assert allowed_stacks(None) == [provider.DEFAULT_STACK]      # free → Opus-free default only
@@ -171,9 +187,18 @@ if __name__ == "__main__":  # self-test (imports provider; run from prototype-on
     assert canonical("starter") == "pro" and canonical("studio") == "ultimate"
     assert is_tier("starter") and label("studio") == "Ultimate"
     assert clamp_stack("trust-fund-baby", tier="starter") == "trust-fund-baby"
-    # every feature everywhere; the upgrade path tops out at ultimate
     assert has_feature("pro", "director_forge") and has_feature("pro", "skeptic")
-    assert next_tier("pro") == "ultimate" and next_tier("ultimate") is None and next_tier(None) == "pro"
+    # ultimate is HIDDEN for launch: defined + honored on accounts, but not sold or pitched
+    if "ultimate" in HIDDEN_TIERS:
+        assert PUBLIC_TIER_ORDER == ["pro"]
+        assert purchasable("pro") and not purchasable("ultimate") and not purchasable("studio")
+        assert next_tier(None) == "pro" and next_tier("pro") is None and next_tier("ultimate") is None
+        assert len(catalog()) == 1 and catalog()[0]["id"] == "pro"
+        assert allowed_stacks("ultimate") == provider.STACK_ORDER   # an existing holder keeps it all
+    else:   # FILG_SHOW_ULTIMATE=1 — the second rung is live
+        assert PUBLIC_TIER_ORDER == ["pro", "ultimate"] and purchasable("ultimate")
+        assert next_tier("pro") == "ultimate" and next_tier("ultimate") is None
+        assert len(catalog()) == 2
     assert price_cents("pro") == 2900 and price_cents("ultimate") == 9900
-    assert len(catalog()) == 2 and catalog()[0]["id"] == "pro"
-    print("tiers.py self-test OK — ladder:", *(f"{t}=${TIERS[t]['price_cents']/100:g}" for t in TIER_ORDER))
+    print("tiers.py self-test OK — public ladder:",
+          *(f"{t}=${TIERS[t]['price_cents']/100:g}" for t in PUBLIC_TIER_ORDER))

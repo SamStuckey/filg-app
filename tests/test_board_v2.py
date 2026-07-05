@@ -88,7 +88,9 @@ def test_help_pricing_facts_track_the_live_ladder():
     for t in tiers.catalog():                      # every live tier, by label and price
         assert t["label"] in block and f"${t['price']:g}/mo" in block
     assert "$13" in block and "watermark" in block  # the PDF story ($13/plan + free watermarked copy)
-    for dead in ("$7", "$35", "3 clean", "Starter", "Studio", "no monthly subscription"):
+    # Ultimate is hidden for launch — help must not mention it (or any retired tier/price)
+    for dead in ("$7", "$35", "3 clean", "Starter", "Studio", "Ultimate", "$99",
+                 "no monthly subscription"):
         assert dead not in block, f"dead monetization copy leaked into help: {dead}"
     assert "Keep going" in block and "Pivot" in block   # v2 verbs, not just the classic buttons
     # 2026-07-06 QA round 2: money answers lead with the BYOK-vs-subscription fork, and help

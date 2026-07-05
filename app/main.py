@@ -435,7 +435,7 @@ async def api_subscribe(request: Request):
     except Exception:  # noqa: BLE001
         body = {}
     tier = tiers.canonical((body.get("tier") or "").strip())
-    if not tiers.is_tier(tier):
+    if not tiers.purchasable(tier):   # hidden tiers stay honored on accounts but are never sold
         return JSONResponse({"error": "Unknown plan."}, status_code=400)
     if _tier(authed["email"]) == tier:
         return JSONResponse({"error": f"You're already on {tiers.label(tier)}.", "current": True},
@@ -1521,12 +1521,15 @@ def _help_pricing() -> str:
         f"'Built with FILG' watermark on your own key, or a one-time ${price:g} unlocks THAT plan's "
         "clean (watermark-free) PDF — re-downloading it is free, a new plan pays its own unlock. "
         "Every subscription includes unlimited clean PDFs.",
-        "- Monthly subscriptions run on FILG's hosted key (no API key needed) and unlock every "
-        "feature and every model crew. Each has a monthly usage allowance that resets with the "
-        "billing period; hitting it means upgrade for a bigger allowance, add your own key as a "
-        "fallback, or wait for the renewal. The tiers differ only in allowance size:",
     ]
-    for t in tiers.catalog():
+    cat = tiers.catalog()
+    up = ("upgrade for a bigger allowance, add your own key as a fallback, or wait for the renewal"
+          if len(cat) > 1 else "add your own key as a fallback, or wait for the renewal")
+    lines.append(
+        "- The monthly subscription runs on FILG's hosted key (no API key needed) and unlocks every "
+        "feature and every model crew. It has a monthly usage allowance that resets with the "
+        f"billing period; hitting it means {up}:")
+    for t in cat:
         lines.append(f"  * {t['label']}: ${t['price']:g}/mo — all features and model crews, "
                      f"unlimited clean PDFs, ~${t['cap_cents'] / 100:g}/mo of included model usage.")
     return "\n".join(lines)
