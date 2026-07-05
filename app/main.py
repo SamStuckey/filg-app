@@ -29,6 +29,7 @@ import os
 import re
 import sys
 import threading
+import time
 import traceback
 import uuid
 import zipfile
@@ -110,12 +111,36 @@ def _fold_usage(sid: str, s: dict, cost: float, toks: int, **extra) -> tuple[flo
 
 def _key_wall(session: dict):
     """402 if the session owner must bring a key before this (API-calling) action; else None.
-    BYOK is required from the first submit (/api/plan/start), so every engine call is walled."""
+    Past the free taste, every engine call needs the user's own key OR an active subscription."""
     if _needs_key(session.get("user")):
         return JSONResponse(
-            {"error": "Add your API key (OpenRouter or Anthropic) to keep building.",
+            {"error": "Keep building free on your own API key (OpenRouter or Anthropic), or "
+                      "subscribe to run on ours.",
              "needKey": True}, status_code=402)
     return None
+
+
+def _account_wall(request: Request, session: dict):
+    """401 if auth is ON and this engine action has no verified account behind it; else None.
+
+    THE WALL (2026-07-06): the free taste — initial prompt → direction spread → direction select →
+    the merged first idea with its first-pass research — runs ANONYMOUS, on the house. The next click
+    (commit = the deep build) and everything past it requires an account: sign up, then either bring
+    your own key (free BYOK) or subscribe. A signed-in user touching an ownerless (anonymous-taste)
+    plan CLAIMS it here, so the plan they tasted joins the account they just created; an unclaimed
+    plan is purged after ~48h (store.purge_orphan_plans)."""
+    if not auth.AUTH_ENABLED:
+        return None
+    authed = auth.user_from_request(request)
+    if authed and authed["email"]:
+        if not (session.get("user") or "").strip():   # their anonymous taste → claim it into the account
+            store.plan_claim(session["id"], authed["email"])
+            session["user"] = authed["email"]
+        return None
+    return JSONResponse(
+        {"error": "Create a free account to keep building — this plan saves to it. Then bring your "
+                  "own API key (free) or subscribe to run on ours.",
+         "needAccount": True}, status_code=401)
 
 
 def _kill_gate(session: dict):
@@ -139,6 +164,26 @@ app = FastAPI(title="FILG")
 # (see _render_page) because it carries the __FILG_HEAD__ config hook.
 _WEB_DIR = _APP_DIR / "web"
 app.mount("/static", StaticFiles(directory=str(_WEB_DIR / "static")), name="static")
+
+# Anonymous free-taste plans that never got an account are scrapped after ~48h — the wall's promised
+# cleanup ("no account → the plan is lost"). One sweep at boot, then a slow background loop; both are
+# best-effort (a missed sweep just waits for the next one). Env-tunable without a deploy.
+ORPHAN_TTL_HOURS = int(os.environ.get("FILG_ORPHAN_TTL_HOURS", "48"))
+_ORPHAN_SWEEP_SECS = 6 * 3600
+
+
+def _orphan_sweep_loop() -> None:
+    while True:
+        try:
+            n = store.purge_orphan_plans(ORPHAN_TTL_HOURS)
+            if n:
+                print(f"[filg] purged {n} account-less plan(s) older than {ORPHAN_TTL_HOURS}h")
+        except Exception:  # noqa: BLE001 — a failed sweep must never take the app down
+            traceback.print_exc()
+        time.sleep(_ORPHAN_SWEEP_SECS)
+
+
+threading.Thread(target=_orphan_sweep_loop, daemon=True).start()
 
 # Per-user concurrency: a flat cap on simultaneous AI operations per user (cost is isolated per run
 # via pipeline.run_ledger, so concurrent runs don't mis-bill each other). Not a monetization tier —
@@ -221,13 +266,18 @@ def _busy_response(e: BusyError) -> JSONResponse:
 
 
 def _budget_response(e: BudgetError) -> JSONResponse:
-    """402 when a subscriber has used their monthly allowance: offer the two off-ramps (bring a key to
-    keep going free, or wait for the renewal reset). `needKey` reopens the key modal in the frontend."""
+    """402 when a subscriber has used their monthly allowance. The off-ramps, in the order we pitch
+    them: upgrade to the next tier for more monthly credits, add your own key as a BYOK fallback
+    (overflow runs on it, free), or wait for the renewal reset. `upgradeTier` names the next rung
+    (absent at the top of the ladder)."""
     b = e.budget or {}
+    nxt = tiers.next_tier(b.get("tier"))
+    up = f"Upgrade to {tiers.label(nxt)} for more monthly credits, or add" if nxt else "Add"
     return JSONResponse(
-        {"error": "You've used this month's plan allowance on our key. Add your own API key to keep "
-                  "building for free, or your allowance resets when your subscription renews.",
-         "fairUse": True, "needKey": True, "resetAt": b.get("reset_at"), "tier": b.get("tier")},
+        {"error": f"You've used this month's allowance on our key. {up} your own API key as a "
+                  "fallback — or your allowance resets when your subscription renews.",
+         "fairUse": True, "needKey": True, "resetAt": b.get("reset_at"), "tier": b.get("tier"),
+         **({"upgradeTier": nxt} if nxt else {})},
         status_code=402)
 
 
@@ -343,9 +393,9 @@ async def api_me(request: Request):
 
 @app.post("/api/plan/{sid}/buy-pdf")
 async def api_buy_pdf(sid: str, request: Request):
-    """Start a $7 Checkout that grants 3 PDF plan-unlock credits. Requires a signed-in owner of a
-    finished plan. If this plan is already unlocked (or there are credits to spend on it), no payment
-    is needed — the client just downloads. Raw export stays free."""
+    """Start the $13 Checkout that unlocks THIS plan's clean PDF (re-download free forever). Requires
+    a signed-in owner of a finished plan. If the plan is already unlocked (or there's a coupon credit
+    to spend on it), no payment is needed — the client just downloads. Raw export stays free."""
     authed = auth.user_from_request(request)
     if not authed or not authed["email"]:
         return JSONResponse({"error": "Sign in first."}, status_code=401)
@@ -1099,6 +1149,10 @@ async def api_plan_rebrainstorm(sid: str, request: Request):
     feedback = (body.get("feedback") or "").strip()
     if not feedback and len(idea) < 12:
         return JSONResponse({"error": "Tell me a bit more about the idea."}, status_code=400)
+    # keyboard-mash pivots get the same free roast as a mash at the landing box (no run, no LLM) —
+    # the v2 chat renders it as a bot bubble instead of quietly spreading nonsense into the tree
+    if gibberish.looks_like_gibberish(feedback or idea):
+        return JSONResponse({"gibberish": True, **gibberish.roast(feedback or idea)})
     tree = s.get("tree") or {"nodes": {}, "active": None}
     nodes = tree.get("nodes") or {}
     # the pivot point: an explicitly named node (the one the user had open) beats the active one
@@ -1172,6 +1226,10 @@ async def api_plan_commit(sid: str, request: Request):
     s = store.plan_get(sid)
     if not s or not _owns(request, s):
         return JSONResponse({"error": "unknown session"}, status_code=404)
+    # THE WALL lives here: the free taste ends at this click (brainstorm → merge ran on the house).
+    # The deep build requires an account, then a key or a subscription (see _account_wall).
+    if (wall := _account_wall(request, s) or _key_wall(s)):
+        return wall
     body = await request.json()
     thesis = (body.get("thesis") or "").strip()
     tree = s.get("tree") or {}
@@ -1306,7 +1364,7 @@ async def api_plan_lookup(sid: str, request: Request):
     s = store.plan_get(sid)
     if not s or not _owns(request, s):
         return JSONResponse({"error": "unknown session"}, status_code=404)
-    if (wall := _key_wall(s)):
+    if (wall := _account_wall(request, s) or _key_wall(s)):
         return wall
     body = await request.json()
     question = (body.get("message") or "").strip()
@@ -1446,23 +1504,24 @@ def _help_pricing() -> str:
     price = billing.PDF_PRICE_CENTS / 100
     lines = [
         "PRICING FACTS (answer any cost/subscription question ONLY from these, never from memory):",
-        "- Free on your own API key (OpenRouter or Anthropic): unlimited use, every model crew. Model "
-        "usage bills to their key, typically well under a dollar per plan.",
+        "- Getting started is free, no account: your idea spreads into directions and merges into a "
+        "refined, first-pass-researched idea on the house. Building the full plan (the deep research "
+        "step) is where an account comes in — sign up, then either bring your own key or subscribe. "
+        "A plan without an account is cleaned up after about 48 hours.",
+        "- Free on your own API key (OpenRouter or Anthropic, BYOK): unlimited use, every model crew, "
+        "every feature. Model usage bills to their key, typically well under a dollar per plan.",
         f"- Raw export (.zip/.md) is always free. The polished investor-grade PDF: free WITH a small "
-        f"'Built with FILG' watermark on your own key, or ${price:g} buys "
-        f"{store.PDF_CREDITS_PER_PURCHASE} clean (watermark-free) plan PDFs. Every subscription "
-        "includes clean PDFs.",
-        "- Monthly subscriptions run on FILG's hosted key (no API key needed). Each has a fair-use "
-        "monthly usage allowance that resets with the billing period; hitting it means add your own "
-        "key or wait for the renewal:",
+        f"'Built with FILG' watermark on your own key, or a one-time ${price:g} unlocks THAT plan's "
+        "clean (watermark-free) PDF — re-downloading it is free, a new plan pays its own unlock. "
+        "Every subscription includes unlimited clean PDFs.",
+        "- Monthly subscriptions run on FILG's hosted key (no API key needed) and unlock every "
+        "feature and every model crew. Each has a monthly usage allowance that resets with the "
+        "billing period; hitting it means upgrade for a bigger allowance, add your own key as a "
+        "fallback, or wait for the renewal. The tiers differ only in allowance size:",
     ]
     for t in tiers.catalog():
-        opus = any(s["opus"] for s in t["stacks"])
-        feats = ("; includes " + ", ".join(_FEATURE_WORDS.get(f, f) for f in t["features"])
-                 if t["features"] else "")
-        lines.append(f"  * {t['label']}: ${t['price']:g}/mo, "
-                     f"{'premium (Opus-class) model crews included' if opus else 'the cost-efficient model crews'}"
-                     f"{feats}.")
+        lines.append(f"  * {t['label']}: ${t['price']:g}/mo — all features and model crews, "
+                     f"unlimited clean PDFs, ~${t['cap_cents'] / 100:g}/mo of included model usage.")
     return "\n".join(lines)
 
 
@@ -1523,12 +1582,27 @@ async def api_plan_get(sid: str, request: Request):
     return _plan_state(s)
 
 
+@app.post("/api/plan/{sid}/claim")
+async def api_plan_claim(sid: str, request: Request):
+    """Attach an anonymous free-taste plan to the account that just signed in (the wall's happy path:
+    taste → sign up → the plan follows you). Idempotent; refuses a plan someone else owns."""
+    authed = auth.user_from_request(request)
+    if not authed or not authed["email"]:
+        return JSONResponse({"error": "Sign in first.", "needAccount": True}, status_code=401)
+    s = store.plan_get(sid)
+    if not s:
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    if not store.plan_claim(sid, authed["email"]):
+        return JSONResponse({"error": "unknown session"}, status_code=404)   # owned by someone else — don't leak
+    return _plan_state(store.plan_get(sid))
+
+
 @app.post("/api/plan/{sid}/respond")
 async def api_plan_respond(sid: str, request: Request):
     s = store.plan_get(sid)
     if not s or not _owns(request, s):
         return JSONResponse({"error": "unknown session"}, status_code=404)
-    if (wall := _key_wall(s)):
+    if (wall := _account_wall(request, s) or _key_wall(s)):
         return wall
     if s["status"] != "building":
         return JSONResponse({"error": f"session is {s['status']}"}, status_code=409)
@@ -1558,7 +1632,7 @@ async def api_plan_next(sid: str, request: Request):
     s = store.plan_get(sid)
     if not s or not _owns(request, s):
         return JSONResponse({"error": "unknown session"}, status_code=404)
-    if (wall := _key_wall(s)):
+    if (wall := _account_wall(request, s) or _key_wall(s)):
         return wall
     body = await request.json()
     feedback = (body.get("feedback") or "").strip() or None
@@ -1603,7 +1677,7 @@ async def api_plan_revet(sid: str, request: Request):
     s = store.plan_get(sid)
     if not s or not _owns(request, s):
         return JSONResponse({"error": "unknown session"}, status_code=404)
-    if (wall := _key_wall(s)):
+    if (wall := _account_wall(request, s) or _key_wall(s)):
         return wall
     body = await request.json()
     more = (body.get("more") or "").strip()
@@ -1641,7 +1715,7 @@ async def api_plan_back(sid: str, request: Request):
     s = store.plan_get(sid)
     if not s or not _owns(request, s):
         return JSONResponse({"error": "unknown session"}, status_code=404)
-    if (wall := _key_wall(s)):
+    if (wall := _account_wall(request, s) or _key_wall(s)):
         return wall
     body = await request.json()
     feedback = (body.get("feedback") or "").strip()
@@ -1686,7 +1760,7 @@ async def api_plan_redraft(sid: str, request: Request):
     s = store.plan_get(sid)
     if not s or not _owns(request, s):
         return JSONResponse({"error": "unknown session"}, status_code=404)
-    if (wall := _key_wall(s)):
+    if (wall := _account_wall(request, s) or _key_wall(s)):
         return wall
     body = await request.json()
     feedback = (body.get("feedback") or "").strip()
@@ -1759,7 +1833,7 @@ async def api_plan_ask(sid: str, request: Request):
     s = store.plan_get(sid)
     if not s or not _owns(request, s):
         return JSONResponse({"error": "unknown session"}, status_code=404)
-    if (wall := _key_wall(s)):
+    if (wall := _account_wall(request, s) or _key_wall(s)):
         return wall
     body = await request.json()
     archetype = body.get("archetype")
@@ -1788,7 +1862,7 @@ async def api_plan_board(sid: str, request: Request):
     s = store.plan_get(sid)
     if not s or not _owns(request, s):
         return JSONResponse({"error": "unknown session"}, status_code=404)
-    if (wall := _key_wall(s)):
+    if (wall := _account_wall(request, s) or _key_wall(s)):
         return wall
     body = await request.json()
     customs = s.get("custom_directors") or []
@@ -1840,7 +1914,7 @@ async def api_director_forge(sid: str, request: Request):
     s = store.plan_get(sid)
     if not s or not _owns(request, s):
         return JSONResponse({"error": "unknown session"}, status_code=404)
-    if (wall := _key_wall(s)):
+    if (wall := _account_wall(request, s) or _key_wall(s)):
         return wall
     if not _feature_ok(s.get("user"), "director_forge"):   # premium feature: Pro/Studio, or BYOK
         return JSONResponse(
@@ -1902,7 +1976,7 @@ async def api_research_query(sid: str, request: Request):
     s = store.plan_get(sid)
     if not s or not _owns(request, s):
         return JSONResponse({"error": "unknown session"}, status_code=404)
-    if (wall := _key_wall(s)):
+    if (wall := _account_wall(request, s) or _key_wall(s)):
         return wall
     body = await request.json()
     q = (body.get("question") or "").strip()
@@ -1961,7 +2035,7 @@ async def api_plan_stress_test(sid: str, request: Request):
     s = store.plan_get(sid)
     if not s or not _owns(request, s):
         return JSONResponse({"error": "unknown session"}, status_code=404)
-    if (wall := _key_wall(s)):
+    if (wall := _account_wall(request, s) or _key_wall(s)):
         return wall
     if not _feature_ok(s.get("user"), "skeptic"):   # premium feature: Pro/Studio, or BYOK
         return JSONResponse(
@@ -1999,7 +2073,7 @@ async def api_plan_chat(sid: str, request: Request):
     if s["status"] == "error":
         return JSONResponse({"error": "This plan hit an error — start over or re-run it first."},
                             status_code=409)
-    if (wall := _key_wall(s)):
+    if (wall := _account_wall(request, s) or _key_wall(s)):
         return wall
     body = await request.json()
     message = (body.get("message") or "").strip()
@@ -2275,10 +2349,10 @@ def _slug(text: str) -> str:
 @app.get("/api/plan/{sid}/plan.pdf")
 async def api_plan_pdf(sid: str, request: Request):
     """The core artifact: a styled, branded PDF of the finished plan. Synthesizes an exec summary,
-    lays out the active branch's sections, and appends the graded-research evidence exhibit. Paid via
-    plan-unlock credits ($7 = 3 plans); re-downloading a plan you've already unlocked is free. The
-    synthesis runs on the OWNER'S bound key (`_run_slot` binds their provider). Builds from `s["files"]`
-    = the active branch's final decision set."""
+    lays out the active branch's sections, and appends the graded-research evidence exhibit. Clean
+    copy paid via the $13 per-plan unlock (or a coupon credit); re-downloading an unlocked plan is
+    free. The synthesis runs on the OWNER'S bound key (`_run_slot` binds their provider). Builds from
+    `s["files"]` = the active branch's final decision set."""
     s = store.plan_get(sid)
     if not s or not _owns(request, s):
         return JSONResponse({"error": "unknown session"}, status_code=404)
@@ -2287,9 +2361,9 @@ async def api_plan_pdf(sid: str, request: Request):
     authed = auth.user_from_request(request)
     email = (authed or {}).get("email", "")
     # Subscribers get the polished PDF free (it's part of the plan). Otherwise claim it: free if comped
-    # or already unlocked, else spend one of the account's credits. No credits → a BYOK user still gets
-    # a FREE WATERMARKED copy (synth runs on their own key — the share loop needs an artifact that
-    # circulates; $7 removes the line). No credits and no key → payment, as before.
+    # or already unlocked ($13 bought this plan), else spend a coupon credit. No access → a BYOK user
+    # still gets a FREE WATERMARKED copy (synth runs on their own key — the share loop needs an
+    # artifact that circulates; the $13 unlock removes the line). No access and no key → payment.
     watermark = False
     if (billing.PDF_BILLING_ENABLED and not _is_subscriber(email)
             and not billing.claim_pdf(email, _plan_key(s))):
@@ -2298,8 +2372,9 @@ async def api_plan_pdf(sid: str, request: Request):
             watermark = True
         else:
             return JSONResponse(
-                {"error": "You're out of PDF credits. Unlock 3 plans for $7, or add your own API key "
-                          "for a free watermarked copy. Your raw export is always free.",
+                {"error": f"The clean PDF for this plan is a one-time "
+                          f"${billing.PDF_PRICE_CENTS // 100} (re-downloads are free). Or add your "
+                          "own API key for a free watermarked copy. Your raw export is always free.",
                  "needPurchase": True, "price": billing.PDF_PRICE_CENTS}, status_code=402)
     try:
         with _run_slot(s.get("user"), s.get("stack")):

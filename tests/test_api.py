@@ -10,11 +10,11 @@ GRAB_BAG = "I like basketball, Magic the Gathering, and food, and I'm good at sa
 
 
 def test_coupon_redeem_grants_credits_and_caps():
-    # A coupon = a free $7-equivalent: each redemption grants 3 plan-unlock credits and burns one of the
-    # code's uses. The ONLY cap is total uses (no per-account limit — an account may redeem repeatedly).
+    # A coupon grants COUPON_CREDITS plan unlocks and burns one of the code's uses. The ONLY cap is
+    # total uses (no per-account limit — an account may redeem repeatedly).
     from app import store
     store.init()
-    n = store.PDF_CREDITS_PER_PURCHASE
+    n = store.COUPON_CREDITS
     code = "TESTCAP2"
     con = store._connect()
     with con:
@@ -30,7 +30,11 @@ def test_coupon_redeem_grants_credits_and_caps():
     ok4, reason4 = store.redeem_coupon(code, "c@x.com")          # 100... here 3 uses exhausted → spent
     assert not ok4 and reason4 == "spent" and store.credits_left("c@x.com") == 0
     assert store.redeem_coupon("NOPE", "d@x.com") == (False, "invalid")
-    assert store.coupon_status("FUCKYOUIMNOTGIVINGYOU7BUCKS")["max_uses"] == 100  # standing code: 100 uses total
+    # the standing comp code is the $13-era one again; the $7-era code is retired
+    assert store.coupon_status("FUCKYOUIMNOTGIVINGYOU13BUCKS")["max_uses"] == 100
+    assert store.coupon_status("FUCKYOUIMNOTGIVINGYOU13BUCKS")["active"] is True
+    seven = store.coupon_status("FUCKYOUIMNOTGIVINGYOU7BUCKS")
+    assert seven is None or seven["active"] is False
 
 
 def test_full_plan_flow_with_board(client):
@@ -120,27 +124,30 @@ def test_qa_pass_and_pdf_unlock_on_finish(client):
     assert s["pdfUnlocked"] is True                 # billing off in tests → PDF is open
 
 
-def test_pdf_credits_three_plans_per_purchase():
-    # $7 grants 3 plan-unlock credits; a plan = a finished branch (plan_key). Claiming a new branch
-    # spends a credit; re-downloading an unlocked one is free; a comp grant unlocks everything.
+def test_pdf_unlock_is_per_plan_13_flat():
+    # $13 unlocks EXACTLY the plan it was bought for (plan_key = finished branch); re-downloading is
+    # free forever; a new branch pays its own $13. Coupon credits are the fallback currency (1 = 1
+    # plan); a comp grant unlocks everything.
     from app import store
     store.init()
-    assert store.credits_left("brancher@x.com") == 0
-    assert store.claim_pdf("brancher@x.com", "sidX:leaf1") is False    # no credits → must pay
-    store.grant_credits("brancher@x.com")                             # one $7 → 3 credits
-    assert store.credits_left("brancher@x.com") == 3
-    assert store.claim_pdf("brancher@x.com", "sidX:leaf1") is True and store.credits_left("brancher@x.com") == 2
-    assert store.claim_pdf("brancher@x.com", "sidX:leaf1") is True and store.credits_left("brancher@x.com") == 2  # re-download free
+    assert store.claim_pdf("brancher@x.com", "sidX:leaf1") is False    # nothing bought → must pay
+    # the paid path: the webhook records the unlock for the exact plan, idempotent on session id
+    assert store.unlock_for_session("brancher@x.com", "cs_13", "sidX:leaf1") is True
+    assert store.unlock_for_session("brancher@x.com", "cs_13", "sidX:leaf1") is False   # Stripe retry
     assert store.has_purchased("brancher@x.com", "sidX:leaf1") is True
-    assert store.has_purchased("brancher@x.com", "sidX:leaf2") is False   # a new branch isn't unlocked yet
-    assert store.claim_pdf("brancher@x.com", "sidX:leaf2") and store.claim_pdf("brancher@x.com", "sidX:leaf3")
-    assert store.credits_left("brancher@x.com") == 0
-    assert store.claim_pdf("brancher@x.com", "sidX:leaf4") is False    # 4th plan → out of credits
+    assert store.claim_pdf("brancher@x.com", "sidX:leaf1") is True     # free re-download
+    assert store.has_purchased("brancher@x.com", "sidX:leaf2") is False   # a new branch isn't unlocked
+    assert store.claim_pdf("brancher@x.com", "sidX:leaf2") is False       # …and pays its own $13
+    # coupon credits: one credit = one plan unlock, spent at claim time
+    store.grant_credits("brancher@x.com", store.COUPON_CREDITS)
+    assert store.credits_left("brancher@x.com") == 3
+    assert store.claim_pdf("brancher@x.com", "sidX:leaf2") is True and store.credits_left("brancher@x.com") == 2
+    assert store.claim_pdf("brancher@x.com", "sidX:leaf2") is True and store.credits_left("brancher@x.com") == 2  # re-download free
     store.record_purchase("wide@x.com")                               # comp grant → unlimited
     assert store.has_purchased("wide@x.com", "anything:goes") is True and store.claim_pdf("wide@x.com", "z:z") is True
-    # Stripe session idempotency: the same session grants credits only once
-    assert store.credit_for_session("s@x.com", "cs_1") is True and store.credits_left("s@x.com") == 3
-    assert store.credit_for_session("s@x.com", "cs_1") is False and store.credits_left("s@x.com") == 3
+    # legacy credit grant (a payment event with no plan_key) stays idempotent per session
+    assert store.credit_for_session("s@x.com", "cs_1", n=1) is True and store.credits_left("s@x.com") == 1
+    assert store.credit_for_session("s@x.com", "cs_1", n=1) is False and store.credits_left("s@x.com") == 1
 
 
 def test_export_txt_available_with_data_unfinished(client):
@@ -486,9 +493,9 @@ def _finish_plan(client, email):
 
 
 def test_pdf_purchase_gate_raw_stays_free(client, monkeypatch):
-    # The polished PDF is the one paid action (3 plan-unlocks per $7); the raw export is always free.
-    # With billing live and no access/credits, the PDF route returns 402 needPurchase; the raw .zip is
-    # untouched. A claim (credit or unlock) lets it through.
+    # The polished PDF is the one paid BYOK action ($13 unlocks the plan); the raw export is always
+    # free. With billing live and no access, the PDF route returns 402 needPurchase; the raw .zip is
+    # untouched. A claim (unlock or coupon credit) lets it through.
     from app import main
     sid = _finish_plan(client, "gate@x.com")
 

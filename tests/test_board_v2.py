@@ -80,14 +80,15 @@ def test_forge_and_seat_director(client):
 
 def test_help_pricing_facts_track_the_live_ladder():
     """The help prompt's pricing block is GENERATED from tiers.py + billing.py — it must carry the
-    live prices and none of the dead models (the 2026-07-06 QA caught help quoting '$13 one-time,
-    no subscription' from a hardcoded prompt)."""
+    live prices and none of the dead models (the 2026-07-06 QA caught help quoting a stale price
+    from a hardcoded prompt). Live model since the gating wave: $13 per-plan clean PDF, Pro $29 /
+    Ultimate $99; the $7/3-credit bundle and the Starter/Studio tiers are dead copy."""
     from app import main, tiers
     block = main._help_system()
     for t in tiers.catalog():                      # every live tier, by label and price
         assert t["label"] in block and f"${t['price']:g}/mo" in block
-    assert "$7" in block and "watermark" in block  # the PDF story (credits + free watermarked copy)
-    for dead in ("$13", "$35", "no monthly subscription"):
+    assert "$13" in block and "watermark" in block  # the PDF story ($13/plan + free watermarked copy)
+    for dead in ("$7", "$35", "3 clean", "Starter", "Studio", "no monthly subscription"):
         assert dead not in block, f"dead monetization copy leaked into help: {dead}"
     assert "Keep going" in block and "Pivot" in block   # v2 verbs, not just the classic buttons
     # 2026-07-06 QA round 2: money answers lead with the BYOK-vs-subscription fork, and help

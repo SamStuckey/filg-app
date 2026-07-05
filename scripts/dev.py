@@ -17,7 +17,7 @@ then drive states from here.
   python scripts/dev.py unkill <sid>          # back to 'pursue'
   python scripts/dev.py spend <amount>        # add to today's spend → test the daily kill-switch / degrade
   python scripts/dev.py usage                 # show today_spend / daily_budget / free-run counters
-  python scripts/dev.py plan <email> <tier>   # set a subscription tier (starter|pro|studio|free)
+  python scripts/dev.py plan <email> <tier>   # set a subscription tier (pro|ultimate|free)
   python scripts/dev.py account <email>       # why am I (not) walled? tier / saved key / monthly usage
   python scripts/dev.py key <email> [--clear] # show or clear a saved BYOK key (flip free ↔ BYOK)
   python scripts/dev.py models [--check]      # show the model catalog (--check hits the cached Models API)
@@ -159,7 +159,7 @@ def cmd_usage(args):
 
 def cmd_plan(args):
     """Set (or clear) an account's subscription tier locally — test the tier gating / fair-use meter /
-    PDF-free-for-subscribers without Stripe. `plan` = starter|pro|studio, or free|none to cancel."""
+    PDF-free-for-subscribers without Stripe. `plan` = pro|ultimate (legacy starter/studio fold in), or free|none to cancel."""
     store = _store()
     norm = _norm(args.email)
     if args.plan in ("free", "none", "cancel"):
@@ -245,7 +245,7 @@ def main():
     a = sub.add_parser("spend")
     a.add_argument("amount")
     a.set_defaults(fn=cmd_spend)
-    a = sub.add_parser("plan", help="set an account's subscription tier (starter|pro|studio|free)")
+    a = sub.add_parser("plan", help="set an account's subscription tier (pro|ultimate|free)")
     a.add_argument("email")
     a.add_argument("plan")
     a.set_defaults(fn=cmd_plan)

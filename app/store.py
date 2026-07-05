@@ -18,7 +18,7 @@ import json
 import os
 import sqlite3
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 DB = os.environ.get("FILG_DB") or os.path.join(_HERE, "filg.db")
@@ -100,10 +100,12 @@ def init() -> None:
                 con.execute(
                     "INSERT OR IGNORE INTO coupons (code, max_uses, used, active, created_at) "
                     "VALUES (?,?,0,1,?)",
-                    ("FUCKYOUIMNOTGIVINGYOU7BUCKS", 100,
+                    ("FUCKYOUIMNOTGIVINGYOU13BUCKS", 100,
                      datetime.now(timezone.utc).isoformat()))
-                # Retire the old $13-named comp code (price is $7 now) — the new code above supersedes it.
-                con.execute("UPDATE coupons SET active=0 WHERE code='FUCKYOUIMNOTGIVINGYOU13BUCKS'")
+                # The PDF price is back to $13 (2026-07-06) — the $13-named code is live again and the
+                # $7-era code retires. INSERT OR IGNORE keeps a previously-seeded 13 row's counter.
+                con.execute("UPDATE coupons SET active=1 WHERE code='FUCKYOUIMNOTGIVINGYOU13BUCKS'")
+                con.execute("UPDATE coupons SET active=0 WHERE code='FUCKYOUIMNOTGIVINGYOU7BUCKS'")
                 # Interactive plan-builder sessions (idea → decision-tree → downloadable file tree).
                 con.execute(
                     "CREATE TABLE IF NOT EXISTS plan_sessions ("
@@ -153,7 +155,7 @@ def init() -> None:
                 con.execute(
                     "CREATE TABLE IF NOT EXISTS accounts ("
                     "  email TEXT PRIMARY KEY,"
-                    "  tier TEXT,"                       # starter | pro | studio | NULL (canceled)
+                    "  tier TEXT,"                       # pro | ultimate | NULL (canceled; legacy starter/studio fold in)
                     "  status TEXT,"                     # active | trialing | past_due | canceled
                     "  stripe_customer_id TEXT,"
                     "  stripe_subscription_id TEXT,"
@@ -210,13 +212,15 @@ def get(job_id: str) -> dict | None:
     return job
 
 
-# ── PDF access: 3 plan-unlock credits per $7, free re-downloads, account-wide comp grants ──
-PDF_CREDITS_PER_PURCHASE = 3   # one $7 purchase grants this many plan unlocks
+# ── PDF access: $13 unlocks ONE plan's clean PDF (re-download free); comp grants; coupon credits ──
+PDF_CREDITS_PER_PURCHASE = 1   # a $13 purchase unlocks exactly the plan it was bought for
+COUPON_CREDITS = 3             # a comp coupon still hands out a few plan unlocks (Sam's call, not paid)
 
 
 def grant_credits(email: str, n: int = PDF_CREDITS_PER_PURCHASE) -> None:
-    """Add `n` plan-unlock credits to an account (a $7 purchase grants 3). Idempotency for re-delivered
-    Stripe events is handled by the caller (it keys on the stripe session id)."""
+    """Add `n` plan-unlock credits to an account. Credits are the fallback currency (coupons; a paid
+    unlock whose webhook lost its plan_key) — the normal $13 path unlocks the exact plan directly via
+    unlock_for_session. Idempotency for re-delivered Stripe events is handled by the caller."""
     if not email or n <= 0:
         return
     email = email.strip().lower()
@@ -253,6 +257,31 @@ def credit_for_session(email: str, session_id: str | None, n: int = PDF_CREDITS_
                 "INSERT INTO pdf_credits (email, credits, updated_at) VALUES (?,?,?) "
                 "ON CONFLICT(email) DO UPDATE SET credits=credits+excluded.credits, updated_at=excluded.updated_at",
                 (email, n, datetime.now(timezone.utc).isoformat()))
+        return True
+    finally:
+        con.close()
+
+
+def unlock_for_session(email: str, session_id: str | None, plan_key: str) -> bool:
+    """Record a PAID unlock of one exact plan (the $13 purchase path) EXACTLY ONCE per Stripe checkout
+    session (Stripe retries webhooks). Re-downloads of an unlocked plan are free (has_purchased).
+    Returns True if recorded, False if this session was already processed."""
+    if not email or not plan_key:
+        return False
+    email = email.strip().lower()
+    init()
+    con = _connect()
+    try:
+        with con:
+            if session_id:
+                cur = con.execute("INSERT OR IGNORE INTO stripe_sessions (id, created_at) VALUES (?,?)",
+                                  (session_id, datetime.now(timezone.utc).isoformat()))
+                if cur.rowcount != 1:
+                    return False   # already processed this event
+            con.execute(
+                "INSERT INTO pdf_unlocks (email, plan_key, stripe_session, created_at) VALUES (?,?,?,?) "
+                "ON CONFLICT(email, plan_key) DO NOTHING",
+                (email, plan_key, session_id, datetime.now(timezone.utc).isoformat()))
         return True
     finally:
         con.close()
@@ -356,10 +385,10 @@ def record_purchase(email: str, *, stripe_session: str | None = None,
         con.close()
 
 
-# ── Coupons (a free $7-equivalent — bypass Stripe) ───────────────────────────
+# ── Coupons (free plan unlocks — bypass Stripe) ──────────────────────────────
 def redeem_coupon(code: str, normalized_email: str) -> tuple[bool, str]:
-    """Redeem a coupon = a free purchase: grant the same PDF_CREDITS_PER_PURCHASE credits a $7 buy gives,
-    and burn one of the code's `max_uses` (the ONLY cap — 100 uses total, no per-account limit). Returns
+    """Redeem a coupon: grant COUPON_CREDITS plan-unlock credits (spendable on any plan, one each) and
+    burn one of the code's `max_uses` (the ONLY cap — 100 uses total, no per-account limit). Returns
     (ok, reason); `reason` is coarse ('invalid' | 'spent') and never leaks the remaining-uses count."""
     code = (code or "").strip()
     if not code or not normalized_email:
@@ -380,7 +409,7 @@ def redeem_coupon(code: str, normalized_email: str) -> tuple[bool, str]:
             con.execute(
                 "INSERT INTO pdf_credits (email, credits, updated_at) VALUES (?,?,?) "
                 "ON CONFLICT(email) DO UPDATE SET credits=credits+excluded.credits, updated_at=excluded.updated_at",
-                (normalized_email, PDF_CREDITS_PER_PURCHASE, now))
+                (normalized_email, COUPON_CREDITS, now))
         return True, "redeemed"
     finally:
         con.close()
@@ -603,6 +632,47 @@ def plan_delete(session_id: str) -> None:
         con.close()
 
 
+def purge_orphan_plans(hours: int = 48) -> int:
+    """Delete plan sessions that never got an account (user empty/NULL) and are older than `hours`.
+    The free taste runs anonymously through the first research step; a visitor who declines to sign
+    up at the wall simply loses the plan — this is the promised cleanup. Returns the rows removed."""
+    init()
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+    con = _connect()
+    try:
+        with con:
+            cur = con.execute(
+                "DELETE FROM plan_sessions WHERE (user IS NULL OR trim(user)='') AND created_at < ?",
+                (cutoff,))
+            return cur.rowcount or 0
+    finally:
+        con.close()
+
+
+def plan_claim(session_id: str, email: str) -> bool:
+    """Attach an OWNERLESS (anonymous free-taste) plan to a signed-in account. Refuses to reassign a
+    plan someone already owns. Returns True if the plan is now owned by `email` (idempotent)."""
+    if not email:
+        return False
+    email = email.strip().lower()
+    init()
+    con = _connect()
+    try:
+        with con:
+            row = con.execute("SELECT user FROM plan_sessions WHERE id=?", (session_id,)).fetchone()
+            if not row:
+                return False
+            owner = (row["user"] or "").strip().lower()
+            if owner == email:
+                return True   # already theirs
+            if owner:
+                return False  # someone else's plan — never reassign
+            con.execute("UPDATE plan_sessions SET user=? WHERE id=?", (email, session_id))
+        return True
+    finally:
+        con.close()
+
+
 def delete_account(email: str, normalized: str | None = None) -> None:
     """Permanently delete a user's data: every plan session they own, their PDF purchases, and their
     per-branch unlocks. (BYOK keys live in app/keys.py — the caller removes those.) Purchases dedupe on
@@ -638,17 +708,18 @@ if __name__ == "__main__":  # quick self-test (no API)
     fail("abc123", "boom")
     assert get("abc123")["status"] == "error"
     assert get("nope") is None
-    # PDF access: $7 = 3 plan-unlock credits; re-downloads free; a new branch costs another credit
+    # PDF access: $13 unlocks the exact plan it was bought for; re-downloads free; new branch pays again
     assert has_purchased("buyer@x.com", "pl1:leafA") is False and credits_left("buyer@x.com") == 0
-    grant_credits("buyer@x.com")                                 # one $7 → 3 credits
+    assert unlock_for_session("buyer@x.com", "cs_13a", "pl1:leafA") is True     # the $13 purchase lands
+    assert unlock_for_session("buyer@x.com", "cs_13a", "pl1:leafA") is False    # Stripe retry → no double
+    assert has_purchased("buyer@x.com", "pl1:leafA") is True                    # unlocked → free re-download
+    assert claim_pdf("buyer@x.com", "pl1:leafA") is True and credits_left("buyer@x.com") == 0
+    assert claim_pdf("buyer@x.com", "pl1:leafB") is False        # a NEW branch → pays its own $13
+    # coupon credits are the fallback currency: one credit = one plan unlock
+    grant_credits("buyer@x.com", COUPON_CREDITS)
     assert credits_left("buyer@x.com") == 3
-    assert has_purchased("buyer@x.com", "pl1:leafA") is False    # credits ≠ already-unlocked
-    assert claim_pdf("buyer@x.com", "pl1:leafA") is True and credits_left("buyer@x.com") == 2  # 1 spent
-    assert claim_pdf("buyer@x.com", "pl1:leafA") is True and credits_left("buyer@x.com") == 2  # re-download free
-    assert has_purchased("buyer@x.com", "pl1:leafA") is True     # now an unlocked plan
-    assert claim_pdf("buyer@x.com", "pl1:leafB") is True and credits_left("buyer@x.com") == 1  # new branch, -1
-    assert claim_pdf("buyer@x.com", "pl1:leafC") is True and credits_left("buyer@x.com") == 0  # 3rd plan
-    assert claim_pdf("buyer@x.com", "pl1:leafD") is False        # out of credits → needs to pay again
+    assert claim_pdf("buyer@x.com", "pl1:leafB") is True and credits_left("buyer@x.com") == 2  # 1 spent
+    assert claim_pdf("buyer@x.com", "pl1:leafB") is True and credits_left("buyer@x.com") == 2  # re-download free
     # an unlimited comp grant (coupon) unlocks every plan, no credits needed
     record_purchase("comp@x.com")
     assert is_comped("comp@x.com") and has_purchased("comp@x.com", "any:key") is True
