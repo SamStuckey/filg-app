@@ -177,16 +177,21 @@ async function startFromLanding(){
   // the canvas fades in with a seed node already working — no swap, no fly-away.
   box.value='';
   $('workspace').classList.remove('full'); sendLabel();
+  // the operator's words appear in the chat IMMEDIATELY — an empty drawer while the first spread
+  // thinks reads as a swallowed input (Sam's QA, 2026-07-06). Display-only for now (no SID yet to
+  // persist against); persisted below once the session exists, removed if the submit is rejected.
+  const firstMsg=chatSay('user',esc(idea));
   setTimeout(()=>{ if(!SID)seedGraph(idea); },380);   // seed once the panel has size — unless the spread already landed (mock is FAST)
   const {ok,d}=await api('POST','/api/brainstorm',{idea,stack:STACK_CUR});
-  if(!ok||(d&&d.gibberish)){   // rejected → expand back out and say why
+  if(!ok||(d&&d.gibberish)){   // rejected → expand back out and say why (and unsay the optimistic bubble)
+    if(firstMsg)firstMsg.remove();
     $('workspace').classList.add('full'); sendLabel(); box.value=idea; resetGraph();
     if(d&&d.gibberish){ $('landing-joke').innerHTML=`<div class=jokecard><h3>${esc(d.title||"That's not an idea yet.")}</h3><div>${mdToHtml(d.body||'')}</div></div>`; return; }
     if(gateV2(d))return;
     $('landing-err').textContent=(d&&d.error)||'Something went wrong.'; return;
   }
   adoptPlan(d); render(d);
-  chatUser(idea);
+  chatPush('user',idea);   // already rendered above — now it can join the durable record
   chatBot('Spread that into a few directions — pick what clicks on the graph, or just keep typing.');
   // the collapse animation is still moving the panels — re-aim the camera once the layout settles,
   // or the tree stays framed against a mid-transition (half-width) canvas
