@@ -78,3 +78,64 @@ def test_merge_real_tolerates_non_object_reply(patch_call):
     patch_call('["nope"]')
     m, _ = brainstorm.merge(RAW, [{"title": "box"}], mock=False, research=False)
     assert m["thesis"] and isinstance(m["kept"], list)           # degrades, no 500
+
+
+# ── the pivot-responsiveness seam check (2026-07-06, from Sam's QA: a real pivot was captured as
+# feedback but the spread came back generic — schema validation can't see an ignored pivot) ──
+PIVOT_INPUT = ('THE OPERATOR IS PIVOTING. Their pivot instruction OUTWEIGHS everything below:\n'
+               'add an events angle where customers bake with the team\n\n'
+               'COMMITTED PATH (root -> the pivot point):\n- the idea\n- what you sell')
+_DIRS = ('{"spread": "loose", "directions": [{"title": "Cookie subscriptions", '
+         '"one_liner": "Monthly cookie box.", "mold": "Subscription box"}, '
+         '{"title": "Retail cookies", "one_liner": "Sell wholesale.", "mold": "Reselling"}]}')
+_DIRS_PIVOTED = ('{"spread": "tight", "directions": [{"title": "Bake-with-the-team events", '
+                 '"one_liner": "Customers bake alongside the team at pop-up events.", '
+                 '"mold": "Seasonal / pop-up"}]}')
+
+
+def test_pivot_ignored_twice_fails_loud(patch_call):
+    calls = []
+    def fake(stage, prompt):
+        calls.append(stage)
+        if stage == "diverge":
+            return _DIRS                                   # generic both times
+        return '{"honors_pivot": false, "why": "same directions as before"}'
+    patch_call(fake)
+    import pytest
+    with pytest.raises(RuntimeError, match="ignoring what you asked"):
+        brainstorm.diverge(PIVOT_INPUT, mock=False)
+    assert calls.count("diverge") == 2 and calls.count("judge") == 2   # reprompted once, then loud
+
+
+def test_pivot_retry_recovers(patch_call):
+    calls = []
+    def fake(stage, prompt):
+        calls.append(stage)
+        if stage == "diverge":
+            return _DIRS if calls.count("diverge") == 1 else _DIRS_PIVOTED
+        # first spread ignored the pivot; the reprompted one honors it
+        return ('{"honors_pivot": false, "why": "generic"}' if calls.count("judge") == 1
+                else '{"honors_pivot": true, "why": "events angle present"}')
+    patch_call(fake)
+    d, _ = brainstorm.diverge(PIVOT_INPUT, mock=False)
+    assert d["directions"][0]["title"] == "Bake-with-the-team events"
+    # the reprompt quoted the operator's pivot back as a hard requirement
+    assert calls == ["diverge", "judge", "diverge", "judge"]
+
+
+def test_pivot_judge_flake_fails_open(patch_call):
+    def fake(stage, prompt):
+        return _DIRS if stage == "diverge" else "sorry, I cannot produce JSON right now"
+    patch_call(fake)
+    d, _ = brainstorm.diverge(PIVOT_INPUT, mock=False)   # unverifiable ≠ ignored — no brick
+    assert len(d["directions"]) == 2
+
+
+def test_plain_input_never_calls_the_judge(patch_call):
+    calls = []
+    def fake(stage, prompt):
+        calls.append(stage)
+        return _DIRS
+    patch_call(fake)
+    brainstorm.diverge(RAW, mock=False)
+    assert "judge" not in calls

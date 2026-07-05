@@ -1377,30 +1377,64 @@ async def api_plans(request: Request):
 
 
 # ── In-app product help (a standard website help chat; runs on the user's key) ──
-HELP_SYSTEM = (
-    "You are the in-app help assistant for FILG (a tool that turns a rough business idea, or just "
-    "someone's skills and interests, into a vetted, buildable business plan). Help the user USE the "
-    "product. Be brief and concrete (2 to 5 sentences), friendly and plain.\n\n"
-    "How FILG works:\n"
-    "- Start on the home page: type your idea (or just what you're good at) and submit. FILG researches "
-    "the market and grades every stat through a source-credibility gate, so vendor marketing is labeled, "
-    "not repeated as fact. Then it vets the idea (pursue / pivot / kill).\n"
-    "- Then you build the plan one part at a time (7 parts: the setup, what you sell, why you win, "
-    "pricing, go-to-market, delivery, and a 30-day plan).\n"
-    "- To move through the build, use the buttons at the bottom: 'I'm with you' locks the current part in "
-    "and builds the next one; 'Not feeling it' redraws the current part, and you can add a note to steer "
-    "the rewrite. You can branch back to an earlier part anytime from the plan tree.\n"
-    "- Board of Directors: optional AI advisors that review your sections; you can convene them or forge a "
-    "custom one. 'Chat with your plan' is an advisor grounded in your actual plan and research.\n"
-    "- Export: the raw files (.zip) and the LLM hand-off prompt are free; the polished investor-grade PDF "
-    "is a one-time $13 unlock.\n"
-    "- Your key: FILG runs on your own API key (OpenRouter or Anthropic). Add or change it in the key "
-    "modal or the API config tab of your profile. Everything uses your key, usually pennies per plan.\n"
-    "- Your profile (/account) has tabs for your plans, files, API config, and account settings.\n\n"
-    "Only answer questions about USING FILG. If they ask for strategy on their specific business, point "
-    "them to 'Chat with your plan' or the Board. Do not invent features you're unsure about. Write "
-    "plainly: no em-dashes, no AI-tell words."
-)
+_FEATURE_WORDS = {"director_forge": "Director Forge", "custom_directors": "custom directors",
+                  "skeptic": "the assumption stress-test"}
+
+
+def _help_pricing() -> str:
+    """The PRICING FACTS block for the help prompt, GENERATED from tiers.py + billing.py — the single
+    sources of truth — so help can never drift from the live ladder again. (The 2026-07-06 QA caught
+    help quoting the dead '$13 one-time, no subscription' model from a hardcoded prompt.)"""
+    price = billing.PDF_PRICE_CENTS / 100
+    lines = [
+        "PRICING FACTS (answer any cost/subscription question ONLY from these, never from memory):",
+        "- Free on your own API key (OpenRouter or Anthropic): unlimited use, every model crew. Model "
+        "usage bills to their key, typically well under a dollar per plan.",
+        f"- Raw export (.zip/.md) is always free. The polished investor-grade PDF: free WITH a small "
+        f"'Built with FILG' watermark on your own key, or ${price:g} buys "
+        f"{store.PDF_CREDITS_PER_PURCHASE} clean (watermark-free) plan PDFs. Every subscription "
+        "includes clean PDFs.",
+        "- Monthly subscriptions run on FILG's hosted key (no API key needed). Each has a fair-use "
+        "monthly usage allowance that resets with the billing period; hitting it means add your own "
+        "key or wait for the renewal:",
+    ]
+    for t in tiers.catalog():
+        opus = any(s["opus"] for s in t["stacks"])
+        feats = ("; includes " + ", ".join(_FEATURE_WORDS.get(f, f) for f in t["features"])
+                 if t["features"] else "")
+        lines.append(f"  * {t['label']}: ${t['price']:g}/mo, "
+                     f"{'premium (Opus-class) model crews included' if opus else 'the cost-efficient model crews'}"
+                     f"{feats}.")
+    return "\n".join(lines)
+
+
+def _help_system() -> str:
+    return (
+        "You are the in-app help assistant for FILG (a tool that turns a rough business idea, or just "
+        "someone's skills and interests, into a vetted, buildable business plan). Help the user USE the "
+        "product. Be brief and concrete (2 to 5 sentences), friendly and plain.\n\n"
+        "How FILG works:\n"
+        "- Type your idea (or just what you're good at) and submit. FILG spreads it into directions, "
+        "researches the market, and grades every stat through a source-credibility gate, so vendor "
+        "marketing is labeled, not repeated as fact. It also vets the idea (pursue / pivot / kill).\n"
+        "- The plan builds one part at a time (7 parts: the setup, what you sell, why you win, pricing, "
+        "go-to-market, delivery, and a 30-day plan).\n"
+        "- On the main surface the LEFT is the chat (pills: Build / Research / Board / Help) and the "
+        "RIGHT is the decision graph: every draft, pivot, and fork is a node; click a node to read it, "
+        "'Keep going' rolls forward, 'Pivot' branches from any node. The graph has a minimap, fit-view "
+        "(F), and tree search (/). The classic page uses 'I'm with you' / 'Not feeling it' instead.\n"
+        "- Research pill: the graded evidence stack; ask a question and a fresh lookup runs through the "
+        "gate. Board pill: the convene history; the seats row re-picks the bench, Forge creates a custom "
+        "director, Stress-test runs the adversarial assumption pass. Board notes stick to each step.\n"
+        "- Share: a read-only public page of the plan (receipts + decision path) via the Share button; "
+        "private by default.\n"
+        "- Your key: add or change it in the key modal or the API config tab of your profile "
+        "(/account).\n\n"
+        + _help_pricing() + "\n\n"
+        "Only answer questions about USING FILG. If they ask for strategy on their specific business, "
+        "point them to the Build chat or the Board. Do not invent features or prices you're unsure "
+        "about. Write plainly: no em-dashes, no AI-tell words."
+    )
 
 _HELP_MOCK = ("This is mock help (no key bound). In the real app: type your idea on the home page, then "
               "use 'I'm with you' to lock each part and build the next, or 'Not feeling it' to redo a part. "
@@ -1434,7 +1468,7 @@ async def api_help(request: Request):
         convo += f"\n{who}: {str(m.get('content', ''))[:600]}"
     try:
         with provider.use(prov), provider.use_stack(provider.DEFAULT_STACK), pipeline.run_ledger():
-            reply = pipeline.call("help", pipeline.SONNET, max_tokens=400, system=HELP_SYSTEM, cache=True,
+            reply = pipeline.call("help", pipeline.SONNET, max_tokens=400, system=_help_system(), cache=True,
                                   prompt=f"Conversation so far:{convo or ' (none)'}\n\nUser: {message}\n\n"
                                          "Reply as the FILG help assistant.")
             _meter(user, round(pipeline.LEDGER.cost(), 4))   # FILG-key help → daily + a subscriber's monthly cap

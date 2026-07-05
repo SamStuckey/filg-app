@@ -480,7 +480,12 @@ async function commit(thesis,fromNode){
 }
 // ── Pivot-from-a-node: an armed ghost child ("enter feedback to pivot…") + the direct spread ──
 let PIVOT_FROM=null;
-function pivotFromHere(id){ PIVOT_FROM=id; REVET_ARMED=false; FOCUS=null; BROWSING=true; renderGraph();
+function pivotFromHere(id){ PIVOT_FROM=id; REVET_ARMED=false; FOCUS=null; BROWSING=true;
+  // arming a pivot is a BUILD act — research/board displays bow out and the chat says what's next
+  // (found in Sam's 2026-07-06 QA: pivot from research mode left the drawer in research)
+  exitResearch(true); exitBoard(true);
+  renderGraph();
+  chatStatus('⑂ Pivot armed from '+pivotSrcLabel(id)+' — enter your pivot: what should change?');
   const b=$('ws-box'); if(b){b.placeholder='Your pivot: what should change from here?';b.focus();} }
 function pivotActive(){ const {t}=nodesOf(S); pivotFromHere(t.active); }   // the step view's Pivot button: arm the ghost off THIS step
 function pivotSrcLabel(id){   // name the pivot's source node in the chat — "which node am I forking?" must never be a guess
@@ -1395,12 +1400,26 @@ function applyRmode(){
   if(RMODE!=='full'){ const log=$('chatlog'); if(log)log.scrollTop=log.scrollHeight; }
 }
 function researchItems(){
-  const rows=((S&&S.research&&S.research.rows)||[]).map(r=>(
-    {text:r.text,url:r.url,ok:r.mark==='ok',tier:r.mark==='ok'?'cited':'vendor'}));
-  const seen=new Set(rows.map(x=>x.text+'|'+(x.url||'')));
-  const extra=LOOKUPS.filter(c=>!seen.has(c.text+'|'+(c.url||''))).map(c=>(
-    {text:c.text,url:c.url,ok:!c.flagged,tier:c.tier||(c.flagged?'vendor':'cited'),fresh:true}));
-  return rows.concat(extra);
+  // EVERY graded source joins the stack, deduped by text|url. Before the deep build the rows live
+  // on the REFINED NODE (the first-pass read), not the session — the stack reading only S.research
+  // meant a refined-stage Research pill showed empty while graded rows sat in the node (found in
+  // Sam's 2026-07-06 QA). Sources: the plan's deep-build rows · the active node's first-pass rows ·
+  // any browsed node's rows (NODECACHE) · this session's chat lookups.
+  const out=[], seen=new Set();
+  const add=(list,fresh)=>(list||[]).forEach(r=>{
+    const key=(r.text||'')+'|'+(r.url||'');
+    if(!r.text||seen.has(key))return;
+    seen.add(key);
+    const ok=('mark' in r)?r.mark==='ok':!r.flagged;
+    out.push({text:r.text,url:r.url,ok,tier:r.tier&&!('mark' in r)?r.tier:(ok?'cited':'vendor'),
+      fresh:!!fresh});
+  });
+  add(S&&S.research&&S.research.rows);
+  add(S&&S.activeNode&&S.activeNode.research&&S.activeNode.research.rows);
+  Object.keys(NODECACHE).forEach(id=>{const d=NODECACHE[id];
+    add(d&&d.research&&d.research.rows);});
+  add(LOOKUPS,true);
+  return out;
 }
 const _RSTOP=new Set(('the,a,an,and,or,but,of,to,in,on,for,with,is,are,was,were,be,been,do,does,did,'+
   'how,what,why,when,where,who,which,i,my,me,you,your,we,our,us,it,its,this,that,these,those,about,'+
@@ -1426,7 +1445,7 @@ function renderResearch(){
     `${it.ok?'✅':'⚠️'} ${esc(it.text)}`+
     (it.url?` <a href="${esc(it.url)}" target=_blank rel=noopener>src</a>`:'')+
     `<span class=rtier>${esc(it.tier)}${it.fresh?' · lookup':''}</span></div>`).join('')
-    :'<p class=thinking>No graded research yet — it lands with the deep build. Ask a question and I\'ll dig (every claim goes through the gate).</p>';
+    :'<p class=thinking>No graded research yet — the first rows land with the first-pass read (merge a direction), more with the deep build. Ask a question and I\'ll dig (every claim goes through the gate).</p>';
   ['rlist','rlist2'].forEach(id=>{ const el=$(id); if(el)el.innerHTML=html; if(el)el.scrollTop=0; });
   return anyHit;
 }
