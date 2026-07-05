@@ -233,6 +233,8 @@ async function sendPrompt(){
   // an armed "Pivot from here" ghost: the input IS the pivot feedback — spread from that node directly
   if(PIVOT_FROM){ const from=PIVOT_FROM; box.value=''; clearGhost();
     chatStatus('Pivoting from '+pivotSrcLabel(from)); return pivotSpread(from,prompt); }
+  // the kill gate armed "give it substance": the input IS the substance — straight to /revet
+  if(REVET_ARMED){ box.value=''; return revetSend(prompt); }
   // browsing an earlier node? it rides along as context (a steer pivots from it, a question is about it)
   const {t}=nodesOf(S);
   const fromNode=(FOCUS&&FOCUS!==t.active)?FOCUS:null;
@@ -341,11 +343,61 @@ async function lookupInChat(q){
 async function steer(note){
   if(!note) return;
   if(S&&(S.stage==='building'||S.stage==='done')){
-    await run(`/api/plan/${SID}/redraft`,{feedback:note},'Reworking this part');
+    const {t}=nodesOf(S);   // inline comments on the current doc ride the rework (backlog #8)
+    if(await run(`/api/plan/${SID}/redraft`,{feedback:note+cmtSteer(t.active)},'Reworking this part'))
+      delete DOCCMTS[t.active];
   } else {
     await reBrainstorm(note+' — '+(S&&S.idea||''));   // upstream: fold the note into a fresh spread
   }
 }
+
+// ── Inline doc comments (backlog #8): select text in any rendered doc → leave a note. Comments key
+// on the node they're about, render under that doc, and FOLD INTO the next build verb that touches
+// the node (keep going / steer / pivot) — v1's #7 contract, restated in v2's verbs. Client-held;
+// they're consumed by the build that uses them.
+let DOCCMTS={}, CMT_NODE=null, CMT_QUOTE='';
+function cmtsFor(id){return (id&&DOCCMTS[id])||[];}
+function cmtSteer(id){ const cs=cmtsFor(id); if(!cs.length)return '';
+  return '\n\nInline comments on this document (address each, anchored to the quoted text):\n'+
+    cs.map(c=>`- On “${c.quote}”: ${c.note}`).join('\n'); }
+function cmtsHtml(id){ const cs=cmtsFor(id); if(!cs.length)return '';
+  return `<div class=cmts><p class=eyebrow>Your comments (they ride the next build of this part)</p>`+
+    cs.map((c,i)=>`<div class=cmtrow>💬 <span class=cmtq>“${esc(c.quote.length>90?c.quote.slice(0,90)+'…':c.quote)}”</span> `+
+      `<span class=cmtn>${esc(c.note)}</span><button type=button class=cmtx aria-label="Remove comment" onclick="rmCmt('${id}',${i})">×</button></div>`).join('')+`</div>`; }
+function rmCmt(id,i){ cmtsFor(id).splice(i,1); renderView(); }
+function cmtPop(){ let p=$('cmtpop'); if(p)return p;
+  p=document.createElement('div'); p.id='cmtpop';
+  p.innerHTML=`<div class=cmtq id=cmtpop-q></div>`+
+    `<textarea id=cmtpop-note rows=2 placeholder="Your note on that…"></textarea>`+
+    `<div class=cmtacts><button type=button onclick="hideCmtPop()">Cancel</button>`+
+    `<button type=button class=primary onclick="saveCmt()">Comment</button></div>`;
+  document.body.appendChild(p); return p; }
+function hideCmtPop(){ const p=$('cmtpop'); if(p)p.classList.remove('show');
+  const s=window.getSelection&&window.getSelection(); if(s&&s.removeAllRanges)s.removeAllRanges(); }
+function saveCmt(){ const note=(($('cmtpop-note')||{}).value||'').trim(); hideCmtPop();
+  if(!note||!CMT_NODE)return;
+  (DOCCMTS[CMT_NODE]=DOCCMTS[CMT_NODE]||[]).push({quote:CMT_QUOTE,note});
+  renderView(); }
+document.addEventListener('mouseup',e=>{
+  if(e.target.closest('#cmtpop'))return;
+  if(!e.target.closest('.draft'))return;                       // comments live on rendered docs only
+  const sel=window.getSelection(); const quote=(sel&&sel.toString()||'').trim();
+  if(!quote)return;
+  const id=(VIEWMODE==='docs')?DOCTAB:FOCUS;                   // whichever node's doc is on screen
+  CMT_NODE=(id&&id!=='_wip')?id:(nodesOf(S).t||{}).active; if(!CMT_NODE)return;
+  CMT_QUOTE=quote.slice(0,180);
+  const p=cmtPop();
+  $('cmtpop-q').textContent='“'+(CMT_QUOTE.length>90?CMT_QUOTE.slice(0,90)+'…':CMT_QUOTE)+'”';
+  $('cmtpop-note').value='';
+  p.classList.add('show');                                     // show first so it can be measured
+  const pw=p.offsetWidth||280, ph=p.offsetHeight||130;
+  p.style.left=Math.max(8,Math.min(e.clientX-40,window.innerWidth-pw-8))+'px';
+  p.style.top=Math.max(8,Math.min(e.clientY+14,window.innerHeight-ph-8))+'px';
+  setTimeout(()=>{const n=$('cmtpop-note');if(n)n.focus();},30);
+});
+document.addEventListener('keydown',e=>{ if(e.key==='Escape')hideCmtPop(); });
+document.addEventListener('mousedown',e=>{ const p=$('cmtpop');
+  if(p&&p.classList.contains('show')&&!e.target.closest('#cmtpop'))p.classList.remove('show'); });
 
 // ── Funnel actions ───────────────────────────────────────────────────────────
 async function reBrainstorm(idea){
@@ -375,7 +427,7 @@ async function commit(thesis,fromNode){
 }
 // ── Pivot-from-a-node: an armed ghost child ("enter feedback to pivot…") + the direct spread ──
 let PIVOT_FROM=null;
-function pivotFromHere(id){ PIVOT_FROM=id; FOCUS=null; BROWSING=true; renderGraph();
+function pivotFromHere(id){ PIVOT_FROM=id; REVET_ARMED=false; FOCUS=null; BROWSING=true; renderGraph();
   const b=$('ws-box'); if(b){b.placeholder='Your pivot: what should change from here?';b.focus();} }
 function pivotActive(){ const {t}=nodesOf(S); pivotFromHere(t.active); }   // the step view's Pivot button: arm the ghost off THIS step
 function pivotSrcLabel(id){   // name the pivot's source node in the chat — "which node am I forking?" must never be a guess
@@ -384,9 +436,12 @@ function pivotSrcLabel(id){   // name the pivot's source node in the chat — "w
   return '“'+String(t).slice(0,60)+'”'; }
 function clearGhost(){ PIVOT_FROM=null; const b=$('ws-box'); if(b)b.placeholder='Tell me what to change, or just talk to it…'; renderGraph(); }
 async function pivotSpread(fromNode,feedback){
-  beginWip('Spreading new directions',{parent:pivotParent(fromNode)});
-  const {ok,d}=await api('POST',`/api/plan/${SID}/rebrainstorm`,{feedback,node:fromNode});
+  const src=pivotParent(fromNode);
+  const full=(feedback||'')+cmtSteer(src);   // comments on the pivot node steer the spread (backlog #8)
+  beginWip('Spreading new directions',{parent:src});
+  const {ok,d}=await api('POST',`/api/plan/${SID}/rebrainstorm`,{feedback:full,node:fromNode});
   endWip();
+  if(ok)delete DOCCMTS[src];
   if(!ok){   // fail LOUD: restore the feedback + re-arm the ghost, never quietly show the old fork
     render(S);
     const b=$('ws-box'); if(b&&!b.value)b.value=feedback;
@@ -400,12 +455,57 @@ function commitFromBrainstorm(){
   const chosen=(stageOptions()||[]).filter(o=>SEL.has(o.id)).map(o=>o.direction.one_liner||o.direction.title);
   commit(chosen.join(' + '));
 }
-async function keepGoing(){ await run(`/api/plan/${SID}/next`,{feedback:''},'Writing the next part'); }
+async function keepGoing(){
+  const {t}=nodesOf(S);   // inline comments on this doc ride the roll-forward (backlog #8)
+  if(await run(`/api/plan/${SID}/next`,{feedback:cmtSteer(t.active).trim()},'Writing the next part'))
+    delete DOCCMTS[t.active];
+}
+async function keepGoingForced(){ await run(`/api/plan/${SID}/next`,{feedback:'',force:true},'Building it anyway'); }
 async function run(url,body,label){
   beginWip(label,{parent:(nodesOf(S).t||{}).active});
   const {ok,d}=await api('POST',url,body);
   endWip();
-  if(!ok){ render(S); if(gateV2(d))return; chatErr((d&&d.error)||'Something went wrong.'); return; }
+  if(!ok){ render(S); if(d&&d.needSubstance){killGateChat(d);return false;}
+    if(gateV2(d))return false; chatErr((d&&d.error)||'Something went wrong.'); return false; }
+  render(d); return true;
+}
+// ── The kill gate, v2-native (backlog #13): coach in the chat, off-ramps are the product's verbs ──
+// A kill-graded idea won't roll into a full plan. The chat carries the diagnostic; the ways out are
+// (a) answer with real substance → /revet, (b) pivot-fork off this node, (c) force → the joke plan.
+let REVET_ARMED=false;
+function killGateChat(d){
+  const m=chatSay('bot',
+    `<p>${esc(d.reaction||"Not yet — the gate found nothing real to build on.")}</p>`+
+    (d.risk?`<p>Biggest risk: ${esc(d.risk)}</p>`:'')+
+    `<p><b>${esc(d.question||'')}</b></p>`+
+    `<div class=cbtns><button type=button class=go>Give it substance</button>`+
+    `<button type=button class=nah>⑂ Pivot</button>`+
+    `<button type=button class=wod>Build it anyway 🤡</button></div>`);
+  chatPush('bot',(d.reaction?d.reaction+' ':'')+(d.question||''));
+  if(!m)return;
+  m.querySelector('.go').onclick=()=>{m.classList.add('asked');armRevet();};
+  m.querySelector('.nah').onclick=()=>{m.classList.add('asked');pivotActive();};
+  m.querySelector('.wod').onclick=()=>{m.classList.add('asked');
+    chatStatus('Waste-of-time mode: you asked for it.'); keepGoingForced();};
+}
+function armRevet(){
+  REVET_ARMED=true; PIVOT_FROM=null;
+  const b=$('ws-box'); if(b){ b.placeholder='A real skill, asset, or audience — and who would pay…'; b.focus(); }
+  chatStatus('Tell me one real thing you bring — I re-grade with it.');
+}
+function disarmRevet(){ REVET_ARMED=false;
+  const b=$('ws-box'); if(b)b.placeholder='Tell me what to change, or just talk to it…'; }
+async function revetSend(more){
+  disarmRevet();
+  const th=chatSay('status','re-grading with that…');
+  const {ok,d}=await api('POST',`/api/plan/${SID}/revet`,{more});
+  if(th)th.remove();
+  if(!ok){ if(gateV2(d))return; chatErr((d&&d.error)||'Could not re-grade that.'); REVET_ARMED=true; return; }
+  const v=(d&&d.vetting)||{};
+  if(v.verdict==='kill'){
+    killGateChat({reaction:v.reaction,risk:v.biggest_risk,
+      question:(d.shaped&&d.shaped.clarifying_question)||'Still too thin — what do you actually have?'});
+  } else chatBot('That cleared the gate — part 1 redrafted from the stronger idea.');
   render(d);
 }
 async function poll(){
@@ -426,10 +526,13 @@ let VIEW={x:0,y:0,k:1}, GSEEN=new Set(), FOCUS=null, BROWSING=false, LAST_ACTIVE
 let WIP_LABEL=null, WIP_T0=null, WIPLOG=[], LANES=[], LANES_DONE=new Set(), PROG_N=0;
 let WIP_PENDING=null;   // {label,parent,join} — the node BEING BORN; rendered nodes never show loading
 const NODECACHE={}, NODELOG={};   // fetched past-node content · per-node build-log stash
+// the server persists each node's build receipts (backlog #10) — hydrate the stash from any payload
+// that carries them; the longer record wins (the live stash is capped tighter than the server's)
+function hydrateLog(id,log){ if(id&&log&&log.length&&(!NODELOG[id]||NODELOG[id].length<log.length))NODELOG[id]=log.slice(); }
 let HIST_OPEN=new Set();   // which nodes' "how this was built" is expanded (survives re-renders)
 function histKeep(id,el){ if(el.open)HIST_OPEN.add(id); else HIST_OPEN.delete(id); }
 function resetGraph(){ GSEEN=new Set(); FOCUS=null; BROWSING=false; LAST_ACTIVE=null; WAS_RESEARCHING=false;
-  PIVOT_FROM=null;
+  PIVOT_FROM=null; REVET_ARMED=false;
   WIP_LABEL=null; WIP_PENDING=null; WIPLOG=[]; LANES=[]; LANES_DONE=new Set(); PROG_N=0;
   Object.keys(NODECACHE).forEach(k=>delete NODECACHE[k]); Object.keys(NODELOG).forEach(k=>delete NODELOG[k]);
   HIST_OPEN=new Set();
@@ -689,7 +792,7 @@ function focusNode(id){
   FOCUS=id; BROWSING=false;
   const n=m[id];
   if(id!==t.active&&!NODECACHE[id]){   // a past node: fetch its full content, then re-render
-    api('GET',`/api/plan/${SID}/node/${id}`).then(({ok,d})=>{ if(ok){NODECACHE[id]=d; if(FOCUS===id)renderGraph();} });
+    api('GET',`/api/plan/${SID}/node/${id}`).then(({ok,d})=>{ if(ok){NODECACHE[id]=d; hydrateLog(id,d.log); if(FOCUS===id)renderGraph();} });
   }
   renderGraph();
 }
@@ -704,6 +807,7 @@ function nodeBody(n){
   let body;
   if(n.id===t.active){ const surf=stageSurface(S); body=surf?surf.html:''; }
   else body=pastBody(n)+`<div class=ctarow><button class="stage-cta secondary" onclick="pivotFromHere('${n.id}')">⑂ Pivot from here</button></div>`;
+  body+=cmtsHtml(n.id);   // inline comments on this doc, awaiting the next build verb (backlog #8)
   const log=NODELOG[n.id];
   // the open state survives re-renders — the WIP poll rebuilds this HTML every tick, and an
   // unremembered <details> flashes open then collapses
@@ -799,11 +903,36 @@ function firstPageHtml(s){
     .filter(p=>p[1]).map(p=>`<li><b>${esc(p[0])}</b>${esc(p[1])}</li>`).join('');
   return `<p class=eyebrow>Is this serious?</p>`+verdict+mt+
     `<p class=react>${esc(v.reaction||R.title||"Here's your idea, graded.")}</p>`+
-    `<ul class=keypoints>${points}</ul>`+stepCtas();
+    `<ul class=keypoints>${points}</ul>`+(v.verdict==='kill'?killCtas(s):stepCtas());
+}
+// A kill-graded first page: the diagnostic question IS the step (backlog #13). Rolling forward
+// unforced won't draft; the CTAs are the three real ways out.
+function killCtas(s){
+  const q=((s.shaped||{}).clarifying_question)
+    ||'Name one real skill, asset, or audience you already have, and who would pay for it.';
+  return `<p class=react><b>${esc(q)}</b></p>`+
+    `<div class=ctarow><button class=stage-cta onclick=armRevet()>Give it substance</button>`+
+    `<button class="stage-cta secondary" onclick=pivotActive()>⑂ Pivot</button>`+
+    `<button class="stage-cta secondary" onclick=keepGoingForced()>Build it anyway 🤡</button></div>`+
+    `<p class=thinking>It grades kill until there's something real to build on — answer in the box, pivot, or take the joke plan.</p>`;
+}
+// ── #12: 4 chapters over the 7 engine sections — display grouping ONLY, the engine's section
+// keys/steps/files are untouched. Step index → chapter.
+const CHAPTERS=[
+  {name:'The idea',    steps:[0]},        // the setup
+  {name:'The offer',   steps:[1,2,3]},    // what you sell · why you win · what you charge
+  {name:'The machine', steps:[4,5]},      // how you get customers · how you deliver
+  {name:'The launch',  steps:[6]},        // your first 30 days
+];
+function chapterOf(step){
+  for(let i=0;i<CHAPTERS.length;i++)if(CHAPTERS[i].steps.indexOf(step)>=0)return {i,name:CHAPTERS[i].name};
+  return null;
 }
 function chapterHtml(s){
   const p=s.proposal||{};
-  return `<p class=eyebrow>Part ${(s.step||0)+1} of ${s.total}</p><div class=draft>${mdToHtml(p.draft||'')}</div>`+
+  const c=chapterOf(s.step||0);
+  const eyebrow=(c?`Chapter ${c.i+1}: ${c.name} · `:'')+`Part ${(s.step||0)+1} of ${s.total}`;
+  return `<p class=eyebrow>${esc(eyebrow)}</p><div class=draft>${mdToHtml(p.draft||'')}</div>`+
     stepCtas();
 }
 function doneHtml(s){
@@ -834,9 +963,15 @@ function renderDocs(){
   const working=WIP_LABEL||S.status==='researching';
   if(DOCTAB==='_wip'&&!working)DOCTAB=t.active;   // the step landed → roll onto the new doc
   if(!DOCTAB||(DOCTAB!=='_wip'&&!chain.some(n=>n.id===DOCTAB)))DOCTAB=t.active;
-  dt.innerHTML=chain.map(n=>
-    `<button type=button role=tab aria-selected="${n.id===DOCTAB}" class="dtab${n.id===DOCTAB?' on':''}${n.id===t.active?' cur':''}" onclick="pickDoc('${n.id}')">`+
-    `<span aria-hidden=true>${KICON[n.kind]||'▤'}</span>${esc(nodeLabel(n))}</button>`).join('')+
+  let lastCh=-1;   // #12: a chapter label leads its first section tab (display grouping only)
+  dt.innerHTML=chain.map(n=>{
+    let pre='';
+    if(n.kind==='section'){
+      const c=chapterOf(n.step||0);
+      if(c&&c.i!==lastCh){ lastCh=c.i; pre=`<span class=dchap>${esc(c.name)}</span>`; }
+    }
+    return pre+`<button type=button role=tab aria-selected="${n.id===DOCTAB}" class="dtab${n.id===DOCTAB?' on':''}${n.id===t.active?' cur':''}" onclick="pickDoc('${n.id}')">`+
+    `<span aria-hidden=true>${KICON[n.kind]||'▤'}</span>${esc(nodeLabel(n))}</button>`;}).join('')+
     (working?`<button type=button role=tab aria-selected="${DOCTAB==='_wip'}" class="dtab wipdt${DOCTAB==='_wip'?' on':''}" onclick="pickDoc('_wip')">`+
       `<span class=spin aria-hidden=true></span>${esc((WIP_PENDING&&WIP_PENDING.label)||WIP_LABEL||'Working')}</button>`:'');
   if(DOCTAB==='_wip'){   // the step in flight rides its OWN tab — settled docs keep their pages
@@ -847,7 +982,7 @@ function renderDocs(){
   const n=m[DOCTAB]; if(!n){pane.innerHTML='';return;}
   const body=nodeBody(n);
   if(n.id!==t.active&&!NODECACHE[n.id])
-    api('GET',`/api/plan/${SID}/node/${n.id}`).then(({ok,d})=>{ if(ok){NODECACHE[n.id]=d;
+    api('GET',`/api/plan/${SID}/node/${n.id}`).then(({ok,d})=>{ if(ok){NODECACHE[n.id]=d; hydrateLog(n.id,d.log);
       if(VIEWMODE==='docs'&&DOCTAB===n.id)renderDocs();} });
   pane.innerHTML=`<div class=docsheet>${body}</div>`;
 }
@@ -867,6 +1002,7 @@ function render(s){
     if(WIPLOG.length)NODELOG[t.active]=WIPLOG.slice();
     WIPLOG=[]; LANES=[]; LANES_DONE=new Set(); WIP_LABEL=null; WIP_T0=null; WIP_PENDING=null;
   }
+  if(S.activeNode)hydrateLog(S.activeNode.id,S.activeNode.log);   // server-persisted receipts survive a reload
   WAS_RESEARCHING=researching;
   paintMeter(S);
   if(!researching){
