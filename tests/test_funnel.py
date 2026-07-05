@@ -155,6 +155,20 @@ def test_lookup_requires_a_question(client):
     assert client.post(f"/api/plan/{s['id']}/lookup", json={"message": ""}).status_code == 400
 
 
+def test_tripped_kill_switch_degrades_funnel_to_key_prompt(client, monkeypatch):
+    # invariant #3: the funnel feeds the daily meter, so it must READ it too. A tripped kill switch
+    # on FILG's key → 402 + needKey (degrade to the key prompt), never an uncapped run.
+    from app import main as m
+
+    class _HostedProv:
+        bills_filg = True
+    monkeypatch.setattr(m, "MOCK", False)
+    monkeypatch.setattr(m, "_provider_for", lambda user: _HostedProv())
+    monkeypatch.setattr(m.usage, "kill_switch_tripped", lambda: True)
+    r = client.post("/api/brainstorm", json={"idea": "cookies with ex cons on tiktok"})
+    assert r.status_code == 402 and r.json().get("needKey") is True
+
+
 def test_info_requests_never_pivot(client):
     # 'tell me which node i'm on' routed as a steer and spread a garbage fork (2026-07-04, twice).
     # An imperative info request is an ask — at every stage, browsing or not.

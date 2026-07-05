@@ -162,6 +162,14 @@ class BudgetError(Exception):
         super().__init__("monthly fair-use allowance reached")
 
 
+class DailyCapError(Exception):
+    """Raised when the daily free-pool kill switch is tripped and a non-subscriber op would run on
+    FILG's hosted key. Invariant #3: the funnel FEEDS the meter so it must also READ it — degrade to
+    the key prompt, never spend past the pool. Caught centrally in `_engine_error` (402 + needKey)."""
+    def __init__(self):
+        super().__init__("Today's free pool is tapped. Add your own API key to keep going.")
+
+
 def _concurrency_cap(user: str) -> int:
     return CONCURRENCY_CAP
 
@@ -183,6 +191,12 @@ def _run_slot(user: str, stack: str | None = None):
         _inflight[user] = _inflight.get(user, 0) + 1
     try:
         prov = _provider_for(user)
+        # The daily kill switch guards every free op on FILG's key — the v2 funnel feeds the meter, so
+        # it must also read it (metered-but-uncapped is an invariant-#3 breach). Degrade, don't block:
+        # 402 + needKey routes the user to their own key, same as the v1 taste path.
+        if (prov is not None and getattr(prov, "bills_filg", False) and not MOCK
+                and not _is_subscriber(user) and usage.kill_switch_tripped()):
+            raise DailyCapError()   # the finally below releases the slot
         # Stack ceiling: BYOK (own key) → any stack; a subscriber → up to their tier's ceiling (Opus for
         # Pro/Studio, ON FILG's key); free taste on FILG's key → the Opus-free default (invariant #3).
         is_byok = bool(prov and not prov.bills_filg)
@@ -253,6 +267,8 @@ def _engine_error(e: Exception, status_code: int = 500):
         traceback.print_exc()
     if isinstance(e, BudgetError):
         return _budget_response(e)
+    if isinstance(e, DailyCapError):
+        return JSONResponse({"error": str(e), "needKey": True}, status_code=402)
     msg, need_key = _humanize_error(e)
     body = {"error": msg}
     if need_key:
