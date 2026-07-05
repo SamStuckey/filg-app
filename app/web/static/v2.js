@@ -636,13 +636,32 @@ function layoutGraph(m,wip,active,fit){
   const nodeW=id=>(id===FOCUS&&FHpx)?FWpx:(id===wip?250:NW);
   const L={},R={},off={};
   function measure(id){
-    const ks=kids[id];
+    let ks=kids[id];
     if(!ks.length){ L[id]=nodeW(id)/2; R[id]=nodeW(id)/2; return; }
     ks.forEach(measure);
+    // NORMALIZED SPINE PACK (2026-07-05): the spine child sits mid-pack, siblings split around it
+    // at the point that best balances the reserved extents (sibling order preserved). Without this,
+    // a spine child packed first/last shoved EVERY sibling to one side — the parent reserved that
+    // whole one-sided span, the tree hugged an edge, and edges drew as long S-curves over dead
+    // space. Balanced, a mostly-linear tree stays compact + centered; real competing subtrees
+    // still reserve their full extents (rule 1 holds).
+    let si=ks.findIndex(c=>spine.has(c));
+    if(spine.has(id)&&si>=0&&ks.length>1){
+      const sp=ks[si], rest=ks.filter(c=>c!==sp);
+      const w=c=>L[c]+R[c]+GUT;
+      const total=rest.reduce((a,c)=>a+w(c),0);
+      let acc=0,cut=0,best=Infinity;
+      for(let i=0;i<=rest.length;i++){
+        const bal=Math.abs(acc-(total-acc));
+        if(bal<best){best=bal;cut=i;}
+        if(i<rest.length)acc+=w(rest[i]);
+      }
+      ks=[...rest.slice(0,cut),sp,...rest.slice(cut)];
+      si=cut;
+    }
     let x=0; const o=[];
     ks.forEach((c,i)=>{ x+=(i?R[ks[i-1]]+GUT+L[c]:L[c]); o.push(x); });
     const packL=o[0]-L[ks[0]], packR=o[ks.length-1]+R[ks[ks.length-1]];
-    const si=ks.findIndex(c=>spine.has(c));
     // a spine node pins its spine child DIRECTLY beneath it; everything else centers over its pack
     const anchor=(spine.has(id)&&si>=0)?o[si]:(packL+packR)/2;
     ks.forEach((c,i)=>off[c]=o[i]-anchor);
