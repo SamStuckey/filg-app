@@ -1087,11 +1087,17 @@ function exitResearch(quiet){
 function expandResearch(){ RMODE='expanded'; applyRmode(); renderResearch(); }
 function collapseResearch(){ RMODE='split'; applyRmode(); renderResearch(); }
 function applyRmode(){
-  const L=$('left'); if(!L)return;
+  const L=$('left'), pane=$('rpane'), dr=$('rdrawer');
+  // a stale shell (served before the research pane existed) must fail LOUD, not half-collapse the
+  // drawer — the JS/CSS come fresh from /static while the HTML can lag a server restart / hard cache
+  if(!L||!pane||!dr){
+    if(RMODE){ RMODE=null; toast('This page is stale — hard-refresh (⌘⇧R) to load the research surface.','err'); }
+    if(L){ L.classList.remove('rfull'); L.classList.remove('rsplit'); }
+    return;
+  }
   L.classList.toggle('rfull',RMODE==='full');
   L.classList.toggle('rsplit',RMODE==='split');
-  $('rpane').setAttribute('aria-hidden',String(!(RMODE==='full'||RMODE==='split')));
-  const dr=$('rdrawer');
+  pane.setAttribute('aria-hidden',String(!(RMODE==='full'||RMODE==='split')));
   dr.classList.toggle('open',RMODE==='expanded');
   dr.setAttribute('aria-hidden',String(RMODE!=='expanded'));
   if(RMODE!=='full'){ const log=$('chatlog'); if(log)log.scrollTop=log.scrollHeight; }

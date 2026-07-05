@@ -2227,7 +2227,7 @@ def _page_head(deep: bool = False) -> str:
 def _render_page(deep: bool = False) -> str:
     """The single-page app shell. Served at `/` and at clean deep-link paths like `/plan/{id}` so the
     frontend can use real History-API URLs (no `#`) and direct-load / refresh still works."""
-    return PAGE.replace("__FILG_HEAD__", _page_head(deep))
+    return _page_text("index.html").replace("__FILG_HEAD__", _page_head(deep))
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -2240,14 +2240,14 @@ async def v2():
     """The UX-overhaul surface: the unified two-panel build (left = prompt box + tree + tools, right =
     the decision graph). Wired to the funnel routes (/api/brainstorm → /merge → /commit) + /route.
     Served alongside the live app so the new experience can be built + shown without destabilizing it."""
-    return V2_PAGE.replace("__FILG_HEAD__", _page_head())
+    return _page_text("v2.html").replace("__FILG_HEAD__", _page_head())
 
 
 @app.get("/v2/plan/{sid}", response_class=HTMLResponse)
 async def v2_plan(sid: str):
     """Deep link into a v2 plan: same shell, the frontend reads the id from the path and restores the
     session — graph, documents, and the conversation log."""
-    return V2_PAGE.replace("__FILG_HEAD__", _page_head())
+    return _page_text("v2.html").replace("__FILG_HEAD__", _page_head())
 
 
 @app.get("/plan/{sid}", response_class=HTMLResponse)
@@ -2268,6 +2268,18 @@ async def account_page(tab: str = ""):
 
 # ── Single-page plan-builder frontend ──────────────────────────────────────
 # The shell lives in app/web/index.html (CSS/JS split into app/web/static, served via the /static
-# mount above). Read once at import; _render_page injects __FILG_HEAD__ per request.
-PAGE = (_WEB_DIR / "index.html").read_text(encoding="utf-8")
-V2_PAGE = (_WEB_DIR / "v2.html").read_text(encoding="utf-8")   # the UX-overhaul two-panel surface (/v2)
+# mount above). Cached on mtime, NOT read-once: uvicorn --reload only watches .py files, so a
+# read-once shell kept serving YESTERDAY'S HTML against today's fresh /static JS/CSS after a pull —
+# the JS then broke on elements the stale page didn't have (found via an empty research pane,
+# 2026-07-05). A stat() per request buys shell edits that always propagate.
+_PAGE_CACHE: dict = {}
+
+
+def _page_text(name: str) -> str:
+    f = _WEB_DIR / name
+    mt = f.stat().st_mtime
+    hit = _PAGE_CACHE.get(name)
+    if not hit or hit[0] != mt:
+        hit = (mt, f.read_text(encoding="utf-8"))
+        _PAGE_CACHE[name] = hit
+    return hit[1]
