@@ -31,3 +31,4 @@ app/filg.db
 # pipeline.py generated run outputs (not source)
 live_run_artifacts.md
 test_01_live_results_auto.md
+scripts/monkey_fail_*.png
