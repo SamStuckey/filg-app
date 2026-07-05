@@ -710,6 +710,7 @@ def _active_node_view(s: dict) -> dict | None:
     if k == "brainstorm":
         view["spread"] = a.get("spread")
         view["feedback"] = a.get("feedback")   # the pivot ask this spread answers (if any)
+        view["set_aside"] = a.get("set_aside")  # declined-out-loud part of the ask — shown, not hidden
         view["options"] = [{"id": c, "direction": ((t["nodes"].get(c) or {}).get("direction"))}
                            for c in a.get("children", []) if _kind(t["nodes"].get(c) or {}) == "option"]
     elif k == "option":
@@ -836,6 +837,9 @@ def _diverge_tree(diverge: dict, parent: str | None = None,
     `board` seeds the fork (and its options) with the pivot point's board history."""
     b = _new_node({"kind": "brainstorm", "step": 0, "title": "A few directions",
                    "spread": diverge.get("spread"), "draft": None, "files": {}, "history": [],
+                   # a declared set-aside (part of the ask the engine declined, with its reason) is
+                   # SURFACED, never silent — it rides the node so every view can show it
+                   "set_aside": diverge.get("set_aside"),
                    "board": list(board or [])}, parent)
     nodes = {b["id"]: b}
     for d in (diverge.get("directions") or []):
@@ -1340,6 +1344,7 @@ async def api_plan_node(sid: str, nid: str, request: Request):
     elif k == "brainstorm":
         out["spread"] = n.get("spread")
         out["feedback"] = n.get("feedback")   # the pivot ask this spread was answering (if any)
+        out["set_aside"] = n.get("set_aside")  # declined-out-loud part of the ask
         # the fork's story, self-contained: every direction offered + which were picked (a pick =
         # named in any join's `selected` anywhere in the tree)
         nodes = (s.get("tree") or {}).get("nodes") or {}

@@ -102,7 +102,7 @@ def test_pivot_ignored_twice_fails_loud(patch_call):
         return '{"honors_pivot": false, "why": "same directions as before"}'
     patch_call(fake)
     import pytest
-    with pytest.raises(RuntimeError, match="ignoring what you asked"):
+    with pytest.raises(RuntimeError, match="dodging what you asked"):
         brainstorm.diverge(PIVOT_INPUT, mock=False)
     assert calls.count("diverge") == 2 and calls.count("judge") == 2   # reprompted once, then loud
 
@@ -139,3 +139,34 @@ def test_plain_input_never_calls_the_judge(patch_call):
     patch_call(fake)
     brainstorm.diverge(RAW, mock=False)
     assert "judge" not in calls
+
+
+# ── the set-aside channel (2026-07-06): declining part of an ask happens OUT LOUD or not at all ──
+_DIRS_WITH_SETASIDE = ('{"spread": "tight", "directions": [{"title": "After-hours baking events", '
+                       '"one_liner": "Adults-only evening bake sessions with the team.", '
+                       '"mold": "Seasonal / pop-up"}], '
+                       '"set_aside": {"what": "the explicit-content monetization angle", '
+                       '"why": "platform policies for mainstream retail partners prohibit it"}}')
+
+
+def test_declared_set_aside_passes_the_judge_and_surfaces(patch_call):
+    calls = []
+    def fake(stage, prompt):
+        calls.append((stage, prompt))
+        if stage == "diverge":
+            return _DIRS_WITH_SETASIDE
+        assert "IT ALSO DECLARED" in prompt          # the judge sees the declaration
+        return '{"honors_pivot": true, "why": "set-aside covers it, rest engaged"}'
+    patch_call(fake)
+    d, _ = brainstorm.diverge(PIVOT_INPUT, mock=False)
+    assert d["set_aside"]["what"].startswith("the explicit-content")   # surfaced, not swallowed
+    assert d["directions"][0]["title"] == "After-hours baking events"
+
+
+def test_malformed_set_aside_is_dropped():
+    assert brainstorm._clean_set_aside({"what": "x"}) is None            # no why → not a declaration
+    assert brainstorm._clean_set_aside("nope") is None
+    assert brainstorm._clean_set_aside(
+        {"what": "the operator is pivoting", "why": "scaffold echo"}) is None
+    ok = brainstorm._clean_set_aside({"what": "the explicit angle", "why": "platform policy"})
+    assert ok == {"what": "the explicit angle", "why": "platform policy"}

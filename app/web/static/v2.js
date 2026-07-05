@@ -601,6 +601,7 @@ function resetGraph(){ GSEEN=new Set(); FOCUS=null; BROWSING=false; LAST_ACTIVE=
   BQUERY=''; B_OFFERED=false; BOARD_PICK=null; STRESS_ON=false; FORGED=null;   // board display too
   if(BMODE)exitBoard(true);
   if(HMODE)exitHelp(true);   // display only — the FAQ itself is browser-level, it survives
+  SA_SAID=new Set();   // set-aside announcements are per-plan
   WIP_LABEL=null; WIP_PENDING=null; WIPLOG=[]; LANES=[]; LANES_DONE=new Set(); PROG_N=0;
   Object.keys(NODECACHE).forEach(k=>delete NODECACHE[k]); Object.keys(NODELOG).forEach(k=>delete NODELOG[k]);
   HIST_OPEN=new Set();
@@ -1120,7 +1121,7 @@ function pastBody(n){
         `<h3>${o.picked?'✓ ':''}${esc(x.title||'')}</h3><p>${esc(x.one_liner||'')}</p>`+
         `${x.mold?`<span class=mold>${esc(x.mold)}</span>`:''}</div></div>`;}).join('');
     const piv=d.feedback?`<p class=react style="font-size:14px">↳ Pivoting on: “${esc(d.feedback)}”</p>`:'';
-    return piv+`<p class=eyebrow>${d.spread==='tight'?'Your idea, sharpened':'The directions offered'}</p>`+
+    return piv+setAsideHtml(d.set_aside)+`<p class=eyebrow>${d.spread==='tight'?'Your idea, sharpened':'The directions offered'}</p>`+
       `<div class=optgrid>${opts}</div>`+
       ((d.options||[]).some(o=>o.picked)?`<p class=thinking>✓ = what you picked and carried forward.</p>`
         :`<p class=thinking>Nothing picked from this fork yet.</p>`);
@@ -1158,13 +1159,23 @@ function stepCtas(){
     `<button class="stage-cta secondary" onclick=pivotActive()>⑂ Pivot</button></div>`+
     `<p class=thinking>Comment or steer in the box anytime, it wins.</p>`;
 }
+// A declared set-aside: part of the ask the engine declined OUT LOUD (with its reason) — rendered
+// as a warning card wherever the spread shows, never buried. The off-ramps are the operator's.
+function setAsideHtml(sa){
+  if(!sa||!sa.what)return '';
+  return `<div class=saside>⚠ <b>Set aside, not silently dropped:</b> ${esc(sa.what)}`+
+    `<span class=why> — ${esc(sa.why||'')}</span>`+
+    `<span class=why> The directions run with the rest. To force it back in, rephrase the pivot; `+
+    `or branch from an earlier node and rebuild around it.</span></div>`;
+}
 function brainstormHtml(s){
   const cards=stageOptions().map(o=>{const d=o.direction||{};const on=SEL.has(o.id);
     return `<label class="opt${on?' sel':''}"><input type=checkbox ${on?'checked':''} onchange="toggleSel('${o.id}')">`+
       `<div><h3>${esc(d.title||'Direction')}</h3><p>${esc(d.one_liner||'')}</p>`+
       `${d.mold?`<span class=mold>${esc(d.mold)}</span>`:''}</div></label>`;}).join('');
   const piv=(s.activeNode&&s.activeNode.feedback)?`<p class=react style="font-size:14px">↳ Pivoting on: “${esc(s.activeNode.feedback)}”</p>`:'';
-  return piv+`<p class=eyebrow>Pick what clicks</p><div class=optgrid>${cards}</div>`+
+  const sa=setAsideHtml(s.activeNode&&s.activeNode.set_aside);
+  return piv+sa+`<p class=eyebrow>Pick what clicks</p><div class=optgrid>${cards}</div>`+
     `<div class=ctarow><button class=stage-cta onclick=doMerge()>Let's try it →</button>`+
     `<button class="stage-cta secondary" onclick=commitFromBrainstorm()>I'm sold, build the plan</button></div>`+
     `<p class=thinking>Or just type in the box, it always wins.</p>`;
@@ -1353,12 +1364,22 @@ function render(s){
   paintMeter(S);
   if(!researching){
     if(t.active!==LAST_ACTIVE){ LAST_ACTIVE=t.active; FOCUS=t.active; BROWSING=false; PREFOCUS_VIEW=null;
-      promptFocus(); }   // the next step is ready → zoom in, hands back on the keyboard
+      promptFocus(); announceSetAside(); }   // the next step is ready → zoom in, hands back on the keyboard
     else if(FOCUS==null&&!BROWSING){ FOCUS=t.active; }
   }
   if(!researching&&VIEWMODE==='docs')DOCTAB=t.active;   // the reader follows the build
   renderView();
   if(RMODE)renderResearch();   // fresh graded rows (a build just landed) show up in the stack live
+}
+// A set-aside must reach the CHAT too (the record the operator reads back), once per node —
+// "quietly ignore and reroute" is the failure this whole channel exists to kill.
+let SA_SAID=new Set();
+function announceSetAside(){
+  const a=S&&S.activeNode; if(!a||!a.set_aside||!a.set_aside.what)return;
+  if(SA_SAID.has(a.id))return; SA_SAID.add(a.id);
+  chatBot(`⚠ Heads up — part of your ask was set aside, not built in: “${a.set_aside.what}” `+
+    `(${a.set_aside.why||'no reason given'}). The directions run with the rest. Rephrase to force `+
+    `it back in, or pivot from an earlier node to rebuild around it.`);
 }
 function promptFocus(){   // put the cursor back in the chat box so the user can just start typing
   const a=document.activeElement;

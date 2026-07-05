@@ -414,3 +414,8 @@ textarea:focus{border-color:var(--accent)}
 #forgedesc{min-height:84px}
 .forgecard{border:1px solid var(--line);border-radius:9px;padding:10px 12px;margin-top:10px}
 .forgecard .doms{color:var(--muted);font-size:12.5px;margin-top:4px}
+
+/* a declared set-aside: part of the ask declined OUT LOUD — a warning card, never buried */
+.saside{font-size:13px;line-height:1.5;border:1px solid var(--yellow);border-radius:8px;
+  padding:8px 11px;margin:8px 0;background:color-mix(in srgb,var(--yellow) 9%,var(--card))}
+.saside .why{color:var(--muted)}
