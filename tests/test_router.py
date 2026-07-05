@@ -44,8 +44,9 @@ def test_route_real_parses_and_keeps_confirm_only_on_costly(patch_call):
     patch_call('{"intent": "steer", "target": "current", "keep": null, "steer": "lean B2B", '
                '"confirm": true, "say": "Reworking to B2B"}')
     d, _ = router.route("go B2B", mock=False)
-    # confirm must be stripped: steer is not a costly route
-    assert d["intent"] == "steer" and d["confirm"] is False and d["steer"] == "lean B2B"
+    # confirm must be stripped: steer is not a costly route. And since 2026-07-06 the operator's
+    # words ARE the steer, verbatim — the model's distillation is discarded (the paraphrase hole).
+    assert d["intent"] == "steer" and d["confirm"] is False and d["steer"] == "go B2B"
 
 
 def test_route_real_bad_intent_normalized(patch_call):
@@ -95,3 +96,15 @@ def test_integration_real_clash_carries_reason(patch_call):
     patch_call('{"integrable": false, "clash": "different buyer entirely", "skeptic_say": "not the same business"}')
     c, _ = router.check_integration("sell to enterprises now", "a consumer app", mock=False)
     assert not c["integrable"] and c["clash"] == "different buyer entirely"
+
+
+def test_steer_is_verbatim_never_the_models_paraphrase(patch_call):
+    # 2026-07-06: the router model rewrote an edgy pivot into a sanitized 'bolder, more compelling'
+    # paraphrase and the actual ask vanished before it reached diverge. The operator's words ARE the
+    # steer — the router classifies, it never rewrites.
+    raw = "let's make it sexy. add an onlyfans angle and build that into what we have"
+    patch_call('{"intent": "steer", "target": "current", '
+               '"steer": "Add a provocative, emotionally resonant angle", '
+               '"say": "Ignoring the OnlyFans part and steering toward bolder branding."}')
+    d, _ = router.route(raw, stage="plan", mode="build", mock=False)
+    assert d["intent"] == "steer" and d["steer"] == raw

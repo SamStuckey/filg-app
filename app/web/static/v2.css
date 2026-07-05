@@ -215,14 +215,7 @@ textarea:focus{border-color:var(--accent)}
 
 .thinking{color:var(--muted)}
 
-/* ── Tool drawer ── */
-.drawerback{position:fixed;inset:0;background:rgba(0,0,0,.25);z-index:8;display:none}
-.tooldrawer{position:fixed;top:0;right:0;height:100%;width:min(440px,90vw);background:var(--card);
-  border-left:1px solid var(--line);z-index:9;display:flex;flex-direction:column;padding:16px 18px;overflow:auto}
-.tooldrawer.research{border-left:3px solid var(--yellow)}
-.tooldrawer.board{border-left:3px solid var(--red)}
-.tooldrawer.help{border-left:3px solid var(--blue)}
-.tool-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;font-weight:700}
+/* (the tool drawer is gone, 2026-07-06 — research/board/help are all chat-drawer display states) */
 .ev{list-style:none;padding:0;margin:0}
 .ev li{padding:8px 0;border-top:1px solid var(--line);font-size:13px}
 .badge{font-size:11px;border-radius:999px;padding:1px 7px;border:1px solid var(--line)}
@@ -306,10 +299,22 @@ textarea:focus{border-color:var(--accent)}
    left-anchored drawer (expanded). All transitions are flex/opacity so the chat "slides". ── */
 .rpane{display:flex;flex-direction:column;min-height:0;flex:0 1 0%;opacity:0;overflow:hidden;
   transition:flex .45s ease,opacity .3s ease;pointer-events:none}
-.left.rfull .rpane,.left.rsplit .rpane{opacity:1;pointer-events:auto}
-.left.rfull .rpane{flex:1 1 auto}
-.left.rfull .chatlog{flex:0 1 0%;min-height:0;opacity:0;pointer-events:none}
-.left.rsplit .rpane{flex:0 0 46%;border-bottom:1px dashed var(--line);padding-bottom:6px;margin-bottom:4px}
+/* research, board, and help share the .rpane machinery; the MODE rules are id-scoped so only the
+   active surface lights (a bare .rpane selector would raise every pane at once) */
+.left.rfull #rpane,.left.rsplit #rpane,.left.bfull #bpane,.left.bsplit #bpane,.left.hsplit #hpane{opacity:1;pointer-events:auto}
+.left.rfull #rpane,.left.bfull #bpane{flex:1 1 auto}
+.left.rfull .chatlog,.left.bfull .chatlog{flex:0 1 0%;min-height:0;opacity:0;pointer-events:none}
+.left.rsplit #rpane,.left.bsplit #bpane{flex:0 0 46%;border-bottom:1px dashed var(--line);padding-bottom:6px;margin-bottom:4px}
+/* help is a BANNER over the chat: it takes what it needs (up to the split height), never a drawer */
+.left.hsplit #hpane{flex:0 1 auto;max-height:46%;border-bottom:1px dashed var(--line);padding-bottom:6px;margin-bottom:4px}
+.hblurb{font-size:13px;line-height:1.5;border:1px solid var(--line);border-radius:8px;padding:9px 11px;
+  background:var(--card);color:var(--fg)}
+.hfaqhead{display:flex;justify-content:space-between;align-items:center;margin-top:8px}
+.hfaqhead .eyebrow{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+.hfaq{border:1px solid var(--line);border-radius:8px;padding:7px 10px;background:var(--card)}
+.hfaq summary{cursor:pointer;font-size:13px;font-weight:600}
+.hfaq .hfaqa{font-size:13px;line-height:1.5;margin-top:6px;color:var(--fg)}
+.hfaq .hfaqa p{margin:0 0 6px}
 .chatlog{transition:flex .45s ease,opacity .3s ease}
 .rpane-head{display:flex;justify-content:space-between;align-items:center;font-size:11px;font-weight:700;
   text-transform:uppercase;letter-spacing:.06em;color:var(--muted);padding:6px 2px 6px;flex:0 0 auto}
@@ -326,5 +331,100 @@ textarea:focus{border-color:var(--accent)}
 .rdrawer{flex:0 0 0%;width:0;min-width:0;overflow:hidden;opacity:0;pointer-events:none;
   border-right:1px solid var(--line);background:var(--bg);display:flex;flex-direction:column;
   padding:14px 0 14px;transition:flex .45s ease,opacity .3s ease}
-.rdrawer.open{flex:0 0 340px;width:340px;opacity:1;pointer-events:auto;padding:14px}
+/* an OPEN expanded drawer matches the chat drawer's width — chat (1/3) + stack (1/3) ≈ 2/3 of the
+   screen, the graph keeps the rest (Sam, 2026-07-06) */
+.rdrawer.open{flex:0 0 360px;width:360px;opacity:1;pointer-events:auto;padding:14px}
+@media (min-width:1100px){.rdrawer.open{flex:0 0 33.333vw;width:33.333vw}}
 .workspace.full .rpane,.workspace.full .rdrawer{display:none}   /* no research surface on the landing */
+
+/* ── Graph chrome (2026-07-05): search-glow · fit/zoom controls · minimap · stubs · wayfinding ── */
+#gctrls{position:absolute;top:12px;right:14px;display:flex;gap:6px;align-items:center;z-index:5}
+#gctrls input{width:180px;font:13px/1.2 inherit;background:var(--card);color:var(--fg);
+  border:1px solid var(--line);border-radius:7px;padding:6px 9px;outline:none}
+#gctrls input:focus{border-color:var(--accent)}
+#gctrls button{width:30px;height:30px;border:1px solid var(--line);border-radius:7px;
+  background:var(--card);color:var(--fg);font-size:14px;line-height:1}
+#gctrls button:hover{border-color:var(--accent)}
+.gsn{font-size:11.5px;color:var(--muted);white-space:nowrap}
+#minimap{position:absolute;right:14px;bottom:14px;width:156px;height:104px;z-index:5;cursor:pointer;
+  background:color-mix(in srgb,var(--card) 82%,transparent);border:1px solid var(--line);
+  border-radius:9px;overflow:hidden;backdrop-filter:blur(3px)}
+#minimap i{position:absolute;border-radius:1.5px;background:var(--muted);opacity:.55}
+#minimap i.path{background:var(--accent);opacity:.85}
+#minimap i.act{background:var(--accent);opacity:1;box-shadow:0 0 0 1.5px color-mix(in srgb,var(--accent) 40%,transparent)}
+#minimap i.stub{background:var(--line);opacity:.8}
+#minimap i.wip{background:var(--accent);animation:gpulse 1.6s ease-in-out infinite}
+#minimap .mmview{position:absolute;display:block;border:1.5px solid var(--accent);border-radius:3px;
+  background:color-mix(in srgb,var(--accent) 7%,transparent);pointer-events:none}
+/* a folded passed-over subtree: one quiet dashed row, click to unfold */
+.gnode.stub{border-style:dashed;border-color:var(--line);background:color-mix(in srgb,var(--card) 60%,var(--bg))}
+.gnode.stub .nt{color:var(--muted);font-weight:500}
+.gnode.stub:hover{border-color:var(--accent)}
+.gnode .tuck{margin-left:auto;background:none;border:none;color:var(--muted);font-size:12px;padding:0 2px}
+.gnode .tuck:hover{color:var(--accent)}
+/* keyboard cursor: where the arrows are, distinct from .on (the active step) */
+.gnode.kbd{outline:2px solid var(--blue);outline-offset:2px}
+/* search-glow: hits pulse, everything else steps back (PoE's tree-search pattern) */
+.gnode.ghit{border-color:var(--yellow);animation:ghlow 1.4s ease-in-out infinite}
+@keyframes ghlow{0%,100%{box-shadow:0 0 0 0 color-mix(in srgb,var(--yellow) 55%,transparent)}
+  50%{box-shadow:0 0 0 7px transparent}}
+.gnode.gdim{opacity:.35}
+.gnode.gdim:hover{opacity:1}
+/* hover wayfinding: the root→hovered chain lifts */
+.gnode.trail{border-color:color-mix(in srgb,var(--blue) 55%,var(--line));
+  box-shadow:0 0 0 1px color-mix(in srgb,var(--blue) 30%,transparent)}
+/* share modal bits */
+.sharerow{display:flex;justify-content:space-between;align-items:center;gap:10px;margin:12px 0}
+.sharerow button{border:1px solid var(--line);border-radius:7px;background:var(--card);color:var(--fg);padding:6px 12px}
+.sharerow button.primary{background:var(--accent);color:#fff;border:none}
+#shareurl{width:100%;font:12.5px ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--bg);
+  color:var(--fg);border:1px solid var(--line);border-radius:7px;padding:8px 10px;margin-top:4px}
+.sharebtn{white-space:nowrap}
+.workspace.full .sharebtn{display:none}   /* no plan yet on the landing — nothing to share */
+
+/* ── Board room (2026-07-06): the board gets the same three displays as research ── */
+.bacts{display:flex;gap:5px;align-items:center}
+.bacts .ghost.small{font-size:11.5px;padding:3px 7px;white-space:nowrap}
+.bseats{display:flex;gap:5px;flex-wrap:wrap;flex:0 0 auto;padding:0 2px 8px}
+.bseat{font-size:11.5px;border:1px solid var(--line);border-radius:999px;padding:2px 9px;
+  background:var(--card);color:var(--muted);cursor:pointer;transition:border-color .2s,color .2s}
+.bseat.on{border-color:var(--accent);color:var(--fg)}
+.bseat.custom.on{border-color:var(--blue)}
+.brow{font-size:13px;line-height:1.45;border:1px solid var(--line);border-radius:8px;padding:8px 10px;
+  background:var(--card);transition:opacity .25s ease,border-color .25s ease}
+.brow.hit{border-color:var(--yellow);background:color-mix(in srgb,var(--yellow) 10%,var(--card))}
+.brow.dim{opacity:.42}
+.brow .bt{font-weight:600;font-size:12.5px}
+.brow .bverdict{display:inline-block;font-size:10.5px;font-weight:700;text-transform:uppercase;
+  letter-spacing:.04em;border:1px solid var(--line);border-radius:5px;padding:0 6px;margin-left:6px;
+  color:var(--muted)}
+.brow .bverdict.warn{color:var(--yellow);border-color:var(--yellow)}
+.brow .bverdict.bad{color:var(--red);border-color:var(--red)}
+.brow .bverdict.ok{color:var(--green);border-color:var(--green)}
+.brow details{margin-top:4px}
+.brow summary{cursor:pointer;font-size:12px;color:var(--muted)}
+.brow .bdrow{margin-top:6px;padding-top:6px;border-top:1px solid var(--line);font-size:12.5px}
+.brow .skept{color:var(--fg)}
+.stressbar{font-weight:700;font-size:12.5px;margin-bottom:4px}
+.sline{border-left:3px solid var(--line);padding:3px 0 3px 9px;margin:7px 0;font-size:12.5px}
+.sline.broken{border-left-color:var(--red)}
+.sline.weakened{border-left-color:var(--yellow)}
+.sline.survives{border-left-color:var(--green)}
+.sline .why{color:var(--muted)}
+#forgedesc{min-height:84px}
+.forgecard{border:1px solid var(--line);border-radius:9px;padding:10px 12px;margin-top:10px}
+.forgecard .doms{color:var(--muted);font-size:12.5px;margin-top:4px}
+
+/* a declared set-aside: part of the ask declined OUT LOUD — a warning card, never buried */
+.saside{font-size:13px;line-height:1.5;border:1px solid var(--yellow);border-radius:8px;
+  padding:8px 11px;margin:8px 0;background:color-mix(in srgb,var(--yellow) 9%,var(--card))}
+.saside .why{color:var(--muted)}
+
+/* the split boundary is DRAGGABLE (Sam, 2026-07-06): a grip at the bottom of each in-drawer pane */
+.vgrip{flex:0 0 12px;cursor:row-resize;display:flex;align-items:center;justify-content:center;
+  touch-action:none;user-select:none}
+.vgrip::after{content:"";width:38px;height:4px;border-radius:2px;background:var(--line);
+  transition:background .2s}
+.vgrip:hover::after,.vgrip.dragging::after{background:var(--accent)}
+.left.rfull .vgrip,.left.bfull .vgrip{display:none}   /* resize belongs to the SPLIT boundary only */
+.rpane.resizing{transition:none}   /* a live drag needs 1:1 tracking, not the .45s ease */

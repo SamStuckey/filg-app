@@ -137,8 +137,13 @@ def _clean(decision: dict, prompt: str, mode: str) -> dict:
         "intent": intent,
         "target": target,
         "keep": (str(d.get("keep")).strip() or None) if d.get("keep") else None,
-        "steer": (str(d.get("steer")).strip() or None) if d.get("steer") else (
-            prompt if intent in ("steer", "commit") else None),
+        # THE OPERATOR'S WORDS ARE THE STEER — verbatim, always. The router CLASSIFIES; it never
+        # rewrites. (2026-07-06: the model paraphrased an edgy pivot into a sanitized 'bolder,
+        # more compelling' rewrite and the OnlyFans ask vanished before it ever reached diverge —
+        # a silent-sanitization hole. The model's steer field is now advisory-only for steers.)
+        "steer": (prompt if intent == "steer" else
+                  ((str(d.get("steer")).strip() or None) if d.get("steer") else
+                   (prompt if intent == "commit" else None))),
         "picks": picks if intent == "pick" else None,
         # only the two costly/destructive routes may demand a confirm
         "confirm": bool(d.get("confirm")) and intent in ("commit", "restart_hard"),

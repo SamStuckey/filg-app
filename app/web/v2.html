@@ -13,6 +13,7 @@ __FILG_HEAD__
       <div class=lt-right>
         <button id=stackchip-w class="ghost stackchip" type=button onclick="stackModal()" title="Pick your model crew"></button>
         <span class=meter id=meter title="tokens + $ this session">0 tok · $0.00</span>
+        <button type=button class="ghost small sharebtn" id=sharebtn onclick="shareModal()" title="Share a read-only link">🔗 Share</button>
         <button type=button class=profile onclick="keyModal()" aria-label="Account" title="Account · API key">
           <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="8.2" r="3.6"/><path d="M4.5 19.5c1.3-3.4 4.2-5 7.5-5s6.2 1.6 7.5 5"/></svg>
         </button>
@@ -31,6 +32,27 @@ __FILG_HEAD__
       <div class=rpane-head><span>Graded research</span>
         <button type=button class="ghost small" id=rexpand onclick="expandResearch()" title="Slide the research out into its own drawer">⇥ Expand</button></div>
       <div class=rlist id=rlist></div>
+      <div class=vgrip data-pane=rpane title="Drag to resize"></div>
+    </div>
+    <!-- Help: a banner above the chat (the split mechanism) — the one-paragraph how-to plus the
+         user's own past help Q&As as a personal FAQ. No drawer. -->
+    <div class=rpane id=hpane aria-hidden=true>
+      <div class=rpane-head><span>Help</span></div>
+      <div class=rlist id=hlist></div>
+      <div class=vgrip data-pane=hpane title="Drag to resize"></div>
+    </div>
+    <!-- Board room (same one-chat/three-displays contract as research): the pill shows the convene
+         history + the stress-test; a question splits the drawer; ⇥ Expand slides it out. -->
+    <div class=rpane id=bpane aria-hidden=true>
+      <div class=rpane-head><span>Board room</span>
+        <span class=bacts>
+          <button type=button class="ghost small" onclick="forgeModal()" title="Forge a custom director">⚒ Forge</button>
+          <button type=button class="ghost small" onclick="stressGo()" title="Adversarial assumption stress-test">🧪 Stress-test</button>
+          <button type=button class="ghost small" onclick="expandBoard()" title="Slide the board out into its own drawer">⇥ Expand</button>
+        </span></div>
+      <div class=bseats id=bseats title="Who's seated — click to bench/seat for the next convene"></div>
+      <div class=rlist id=blist></div>
+      <div class=vgrip data-pane=bpane title="Drag to resize"></div>
     </div>
     <div class=chatlog id=chatlog aria-live=polite></div>
     <div class="promptwrap" id=ws-wrap>
@@ -53,10 +75,15 @@ __FILG_HEAD__
       <button type=button class="ghost small" onclick="collapseResearch()" title="Tuck the research back into the chat drawer">⇤ Tuck in</button></div>
     <div class=rlist id=rlist2></div>
   </aside>
-  <div class=drawerback id=drawerback onclick="closeTool()"></div>
-  <aside class=tooldrawer id=tooldrawer hidden>
-    <div class=tool-head><span id=tool-title>Tool</span><button type=button class=ghost small onclick="closeTool()">Close</button></div>
-    <div class=tool-body id=tool-body></div>
+  <aside class=rdrawer id=bdrawer aria-hidden=true>
+    <div class=rpane-head><span>Board room</span>
+      <span class=bacts>
+        <button type=button class="ghost small" onclick="forgeModal()" title="Forge a custom director">⚒ Forge</button>
+        <button type=button class="ghost small" onclick="stressGo()" title="Adversarial assumption stress-test">🧪 Stress-test</button>
+        <button type=button class="ghost small" onclick="collapseBoard()" title="Tuck the board back into the chat drawer">⇤ Tuck in</button>
+      </span></div>
+    <div class=bseats id=bseats2 title="Who's seated — click to bench/seat for the next convene"></div>
+    <div class=rlist id=blist2></div>
   </aside>
   <main class=right id=right>
     <!-- The decision graph IS the right side. Documents and steps live INSIDE the nodes: the camera
@@ -67,7 +94,19 @@ __FILG_HEAD__
       <button type=button data-v=graph class=on role=tab onclick="setView('graph')">Decision graph</button>
       <button type=button data-v=docs role=tab onclick="setView('docs')">Documents</button>
     </div>
-    <div id=graph><div id=gview><svg id=gedges xmlns="http://www.w3.org/2000/svg"></svg><div id=gnodes></div></div></div>
+    <div id=graph><div id=gview><svg id=gedges xmlns="http://www.w3.org/2000/svg"></svg><div id=gnodes></div></div>
+      <!-- Graph chrome: search-glow (PoE pattern), fit/zoom controls, and the minimap (branch
+           structure + viewport, click-to-jump). All render from the last layout — no extra state. -->
+      <div id=gctrls>
+        <input id=gsearch type=search placeholder="Search the tree…  ( / )" autocomplete=off
+               oninput="gSearch(this.value)">
+        <span id=gsearch-n class=gsn hidden></span>
+        <button type=button onclick="fitView()" title="Fit the whole tree (F)">⤢</button>
+        <button type=button onclick="zoomStep(1.25)" title="Zoom in (+)">+</button>
+        <button type=button onclick="zoomStep(0.8)" title="Zoom out (−)">−</button>
+      </div>
+      <div id=minimap title="Click to jump"></div>
+    </div>
     <div id=docs hidden><div id=dtabs role=tablist></div><div id=docpane></div></div>
     <button id=gpill type=button hidden onclick="focusActive()">▣ Current step</button>
   </main>

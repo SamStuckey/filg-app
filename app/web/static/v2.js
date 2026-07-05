@@ -38,7 +38,17 @@ function chatSay(role,html){const log=$('chatlog'); if(!log)return null;
 function chatPush(role,text){ if(SID)api('POST',`/api/plan/${SID}/chatlog`,{role,content:text}); }   // fire-and-forget: the record survives a reload
 function chatUser(t){chatPush('user',t);return chatSay('user',esc(t));}
 function chatBot(t){chatPush('bot',t);return chatSay('bot',esc(t));}
-function chatErr(t){return chatSay('err',esc(t));}   // transient — errors aren't part of the durable record
+// transient — errors aren't part of the durable record. Consecutive IDENTICAL errors fold into one
+// bubble with a counter (four red copies of the same failure reads as a broken app, not a message).
+let LAST_ERR=null;
+function chatErr(t){
+  if(LAST_ERR&&LAST_ERR.text===t&&LAST_ERR.el&&LAST_ERR.el.isConnected){
+    LAST_ERR.n++; LAST_ERR.el.textContent=t+'  (×'+LAST_ERR.n+')';
+    const log=$('chatlog'); if(log)log.scrollTop=log.scrollHeight;
+    return LAST_ERR.el;
+  }
+  const el=chatSay('err',esc(t)); LAST_ERR={el,text:t,n:1}; return el;
+}
 function chatStatus(t){chatPush('status',t);return chatSay('status',esc(t));}
 function replayChat(list){ const log=$('chatlog'); if(!log)return; log.innerHTML='';
   (list||[]).forEach(m=>chatSay(m.role==='user'?'user':(m.role==='status'?'status':'bot'),esc(m.content||''))); }
@@ -177,16 +187,21 @@ async function startFromLanding(){
   // the canvas fades in with a seed node already working — no swap, no fly-away.
   box.value='';
   $('workspace').classList.remove('full'); sendLabel();
+  // the operator's words appear in the chat IMMEDIATELY — an empty drawer while the first spread
+  // thinks reads as a swallowed input (Sam's QA, 2026-07-06). Display-only for now (no SID yet to
+  // persist against); persisted below once the session exists, removed if the submit is rejected.
+  const firstMsg=chatSay('user',esc(idea));
   setTimeout(()=>{ if(!SID)seedGraph(idea); },380);   // seed once the panel has size — unless the spread already landed (mock is FAST)
   const {ok,d}=await api('POST','/api/brainstorm',{idea,stack:STACK_CUR});
-  if(!ok||(d&&d.gibberish)){   // rejected → expand back out and say why
+  if(!ok||(d&&d.gibberish)){   // rejected → expand back out and say why (and unsay the optimistic bubble)
+    if(firstMsg)firstMsg.remove();
     $('workspace').classList.add('full'); sendLabel(); box.value=idea; resetGraph();
     if(d&&d.gibberish){ $('landing-joke').innerHTML=`<div class=jokecard><h3>${esc(d.title||"That's not an idea yet.")}</h3><div>${mdToHtml(d.body||'')}</div></div>`; return; }
     if(gateV2(d))return;
     $('landing-err').textContent=(d&&d.error)||'Something went wrong.'; return;
   }
   adoptPlan(d); render(d);
-  chatUser(idea);
+  chatPush('user',idea);   // already rendered above — now it can join the durable record
   chatBot('Spread that into a few directions — pick what clicks on the graph, or just keep typing.');
   // the collapse animation is still moving the panels — re-aim the camera once the layout settles,
   // or the tree stays framed against a mid-transition (half-width) canvas
@@ -214,8 +229,14 @@ async function restorePlan(id){   // boot straight into an existing plan: graph 
   SID=d.id; SEL=new Set(); PENDING_FORK=null; resetGraph();
   replayChat(d.chat);
   render(d);
+  loadSel();   // checkbox picks made before the reload come back (per plan + active fork)
+  if(SEL.size)renderView();
   if(d.status==='researching')poll();   // a run was mid-flight — pick the poll back up
   focusActive(true);
+  // the drawer-collapse transition is still moving the panels — re-aim once the layout settles, or
+  // the camera measures stale geometry and pins the focused node UNDER the left drawer, which then
+  // intercepts its CTA clicks (the §v2 #15 deep-link watchpoint; reproduced by the monkey, seed 5)
+  setTimeout(()=>{ if(S&&!BROWSING)focusActive(true); },700);
 }
 
 // ── Prompt box + modes ───────────────────────────────────────────────────────
@@ -223,14 +244,31 @@ function setMode(m){
   MODE=m;
   document.querySelectorAll('#modechips .mchip').forEach(b=>b.classList.toggle('on',b.dataset.mode===m));
   $('ws-wrap').className='promptwrap'+(m!=='build'?' '+m:'');
-  if(m==='research'){ closeTool(true); enterResearch(); return; }   // research lives in the drawer, not a tool
-  if(m==='build'){ closeTool(true); exitResearch(); } else { if(RMODE)exitResearch(); openTool(m); }
+  // research, board, AND help are DISPLAY STATES of the chat drawer (one chat, one display at a
+  // time). Entering one quietly drops the others; there are no tool drawers anymore.
+  if(m==='research'){ _disarmTraps(); _bDrop(); _hDrop(); enterResearch(); return; }
+  if(m==='board'){ _disarmTraps(); _rDrop(); _hDrop(); enterBoard(); return; }
+  if(m==='help'){ _disarmTraps(); _rDrop(); _bDrop(); enterHelp(); return; }
+  exitResearch(); exitBoard(); exitHelp(true);
 }
+// an armed pivot ghost / revet box makes the NEXT message a build input — leaving build mode with
+// one armed would swallow a research/board/help question into it (the monkey, seed 3, step 9).
+// Switching displays disarms both, out loud.
+function _disarmTraps(){
+  if(PIVOT_FROM){ clearGhost(); chatStatus('⑂ Pivot disarmed.'); }
+  if(REVET_ARMED)disarmRevet();
+}
+// silent display drops for mode switches — no 'Back to build' status, no MODE stomp
+function _rDrop(){ if(RMODE){ RMODE=null; RQUERY=''; applyRmode(); } }
+function _bDrop(){ if(BMODE){ BMODE=null; BQUERY=''; applyBmode(); } }
+function _hDrop(){ if(HMODE){ HMODE=false; applyHmode(); } }
 async function sendPrompt(){
   if(isFull())return startFromLanding();   // full mode: the first prompt IS the landing submit
   const box=$('ws-box'), prompt=box.value.trim(); if(!prompt) return;
   $('ws-err').textContent='';
   chatUser(prompt);
+  box.value='';   // submitted — the bubble is the record; clearing NOW says "I heard you"
+                  // (routing failure below restores it so nothing typed is ever lost)
   // an armed "Pivot from here" ghost: the input IS the pivot feedback — spread from that node directly
   if(PIVOT_FROM){ const from=PIVOT_FROM; box.value=''; clearGhost();
     chatStatus('Pivoting from '+pivotSrcLabel(from)); return pivotSpread(from,prompt); }
@@ -243,6 +281,13 @@ async function sendPrompt(){
     if(RMODE==='full'){ RMODE='split'; applyRmode(); }
     RQUERY=prompt; rRelated=renderResearch();
   }
+  // board mode: same contract — the first question slides the chat up into the split, and every
+  // message re-focuses the convene stack on what's relevant
+  let bRelated=null;
+  if(BMODE){
+    if(BMODE==='full'){ BMODE='split'; applyBmode(); }
+    BQUERY=prompt; bRelated=renderBoard();
+  }
   // browsing an earlier node? it rides along as context (a steer pivots from it, a question is about it)
   const {t}=nodesOf(S);
   const fromNode=(FOCUS&&FOCUS!==t.active)?FOCUS:null;
@@ -251,21 +296,27 @@ async function sendPrompt(){
   const body={prompt,mode:MODE}; if(fromNode)body.node=fromNode;
   const {ok,d}=await api('POST',`/api/plan/${SID}/route`,body);
   btn.disabled=false; sendLabel();
-  if(!ok){ if(gateV2(d))return; chatErr((d&&d.error)||'Could not route that.'); return; }
-  box.value='';
+  if(!ok){ if(!box.value)box.value=prompt;   // give the words back — the send failed
+    if(gateV2(d))return; chatErr((d&&d.error)||'Could not route that.'); return; }
   if(d.fork){ PENDING_FORK=d.fork;
     chatBot(d.fork.clash||'That pulls against the committed idea — pick a path on the graph.');
     focusActive(true); return; }
   const dec=d.decision||{};
-  // the topic turned back to BUILDING → research mode bows out on its own (drawer collapses /
-  // chat slides back to full height, the Build pill re-lights), then the action runs normally
-  if(RMODE&&['steer','next','commit','diverge','pick','restart_keep','restart_hard'].includes(dec.intent))
-    exitResearch();
-  // a question that isn't about the research → answer it, then offer the way out. Two signals:
-  // the router aimed it away from research, or nothing in the stack matched the question.
+  // the topic turned back to BUILDING → the research/board display bows out on its own (drawer
+  // collapses / chat slides back to full height, the Build pill re-lights), then the action runs
+  if(['steer','next','commit','diverge','pick','restart_keep','restart_hard'].includes(dec.intent)){
+    if(RMODE)exitResearch();
+    if(BMODE)exitBoard();
+    if(HMODE)exitHelp();
+  }
+  // a question that isn't about the live display → answer it, then offer the way out. Two signals:
+  // the router aimed it away, or nothing in the on-screen stack matched the question.
   dec._offResearch=!!RMODE&&dec.intent==='ask'&&(
     (dec.target!=='research'&&dec.target!=='board')||
     (rRelated===false&&researchItems().length>0));
+  dec._offBoard=!!BMODE&&dec.intent==='ask'&&(
+    (dec.target!=='board'&&dec.target!=='research')||
+    (bRelated===false&&boardItems().length>0));
   // when an in-chat check follows immediately, the check IS the reply — skip the say bubble
   const checks=(dec.intent==='commit'&&dec.confirm)||dec.intent==='restart_hard';
   if(!checks)chatBot(dec.say||'On it.');
@@ -282,7 +333,7 @@ async function dispatch(dec,fromNode,prompt){
       if(S.stage==='building')return keepGoing();
       if(S.stage==='refined'){
         if(!(await chatConfirm(BIG_STEP_ASK,"Let's go")))return;
-        return commit(null,fromNode);
+        return commit();   // 'next' rolls the ACTIVE refined node — a browsed node never hijacks it
       }
       chatBot('Pick a direction first — check the boxes, or just name them ("the first two") and I merge them.');
       return;
@@ -301,7 +352,7 @@ async function dispatch(dec,fromNode,prompt){
       SEL=new Set(ids); renderView();
       return doMerge();
     }
-    case 'ask': return askInChat(prompt||dec.steer||'',dec.target,fromNode,dec._offResearch);   // a question gets an ANSWER, in the chat
+    case 'ask': return askInChat(prompt||dec.steer||'',dec.target,fromNode,dec._offResearch||dec._offBoard);   // a question gets an ANSWER, in the chat
     case 'steer': default:
       if(fromNode){ chatStatus('Pivoting from '+pivotSrcLabel(fromNode));
         return pivotSpread(fromNode,dec.steer||''); }   // feedback on an earlier node = pivot from it
@@ -326,12 +377,15 @@ async function askInChat(q,target,fromNode,offerExit){
   if(!ok){ if(gateV2(d))return; chatErr((d&&d.error)||'Could not answer that.'); return; }
   const reply=(d&&d.reply)||'';
   chatSay('bot',mdToHtml(reply));
-  if(target==='help')chatPush('bot',reply);   // the advisor endpoint logs its own turn; /api/help doesn't
-  if(offerExit)offerExitResearch();   // answered in place — now offer the way back to building
+  if(target==='help'){ chatPush('bot',reply);   // the advisor endpoint logs its own turn; /api/help doesn't
+    faqPush(q,reply); }                         // …and the Q+A joins the personal FAQ banner
+  if(offerExit)offerExitMode();   // answered in place — now offer the way back to building
 }
 async function boardInChat(q){
   const th=chatSay('status','convening your board…');
-  const {ok,d}=await api('POST',`/api/plan/${SID}/board`,{question:q});
+  const body={question:q};
+  if(BOARD_PICK)body.directors=[...BOARD_PICK];   // a re-picked bench rides the convene + persists
+  const {ok,d}=await api('POST',`/api/plan/${SID}/board`,body);
   if(th)th.remove();
   if(!ok){ if(gateV2(d))return; chatErr((d&&d.error)||'Could not convene the board.'); return; }
   const rows=(d.directors||[]).map(x=>`<div class=bdrow><b>${esc(x.name||x.key)}</b> ${esc(x.take||'')}</div>`).join('');
@@ -344,6 +398,13 @@ async function boardInChat(q){
   chatPush('bot','Board:\n'+(d.directors||[]).map(x=>`${x.name||x.key}: ${x.take||''}`).join('\n')+
     (d.skeptic?`\n🧐 Skeptic: ${d.skeptic.take||d.skeptic.rationale||''} [${d.skeptic.verdict||''}]`:'')+
     (d.consensus?`\nConsensus: ${d.consensus}`:'')+(d.verdict?`\nNet verdict: ${d.verdict}`:''));
+  // the convene is persisted on the active node server-side — mirror it locally so the board stack
+  // and the node's board notes update without a refetch
+  if(S){ S.board=(S.board||[]).concat([{section:'convene',title:'Board convened: “'+q.slice(0,90)+'”',
+    directors:d.directors,skeptic:d.skeptic,consensus:d.consensus,conflicts:d.conflicts,
+    verdict:d.verdict}]);
+    if(BMODE)renderBoard();
+    if(FOCUS)renderView(); }
 }
 async function lookupInChat(q,offerExit){
   const th=chatSay('status','searching + grading sources…');
@@ -363,7 +424,7 @@ async function lookupInChat(q,offerExit){
     LOOKUPS.push(...cs.filter(c=>!seen.has(c.text+'|'+(c.url||''))));
     renderResearch();
   }
-  if(offerExit)offerExitResearch();   // it answered, but nothing local matched — offer the way back
+  if(offerExit)offerExitMode();   // it answered, but nothing local matched — offer the way back
 }
 async function steer(note){
   if(!note) return;
@@ -439,20 +500,33 @@ async function reBrainstorm(idea){
 }
 async function doMerge(){
   if(!SEL.size){toast('Pick at least one direction.','err');return;}
-  const picks=[...SEL];
+  const picks=[...SEL], selKey=_selKey();
   const {ok,d}=await api('POST',`/api/plan/${SID}/merge`,{options:picks});
   if(!ok){ if(gateV2(d))return; chatErr((d&&d.error)||'Could not merge.'); return; }
-  beginWip('Merging your picks + first-pass research',{join:picks}); poll();
+  try{localStorage.removeItem(selKey);}catch(e){}   // consumed — the refined node records the picks
+  beginWip('Merging your picks + first-pass research',{join:picks,poll:true}); poll();
 }
-async function commit(thesis,fromNode){
-  const body={}; if(thesis)body.thesis=thesis; if(fromNode)body.node=fromNode;   // build out of THAT node
-  const {ok,d}=await api('POST',`/api/plan/${SID}/commit`,body);
-  if(!ok){ if(gateV2(d))return; chatErr((d&&d.error)||'Could not start the build.'); return; }
-  beginWip('Deep research: pulling + grading sources',{parent:fromNode||(nodesOf(S).t||{}).active}); poll();
+let COMMIT_BUSY=false;   // the big-step button is click-spammable while a request is in flight
+async function commit(thesis,fromNode,picks){
+  if(COMMIT_BUSY)return;
+  COMMIT_BUSY=true;
+  try{
+    const body={}; if(thesis)body.thesis=thesis; if(fromNode)body.node=fromNode;   // build out of THAT node
+    if(picks&&picks.length)body.options=picks;   // a direct brainstorm-commit RECORDS its choice
+    const {ok,d}=await api('POST',`/api/plan/${SID}/commit`,body);
+    if(!ok){ if(gateV2(d))return; chatErr((d&&d.error)||'Could not start the build.'); return; }
+    beginWip('Deep research: pulling + grading sources',{parent:fromNode||(nodesOf(S).t||{}).active,poll:true}); poll();
+  }finally{ COMMIT_BUSY=false; }
 }
 // ── Pivot-from-a-node: an armed ghost child ("enter feedback to pivot…") + the direct spread ──
 let PIVOT_FROM=null;
-function pivotFromHere(id){ PIVOT_FROM=id; REVET_ARMED=false; FOCUS=null; BROWSING=true; renderGraph();
+function pivotFromHere(id){ PIVOT_FROM=id; REVET_ARMED=false; FOCUS=null; BROWSING=true;
+  // arming a pivot is a BUILD act — EVERY display bows out and the chat says what's next
+  // (Sam's QA: pivot from research stayed in research; the monkey then caught the same
+  // hole for help mode on its first walk — seed 1, step 26)
+  exitResearch(true); exitBoard(true); exitHelp(true);
+  renderGraph();
+  chatStatus('⑂ Pivot armed from '+pivotSrcLabel(id)+' — enter your pivot: what should change?');
   const b=$('ws-box'); if(b){b.placeholder='Your pivot: what should change from here?';b.focus();} }
 function pivotActive(){ const {t}=nodesOf(S); pivotFromHere(t.active); }   // the step view's Pivot button: arm the ghost off THIS step
 function pivotSrcLabel(id){   // name the pivot's source node in the chat — "which node am I forking?" must never be a guess
@@ -478,7 +552,9 @@ async function pivotSpread(fromNode,feedback){
 function commitFromBrainstorm(){
   if(!SEL.size){toast('Check a direction to build, or refine first.','err');return;}
   const chosen=(stageOptions()||[]).filter(o=>SEL.has(o.id)).map(o=>o.direction.one_liner||o.direction.title);
-  commit(chosen.join(' + '));
+  // the PICKS ride along, not just their text — without them the graph drew the checked option as
+  // passed-over and a pivot-commit read as "nevermind" even though the build honored it (Sam's QA)
+  commit(chosen.join(' + '),null,[...SEL]);
 }
 async function keepGoing(){
   const {t}=nodesOf(S);   // inline comments on this doc ride the roll-forward (backlog #8)
@@ -533,10 +609,28 @@ async function revetSend(more){
   } else chatBot('That cleared the gate — part 1 redrafted from the stronger idea.');
   render(d);
 }
-async function poll(){
-  const {d:s}=await api('GET',`/api/plan/${SID}`);
-  if(s&&s.id)render(s);
-  if(s&&s.status==='researching')setTimeout(poll,1100);
+// THE POLL, hardened (systemic pass, 2026-07-06). Two failure classes lived here:
+// (1) a dropped GET killed the chain forever — the WIP box spun with no completion (the "freeze");
+// (2) two overlapping ops could both be polling, and a STALE chain's render stomped the newer op's
+//     WIP state (the "WIP box confused with the previous box" family).
+// Epoch token = only the newest chain may render; transient failures retry with backoff, then say so.
+let POLL_EPOCH=0;
+function poll(){
+  const tok=++POLL_EPOCH, sid=SID; let miss=0;
+  const tick=async()=>{
+    if(tok!==POLL_EPOCH||sid!==SID)return;      // a newer op (or another plan) owns the poll now
+    const {ok,d:s}=await api('GET',`/api/plan/${sid}`);
+    if(tok!==POLL_EPOCH||sid!==SID)return;
+    if(!ok||!s||!s.id){
+      if(++miss<=5){ setTimeout(tick,1200*miss); return; }   // a blip is not a verdict — retry
+      endWip(); if(S)render(S);
+      chatErr('Lost contact with the build — it may still be running. Reload to catch up.');
+      return;
+    }
+    miss=0; render(s);
+    if(s.status==='researching')setTimeout(tick,1100);
+  };
+  tick();
 }
 function discardFork(){ PENDING_FORK=null; focusActive(true); toast('Dropped it, carrying on.'); }
 function pivotFork(){ const st=PENDING_FORK&&PENDING_FORK.steer; PENDING_FORK=null;
@@ -558,27 +652,69 @@ let HIST_OPEN=new Set();   // which nodes' "how this was built" is expanded (sur
 function histKeep(id,el){ if(el.open)HIST_OPEN.add(id); else HIST_OPEN.delete(id); }
 function resetGraph(){ GSEEN=new Set(); FOCUS=null; BROWSING=false; LAST_ACTIVE=null; WAS_RESEARCHING=false;
   PIVOT_FROM=null; REVET_ARMED=false;
+  GEXPANDED=new Set(); GQUERY=''; NAVCUR=null; LAYOUT=null;
+  const gs=$('gsearch'); if(gs)gs.value=''; const gn2=$('gsearch-n'); if(gn2)gn2.hidden=true;
+  const mm=$('minimap'); if(mm){mm.hidden=true;mm.innerHTML='';}
   LOOKUPS=[]; RQUERY=''; if(RMODE)exitResearch(true);   // research display is per-plan state
+  BQUERY=''; B_OFFERED=false; BOARD_PICK=null; STRESS_ON=false; FORGED=null;   // board display too
+  if(BMODE)exitBoard(true);
+  if(HMODE)exitHelp(true);   // display only — the FAQ itself is browser-level, it survives
+  SA_SAID=new Set();   // set-aside announcements are per-plan
   WIP_LABEL=null; WIP_PENDING=null; WIPLOG=[]; LANES=[]; LANES_DONE=new Set(); PROG_N=0;
   Object.keys(NODECACHE).forEach(k=>delete NODECACHE[k]); Object.keys(NODELOG).forEach(k=>delete NODELOG[k]);
   HIST_OPEN=new Set();
   const gn=$('gnodes'); if(gn)gn.innerHTML=''; const ge=$('gedges'); if(ge)ge.innerHTML=''; }
+let WIP_SYNC=false;   // sync ops (await-style: /next, /redraft, pivot spreads) OWN their label —
+                      // only endWip may clear it. Poll-driven ops defer to the server's status.
 function beginWip(label,opts){ WIP_LABEL=label; WIP_T0=Date.now(); WIPLOG=[]; LANES=[]; LANES_DONE=new Set();
+  WIP_SYNC=!(opts&&opts.poll);
   WIP_PENDING={label,parent:(opts&&opts.parent)||null,join:(opts&&opts.join)||null};
   if(VIEWMODE==='docs')DOCTAB='_wip';   // docs view rolls forward like the tree: the new step gets its own tab
   LEAF_OPEN=new Set(); FOCUS=null; BROWSING=false; PREFOCUS_VIEW=null; renderView(); }   // content collapses back, the pending node takes the stage
-function endWip(){ WIP_LABEL=null; WIP_T0=null; WIP_PENDING=null; }
+function endWip(){ WIP_LABEL=null; WIP_T0=null; WIP_PENDING=null; WIP_SYNC=false; }
 function pivotParent(id){   // THE PIVOT CONTRACT: a pivot branches off the pivot node ITSELF, always
   const {t}=nodesOf(S); return id||t.active; }
 function nodesOf(s){const t=(s&&s.tree)||{};const m={};(t.nodes||[]).forEach(n=>m[n.id]=n);return {m,t};}
 function pathSetOf(m,active){const set={};let cur=active;
   while(cur!=null&&m[cur]){set[cur]=1;
     const n=m[cur];
-    // a refined node JOINS its selected options — they're part of the taken path, not passed-over
-    if(n.kind==='refined'&&Array.isArray(n.selected))n.selected.forEach(s=>{if(m[s])set[s]=1;});
+    // ANY join node credits its selected options — a refined merge OR a direct brainstorm-commit's
+    // section both carry `selected`; the picked options are part of the taken path, not passed-over
+    if(Array.isArray(n.selected))n.selected.forEach(s=>{if(m[s])set[s]=1;});
     cur=n.parent;}
   return set;}
+// ── Collapse passed-over subtrees to stubs (the wide-tree lever; Sublime Merge's commit-folding
+// pattern). An OFF-PATH branch root whose parent is on the committed path, carrying ≥2 nodes,
+// folds into one "⊞ N steps" stub — click to unfold, ⊟ on its root to tuck it back. A subtree
+// holding the focused / pivot-armed / keyboard-cursor node never folds (you're IN it).
+let GEXPANDED=new Set();
+function collapseMap(m,onPath){
+  const tp={},kids={};
+  Object.keys(m).forEach(id=>kids[id]=[]);
+  Object.values(m).forEach(n=>{ tp[n.id]=(n.parent!=null&&m[n.parent])?n.parent
+    :((Array.isArray(n.selected)&&n.selected.find(s=>m[s]))||null);
+    if(tp[n.id]!=null)kids[tp[n.id]].push(n.id); });
+  const size=id=>1+(kids[id]||[]).reduce((a,c)=>a+size(c),0);
+  const hot=new Set([FOCUS,PIVOT_FROM,NAVCUR].filter(Boolean));
+  const warm=id=>hot.has(id)||(kids[id]||[]).some(warm);
+  const out={};
+  const emit=id=>{
+    if(!onPath[id]&&tp[id]!=null&&onPath[tp[id]]&&!GEXPANDED.has(id)&&size(id)>=2&&!warm(id)){
+      out['_stub:'+id]={id:'_stub:'+id,kind:'stub',parent:tp[id],root:id,count:size(id),
+        title:size(id)+' passed-over steps'};
+      return; }
+    out[id]=m[id]; (kids[id]||[]).forEach(emit); };
+  Object.keys(m).forEach(id=>{ if(tp[id]==null)emit(id); });
+  return out;
+}
+function stubExpand(root){ GEXPANDED.add(root); renderView(); }
+function stubCollapse(root){ GEXPANDED.delete(root); renderView(); }
+// Is this node the root of an expanded passed-over subtree? (It gets the ⊟ tuck-away control.)
+function stubRootOf(n,onPath,m){
+  return GEXPANDED.has(n.id)&&!onPath[n.id]&&n.parent!=null&&m[n.parent]&&onPath[n.parent];
+}
 function nodeLabel(n){
+  if(n.kind==='stub')return n.title||'passed over';
   if(n.kind==='idea')return n.title||'Your idea';
   if(n.kind==='brainstorm')return 'A few directions';
   if(n.kind==='refined')return 'Refined idea';
@@ -586,7 +722,7 @@ function nodeLabel(n){
   if(n.kind==='pivot')return n.title||'enter feedback to pivot…';
   return n.title||('Part '+((n.step||0)+1));
 }
-const KICON={idea:'◉',brainstorm:'✳',option:'◇',refined:'◆',fork:'⑂',pivot:'⑂',wip:'⚙',section:'▤'};
+const KICON={idea:'◉',brainstorm:'✳',option:'◇',refined:'◆',fork:'⑂',pivot:'⑂',wip:'⚙',section:'▤',stub:'⊞'};
 function drainProgress(s){   // stream progress into the working node (sentinels drive the leaflets)
   const prog=s.progress||[];
   for(let i=PROG_N;i<prog.length;i++){
@@ -685,11 +821,13 @@ function layoutGraph(m,wip,active,fit){
     y+=h; }
   const pos={};
   Object.keys(m).forEach(id=>{pos[id]={x:cx[id]+nudge-NW/2, y:rowY[depth[id]||0]};});
-  return {pos,kids,joins};
+  return {pos,kids,joins,tp};
 }
 function renderGraph(){
   const s=S; const gn=$('gnodes'), ge=$('gedges'); if(!s||!gn)return;
-  const {m,t}=nodesOf(s); const active=t.active;
+  const {m:m0,t}=nodesOf(s); const active=t.active;
+  const onPath=pathSetOf(m0,active);   // computed on the FULL tree — stubs never change the path
+  const m=collapseMap(m0,onPath);      // passed-over subtrees fold to ⊞ stubs (expand on click)
   if(PIVOT_FROM&&m[PIVOT_FROM])m._ghost={id:'_ghost',parent:PIVOT_FROM,kind:'pivot',
     title:'enter feedback to pivot…',step:0};   // the armed pivot: a blank child awaiting your words
   const working=!!(WIP_LABEL||s.status==='researching');
@@ -701,8 +839,10 @@ function renderGraph(){
   const wip=WIP_PENDING?'_wip':null;
   const rrect=$('right').getBoundingClientRect();
   const FW=focusW(rrect), FH=rrect.height-120;   // open-doc box: panel-fit, margin on every side
-  const {pos,kids,joins}=layoutGraph(m,wip,active,FOCUS?{fw:FW,fh:FH}:null);
-  const onPath=pathSetOf(m,active);
+  const {pos,kids,joins,tp}=layoutGraph(m,wip,active,FOCUS?{fw:FW,fh:FH}:null);
+  LAYOUT={pos,kids,tp,m};   // the minimap, fit-view, and keyboard nav all read the LAST layout
+  const qhits=GQUERY?new Set(Object.keys(m).filter(id=>nodeMatches(m[id],GQUERY))):null;
+  const gsn=$('gsearch-n'); if(gsn){gsn.hidden=!GQUERY; if(GQUERY)gsn.textContent=(qhits?qhits.size:0)+' hit'+((qhits&&qhits.size===1)?'':'s');}
   // nodes: keyed divs, moved (CSS transition) or created (.enter → fade in)
   const live=new Set(Object.keys(m));
   gn.querySelectorAll('.gnode').forEach(el=>{ if(!live.has(el.dataset.id)) el.remove(); });
@@ -719,7 +859,9 @@ function renderGraph(){
     const fresh=!el;
     if(fresh){ el=document.createElement('div'); el.dataset.id=n.id; el.classList.add('enter');
       el.addEventListener('click',e=>{ if(!e.target.closest('.nbody'))gNodeClick(n.id); }); gn.appendChild(el); }
-    el.className='gnode'+(n.id==='_ghost'?' ghost':'')+(fresh?' enter':'')+(n.id===active?' on':'')+(onPath[n.id]?' path':'')+(sel?' sel':'')+(rej?' rej':'')+(isWip?' wip':'')+(isFocus?' focus':'');
+    const hit=qhits&&qhits.has(n.id), dimq=qhits&&qhits.size>0&&!hit;
+    el.className='gnode'+(n.id==='_ghost'?' ghost':'')+(fresh?' enter':'')+(n.id===active?' on':'')+(onPath[n.id]?' path':'')+(sel?' sel':'')+(rej?' rej':'')+(isWip?' wip':'')+(isFocus?' focus':'')
+      +(n.kind==='stub'?' stub':'')+(n.id===NAVCUR?' kbd':'')+(hit?' ghit':'')+(dimq?' gdim':'');
     const w=isFocus?FW:(isWip?250:NW);
     el.style.width=isFocus?FW+'px':''; el.style.maxHeight=isFocus?FH+'px':'';
     el.style.left=(p.x-(w-NW)/2)+'px'; el.style.top=p.y+'px';
@@ -731,8 +873,14 @@ function renderGraph(){
         `${esc(WIP_PENDING.label||'Working')} · <span id=wiptime>${secs}</span></div>`;
       inner+=leafStackHtml();   // research lanes live INSIDE the node, stacked; green as each resolves
       inner+=`<div class=nspew>`+(WIPLOG.length?WIPLOG.map(l=>`<div>${esc(l)}</div>`).join(''):'<div>warming up…</div>')+`</div>`;
+    } else if(n.kind==='stub'){   // a folded passed-over subtree: one row, click to unfold
+      inner=`<div class=nk><span aria-hidden=true>⊞</span>passed over</div>`+
+        `<div class=nt>${esc(n.count)} steps tucked away — click to unfold</div>`;
     } else {
-      inner=`<div class=nk><span aria-hidden=true>${KICON[n.kind]||'▤'}</span>${esc(n.kind||'part')}</div>`+
+      const tuck=stubRootOf(n,onPath,m0)
+        ?`<button type=button class=tuck title="Tuck this passed-over branch away" `+
+         `onclick="event.stopPropagation();stubCollapse('${n.id}')">⊟</button>`:'';
+      inner=`<div class=nk><span aria-hidden=true>${KICON[n.kind]||'▤'}</span>${esc(n.kind||'part')}${tuck}</div>`+
         `<div class=nt>${esc(nodeLabel(n))}</div>`;
     }
     if(isFocus)inner+=`<div class=nbody>${nodeBody(n)}</div>`;
@@ -758,6 +906,152 @@ function renderGraph(){
     else if(wip&&pos[wip])centerOn(pos[wip],250,0.9,0.30);
   }
   pill(!wip && stageSurface(S) && FOCUS!==active);
+  renderMinimap();
+}
+// ── Graph chrome: minimap · fit view · zoom · keyboard nav · search-glow · hover trail ─────────
+let LAYOUT=null, GQUERY='', NAVCUR=null, MM_DRAG=false;
+function graphBounds(){   // the laid-out tree's extent in graph coords
+  if(!LAYOUT||!LAYOUT.pos)return null;
+  const ids=Object.keys(LAYOUT.pos); if(!ids.length)return null;
+  let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
+  ids.forEach(id=>{const p=LAYOUT.pos[id];
+    x0=Math.min(x0,p.x);y0=Math.min(y0,p.y);x1=Math.max(x1,p.x+NW);y1=Math.max(y1,p.y+NH);});
+  return {x:x0,y:y0,w:Math.max(1,x1-x0),h:Math.max(1,y1-y0)};
+}
+function fitView(){   // frame the whole tree (F) — zoom-by-pixels; stubs are the zoom-by-meaning lever
+  const b=graphBounds(); if(!b)return;
+  const r=$('right').getBoundingClientRect();
+  const k=Math.min(1,Math.max(0.25,Math.min((r.width-90)/b.w,(r.height-140)/b.h)));
+  BROWSING=true; VIEW.k=k;
+  VIEW.x=(r.width-b.w*k)/2-b.x*k;
+  VIEW.y=(r.height-b.h*k)/2-b.y*k+16;
+  applyView(true); renderMinimap();
+}
+function zoomStep(f){   // +/− buttons and keys zoom on the panel center
+  const r=$('right').getBoundingClientRect(), cx=r.width/2, cy=r.height/2;
+  const k2=Math.min(1.9,Math.max(0.25,VIEW.k*f));
+  BROWSING=true;
+  VIEW.x=cx-(cx-VIEW.x)*(k2/VIEW.k); VIEW.y=cy-(cy-VIEW.y)*(k2/VIEW.k); VIEW.k=k2;
+  applyView(false); renderMinimap();
+}
+const MMW=156, MMH=104, MMPAD=6;
+function _mmScale(b){ return Math.min((MMW-MMPAD*2)/b.w,(MMH-MMPAD*2)/b.h); }
+function renderMinimap(){   // branch structure + viewport rect; click/drag to jump
+  const mm=$('minimap'); if(!mm)return;
+  const b=graphBounds();
+  if(!b||!LAYOUT||Object.keys(LAYOUT.m||{}).length<3||VIEWMODE!=='graph'){mm.hidden=true;return;}
+  mm.hidden=false;
+  const sc=_mmScale(b), r=$('right').getBoundingClientRect();
+  const {t}=nodesOf(S); const onPath=S?pathSetOf(nodesOf(S).m,t.active):{};
+  let html='';
+  Object.keys(LAYOUT.pos).forEach(id=>{
+    const p=LAYOUT.pos[id], n=LAYOUT.m[id]||{};
+    const cls='mmdot'+(id===t.active?' act':(onPath[id]?' path':''))+(n.kind==='stub'?' stub':'')+(id==='_wip'?' wip':'');
+    html+=`<i class="${cls}" style="left:${((p.x-b.x)*sc+MMPAD).toFixed(1)}px;`+
+      `top:${((p.y-b.y)*sc+MMPAD).toFixed(1)}px;width:${Math.max(4,NW*sc).toFixed(1)}px;`+
+      `height:${Math.max(2.5,NH*sc*0.8).toFixed(1)}px"></i>`;
+  });
+  // the viewport rectangle: what the camera currently shows, in tree coords → minimap coords
+  const vx=((-VIEW.x/VIEW.k)-b.x)*sc+MMPAD, vy=((-VIEW.y/VIEW.k)-b.y)*sc+MMPAD;
+  const vw=(r.width/VIEW.k)*sc, vh=(r.height/VIEW.k)*sc;
+  html+=`<b class=mmview style="left:${vx.toFixed(1)}px;top:${vy.toFixed(1)}px;`+
+    `width:${vw.toFixed(1)}px;height:${vh.toFixed(1)}px"></b>`;
+  mm.innerHTML=html;
+}
+function mmJump(e){   // center the camera on the clicked tree point
+  const b=graphBounds(); if(!b)return;
+  const mm=$('minimap'), mr=mm.getBoundingClientRect(), sc=_mmScale(b);
+  const gx=(e.clientX-mr.left-MMPAD)/sc+b.x, gy=(e.clientY-mr.top-MMPAD)/sc+b.y;
+  const r=$('right').getBoundingClientRect();
+  BROWSING=true;
+  VIEW.x=r.width/2-gx*VIEW.k; VIEW.y=r.height/2-gy*VIEW.k;
+  applyView(false); renderMinimap();
+}
+function initMinimap(){
+  const mm=$('minimap'); if(!mm)return;
+  mm.addEventListener('pointerdown',e=>{MM_DRAG=true;mm.setPointerCapture(e.pointerId);mmJump(e);});
+  mm.addEventListener('pointermove',e=>{if(MM_DRAG)mmJump(e);});
+  const up=()=>{MM_DRAG=false;};
+  mm.addEventListener('pointerup',up); mm.addEventListener('pointercancel',up);
+}
+// Search-glow (the PoE pattern): every node whose label / cached content / research mentions the
+// term lights up; the rest dim. Deterministic substring — same spirit as the research stack's focus.
+function cacheText(id){
+  const d=NODECACHE[id]; if(!d)return '';
+  const opts=(d.options||[]).map(o=>{const x=o.direction||{};return (x.title||'')+' '+(x.one_liner||'');}).join(' ');
+  return [d.content,d.draft,d.thesis,opts].filter(Boolean).join(' ');
+}
+function nodeMatches(n,q){
+  if(!q||n.kind==='stub')return false;
+  const hay=(nodeLabel(n)+' '+(n.title||'')+' '+(n.feedback||'')+' '+cacheText(n.id)).toLowerCase();
+  return hay.indexOf(q.toLowerCase())>=0;
+}
+function gSearch(q){ GQUERY=(q||'').trim(); if(VIEWMODE==='graph')renderGraph(); }
+// Keyboard nav: arrows walk the laid-out tree (↑ parent · ↓ child, spine first · ←/→ siblings),
+// Enter opens the cursor node (or unfolds a stub), F fits, +/− zoom, / jumps to search.
+function navSibs(id){
+  const p=LAYOUT&&LAYOUT.tp&&LAYOUT.tp[id];
+  if(p==null||!LAYOUT.kids[p])return [id];
+  return LAYOUT.kids[p].slice().sort((a,b)=>LAYOUT.pos[a].x-LAYOUT.pos[b].x);
+}
+function navMove(dir){
+  if(!LAYOUT||!S)return;
+  const {t}=nodesOf(S);
+  let cur=NAVCUR&&LAYOUT.m[NAVCUR]?NAVCUR:(FOCUS&&LAYOUT.m[FOCUS]?FOCUS:t.active);
+  if(!LAYOUT.m[cur])return;
+  if(dir==='up'){ const p=LAYOUT.tp[cur]; if(p!=null&&LAYOUT.m[p])cur=p; }
+  else if(dir==='down'){
+    const ks=(LAYOUT.kids[cur]||[]).slice();
+    if(ks.length){ const onPath=pathSetOf(nodesOf(S).m,t.active);
+      ks.sort((a,b)=>(onPath[b]?1:0)-(onPath[a]?1:0)||LAYOUT.pos[a].x-LAYOUT.pos[b].x); cur=ks[0]; }
+  } else {
+    const sibs=navSibs(cur), i=sibs.indexOf(cur);
+    if(i>=0)cur=sibs[Math.max(0,Math.min(sibs.length-1,i+(dir==='right'?1:-1)))];
+  }
+  NAVCUR=cur; BROWSING=true;
+  renderGraph();
+  if(LAYOUT.pos[cur]){ const r=$('right').getBoundingClientRect();
+    VIEW.x=r.width/2-(LAYOUT.pos[cur].x+NW/2)*VIEW.k; VIEW.y=r.height*0.42-LAYOUT.pos[cur].y*VIEW.k;
+    applyView(true); renderMinimap(); }
+}
+function graphKeys(e){
+  const tgt=e.target||{};
+  if(tgt.tagName==='INPUT'||tgt.tagName==='TEXTAREA'||tgt.isContentEditable)return;
+  if(!$('v2modal')||!$('v2modal').hidden)return;
+  if(VIEWMODE!=='graph'||!S)return;
+  if(e.key==='/'){ e.preventDefault(); const g=$('gsearch'); if(g)g.focus(); return; }
+  if(e.key==='f'||e.key==='F'){ e.preventDefault(); return fitView(); }
+  if(e.key==='+'||e.key==='='){ e.preventDefault(); return zoomStep(1.25); }
+  if(e.key==='-'){ e.preventDefault(); return zoomStep(0.8); }
+  if(e.key==='ArrowUp'){ e.preventDefault(); return navMove('up'); }
+  if(e.key==='ArrowDown'){ e.preventDefault(); return navMove('down'); }
+  if(e.key==='ArrowLeft'){ e.preventDefault(); return navMove('left'); }
+  if(e.key==='ArrowRight'){ e.preventDefault(); return navMove('right'); }
+  if(e.key==='Enter'&&NAVCUR){ e.preventDefault();
+    const n=LAYOUT&&LAYOUT.m&&LAYOUT.m[NAVCUR];
+    if(n&&n.kind==='stub'){ NAVCUR=n.root; return stubExpand(n.root); }
+    const id=NAVCUR; NAVCUR=null; return gNodeClick(id); }
+}
+// Hover trail (PoE's path-to-target): hovering any node glows the root→node chain and counts steps.
+function initTrail(){
+  const gn=$('gnodes'); if(!gn)return;
+  gn.addEventListener('mouseover',e=>{
+    const el=e.target.closest('.gnode'); if(!el||!LAYOUT)return;
+    if(el.classList.contains('focus'))return;   // an open doc isn't a wayfinding target
+    let id=el.dataset.id, steps=0;
+    const chain=new Set();
+    for(let cur=id;cur!=null&&LAYOUT.m[cur];cur=LAYOUT.tp[cur]){chain.add(cur);steps++;}
+    gn.querySelectorAll('.gnode').forEach(x=>x.classList.toggle('trail',chain.has(x.dataset.id)));
+    if(!el.classList.contains('stub')){
+      const base=(el.title||'').replace(/\n?· \d+ steps? from the start$/,'');
+      const n=Math.max(1,steps-1);
+      el.title=base+(base?'\n':'')+`· ${n} step${n===1?'':'s'} from the start`;
+    }
+  });
+  gn.addEventListener('mouseout',e=>{
+    if(e.relatedTarget&&e.relatedTarget.closest&&e.relatedTarget.closest('#gnodes'))return;
+    gn.querySelectorAll('.gnode.trail').forEach(x=>x.classList.remove('trail'));
+  });
 }
 let LEAF_OPEN=new Set();   // expanded leaflets (click a leaf to read its full research question)
 function leafToggle(i){ if(LEAF_OPEN.has(i))LEAF_OPEN.delete(i); else LEAF_OPEN.add(i); renderView(); }
@@ -794,7 +1088,8 @@ function focusCam(p){   // an open doc reads at NATURAL scale (k=1), panel-fit w
 }
 function applyView(ease){ const v=$('gview'); if(!v)return;
   v.classList.toggle('ease',!!ease); v.style.transform=`translate(${VIEW.x}px,${VIEW.y}px) scale(${VIEW.k})`;
-  if(ease)setTimeout(()=>v.classList.remove('ease'),650); }
+  if(ease)setTimeout(()=>v.classList.remove('ease'),650);
+  if(!MM_DRAG)renderMinimap(); }   // the viewport rect tracks every pan/zoom (drag drives itself)
 function initGraphInput(){
   const g=$('graph'); if(!g)return;
   let drag=null,moved=false;
@@ -828,13 +1123,14 @@ function initGraphInput(){
 function gNodeClick(id){
   if(id==='_ghost'){ const b=$('ws-box'); if(b)b.focus(); return; }   // the ghost wants your words
   if(id==='_wip')return;                          // the node being born isn't readable yet
+  if(id.indexOf('_stub:')===0)return stubExpand(id.slice(6));   // a folded branch: click unfolds it
   if(FOCUS===id)return;                           // already reading it
   focusNode(id);                                  // browsing rendered nodes works even while it builds
 }
 function focusActive(force){ const {t}=nodesOf(S); BROWSING=false; if(force)FOCUS=null; focusNode(t.active); }
 function focusNode(id){
   const {m,t}=nodesOf(S); if(!m[id])return;
-  FOCUS=id; BROWSING=false;
+  FOCUS=id; BROWSING=false; NAVCUR=null;
   const n=m[id];
   if(id!==t.active&&!NODECACHE[id]){   // a past node: fetch its full content, then re-render
     api('GET',`/api/plan/${SID}/node/${id}`).then(({ok,d})=>{ if(ok){NODECACHE[id]=d; hydrateLog(id,d.log); if(FOCUS===id)renderGraph();} });
@@ -850,9 +1146,13 @@ function pill(show){ const p=$('gpill'); if(p)p.hidden=!show; }
 function nodeBody(n){
   const {t}=nodesOf(S);
   let body;
-  if(n.id===t.active){ const surf=stageSurface(S); body=surf?surf.html:''; }
+  // during a transitional stage (merging / researching) stageSurface has no verb to offer — but the
+  // node's CONTENT is already here; an empty wide box mid-WIP read as a swallow (Sam's QA,
+  // 2026-07-06). Show what the node IS, read-only; the WIP node owns the action.
+  if(n.id===t.active){ const surf=stageSurface(S); body=surf?surf.html:transitionalBody(); }
   else body=pastBody(n)+`<div class=ctarow><button class="stage-cta secondary" onclick="pivotFromHere('${n.id}')">⑂ Pivot from here</button></div>`;
   body+=cmtsHtml(n.id);   // inline comments on this doc, awaiting the next build verb (backlog #8)
+  body+=boardNotesHtml(n.id);   // this step's convenes — the persisted history, visible on the node
   const log=NODELOG[n.id];
   // the open state survives re-renders — the WIP poll rebuilds this HTML every tick, and an
   // unremembered <details> flashes open then collapses
@@ -860,6 +1160,43 @@ function nodeBody(n){
     `ontoggle="histKeep('${n.id}',this)"><summary>⚙ how this was built</summary><div class=nspew>`+
     log.map(l=>`<div>${esc(l)}</div>`).join('')+`</div></details>`;
   return body;
+}
+// The board history pinned to a node (server persists it per step; funnel nodes inherit forward).
+// The ACTIVE node's history is the flat mirror (S.board); a browsed past node's comes with its fetch.
+function boardNotesHtml(id){
+  const {t}=nodesOf(S);
+  const list=(id===t.active)?((S&&S.board)||[]):(((NODECACHE[id]||{}).board)||[]);
+  if(!list.length)return '';
+  const rows=list.slice().reverse().map(e=>
+    `<div class=bdrow><b>${esc(e.title||'Board review')}</b>${_vchip(e.verdict)}`+
+    (e.skeptic?`<div class="bdrow skept" style="border:none;padding-top:2px;margin-top:2px">🧐 ${esc((e.skeptic.take||e.skeptic.rationale||'').slice(0,180))}</div>`:'')+
+    `</div>`).join('');
+  return `<details class=nhist${HIST_OPEN.has(id+':b')?' open':''} ontoggle="histKeep('${id}:b',this)">`+
+    `<summary>🪑 board notes on this step (${list.length})</summary>${rows}</details>`;
+}
+// The active node's content while a background op runs on it — no CTAs (double-firing a merge or
+// commit mid-run is the failure this read-only view prevents), but everything readable, right away.
+function transitionalBody(){
+  const a=S&&S.activeNode; if(!a)return '';
+  if(a.kind==='brainstorm'){
+    const opts=(a.options||[]).map(o=>{const x=o.direction||{};const on=SEL.has(o.id);
+      return `<div class="opt${on?' sel':''}" style="cursor:default"><div>`+
+        `<h3>${on?'✓ ':''}${esc(x.title||'')}</h3><p>${esc(x.one_liner||'')}</p>`+
+        `${x.mold?`<span class=mold>${esc(x.mold)}</span>`:''}</div></div>`;}).join('');
+    const piv=a.feedback?`<p class=react style="font-size:14px">↳ Pivoting on: “${esc(a.feedback)}”</p>`:'';
+    return piv+setAsideHtml(a.set_aside)+`<p class=eyebrow>The directions offered</p>`+
+      `<div class=optgrid>${opts}</div><p class=thinking>✓ = your picks — merging them now.</p>`;
+  }
+  if(a.kind==='refined'){
+    const kept=(a.kept||[]).map(k=>`<li>${esc(k)}</li>`).join('');
+    const rows=((a.research&&a.research.rows)||[]).slice(0,4).map(x=>
+      `<li>${x.mark==='ok'?'✅':'⚠️'} ${esc(x.text)} <span class="badge ${x.mark==='ok'?'b-ok':'b-warn'}">${x.mark==='ok'?'cited':'vendor'}</span></li>`).join('');
+    return `<p class=react>${esc(a.thesis||'')}</p>`+(a.mold?`<span class=mold>${esc(a.mold)}</span>`:'')+
+      (kept?`<p class=eyebrow style="margin-top:14px">Kept</p><ul class=kept>${kept}</ul>`:'')+
+      (rows?`<ul class=ev>${rows}</ul>`:'')+
+      `<p class=thinking>Deep research + the full build are running on this idea now.</p>`;
+  }
+  return '';
 }
 function pastBody(n){
   const d=NODECACHE[n.id];
@@ -873,7 +1210,7 @@ function pastBody(n){
         `<h3>${o.picked?'✓ ':''}${esc(x.title||'')}</h3><p>${esc(x.one_liner||'')}</p>`+
         `${x.mold?`<span class=mold>${esc(x.mold)}</span>`:''}</div></div>`;}).join('');
     const piv=d.feedback?`<p class=react style="font-size:14px">↳ Pivoting on: “${esc(d.feedback)}”</p>`:'';
-    return piv+`<p class=eyebrow>${d.spread==='tight'?'Your idea, sharpened':'The directions offered'}</p>`+
+    return piv+setAsideHtml(d.set_aside)+`<p class=eyebrow>${d.spread==='tight'?'Your idea, sharpened':'The directions offered'}</p>`+
       `<div class=optgrid>${opts}</div>`+
       ((d.options||[]).some(o=>o.picked)?`<p class=thinking>✓ = what you picked and carried forward.</p>`
         :`<p class=thinking>Nothing picked from this fork yet.</p>`);
@@ -884,6 +1221,17 @@ function pastBody(n){
 function stageOptions(){ return (S&&S.activeNode&&S.activeNode.options)||[]; }
 function stageSurface(s){
   if(!s)return null;
+  // THE SURFACE MUST MATCH THE NODE IT RENDERS INSIDE. `stage` and `tree.active` can disagree (a
+  // stranded pointer from the old commit bug corrupted live sessions; any future drift lands the
+  // same way) — trusting stage alone painted refined CTAs on a brainstorm fork with no checkboxes
+  // (Sam's refresh bug, 2026-07-06). When idle, the ACTIVE NODE'S KIND picks the surface; stage
+  // stays the tiebreak for section nodes. Mid-run keeps the stage flow → transitionalBody, no CTAs.
+  const busy=!!(WIP_LABEL||s.status==='researching');
+  if(!busy&&!PENDING_FORK&&s.status!=='error'&&!(s.done||s.stage==='done')){
+    const ak=s.activeNode&&s.activeNode.kind;
+    if(ak==='brainstorm')return {html:brainstormHtml(s)};
+    if(ak==='refined')return {html:refinedHtml(s)};
+  }
   if(PENDING_FORK)return {html:
     `<p class=eyebrow>We tried to work that in</p><p>${esc(PENDING_FORK.clash||'That clashes with the committed idea.')}</p>`+
     (PENDING_FORK.skeptic_say?`<p class=skept>🧐 ${esc(PENDING_FORK.skeptic_say)}</p>`:'')+
@@ -911,18 +1259,37 @@ function stepCtas(){
     `<button class="stage-cta secondary" onclick=pivotActive()>⑂ Pivot</button></div>`+
     `<p class=thinking>Comment or steer in the box anytime, it wins.</p>`;
 }
+// A declared set-aside: part of the ask the engine declined OUT LOUD (with its reason) — rendered
+// as a warning card wherever the spread shows, never buried. The off-ramps are the operator's.
+function setAsideHtml(sa){
+  if(!sa||!sa.what)return '';
+  return `<div class=saside>⚠ <b>Set aside, not silently dropped:</b> ${esc(sa.what)}`+
+    `<span class=why> — ${esc(sa.why||'')}</span>`+
+    `<span class=why> The directions run with the rest. To force it back in, rephrase the pivot; `+
+    `or branch from an earlier node and rebuild around it.</span></div>`;
+}
 function brainstormHtml(s){
   const cards=stageOptions().map(o=>{const d=o.direction||{};const on=SEL.has(o.id);
     return `<label class="opt${on?' sel':''}"><input type=checkbox ${on?'checked':''} onchange="toggleSel('${o.id}')">`+
       `<div><h3>${esc(d.title||'Direction')}</h3><p>${esc(d.one_liner||'')}</p>`+
       `${d.mold?`<span class=mold>${esc(d.mold)}</span>`:''}</div></label>`;}).join('');
   const piv=(s.activeNode&&s.activeNode.feedback)?`<p class=react style="font-size:14px">↳ Pivoting on: “${esc(s.activeNode.feedback)}”</p>`:'';
-  return piv+`<p class=eyebrow>Pick what clicks</p><div class=optgrid>${cards}</div>`+
+  const sa=setAsideHtml(s.activeNode&&s.activeNode.set_aside);
+  return piv+sa+`<p class=eyebrow>Pick what clicks</p><div class=optgrid>${cards}</div>`+
     `<div class=ctarow><button class=stage-cta onclick=doMerge()>Let's try it →</button>`+
     `<button class="stage-cta secondary" onclick=commitFromBrainstorm()>I'm sold, build the plan</button></div>`+
     `<p class=thinking>Or just type in the box, it always wins.</p>`;
 }
-function toggleSel(id){ if(SEL.has(id))SEL.delete(id); else SEL.add(id); renderView(); }
+// checkbox picks survive a refresh — they were client-memory only, so a reload silently dropped
+// the selection and the fork re-rendered pickless (Sam's QA, 2026-07-06)
+function _selKey(){ const {t}=nodesOf(S); return 'filg_sel_'+SID+':'+(t.active||''); }
+function saveSel(){ try{localStorage.setItem(_selKey(),JSON.stringify([...SEL]));}catch(e){} }
+function loadSel(){ try{
+    const v=JSON.parse(localStorage.getItem(_selKey())||'[]');
+    const opts=new Set((stageOptions()||[]).map(o=>o.id));
+    SEL=new Set((v||[]).filter(id=>opts.has(id)));
+  }catch(e){ SEL=new Set(); } }
+function toggleSel(id){ if(SEL.has(id))SEL.delete(id); else SEL.add(id); saveSel(); renderView(); }
 function refinedHtml(s){
   const a=s.activeNode||{};
   const kept=(a.kept||[]).map(k=>`<li>${esc(k)}</li>`).join('');
@@ -985,8 +1352,60 @@ function doneHtml(s){
   return `<p class=eyebrow>Plan complete</p><p class=react>🎉 All ${s.total} parts, built with you.</p>`+
     `<ul>${files}</ul>`+
     `<div class=ctarow><a class=stage-cta href="/api/plan/${SID}/download">⬇ Raw files (.zip)</a>`+
+    `<button class="stage-cta secondary" onclick=downloadPdf()>📄 Plan PDF</button>`+
+    `<button class="stage-cta secondary" onclick=shareModal()>🔗 Share</button>`+
     `<button class="stage-cta secondary" onclick=pivotActive()>⑂ Pivot</button></div>`+
-    `<p class=thinking>Rework any part by pivoting from its node, or keep asking questions in the box.</p>`;
+    `<p class=thinking>Raw export is always free. The PDF is free with a watermark on your own key `+
+    `($7 removes it, 3 plans) and clean on any subscription.</p>`;
+}
+// ── Share: a public read-only /p/{id} page (receipts + decision path + the plan), private by
+// default. The artifact IS the funnel — the maker line on the page is the growth loop.
+async function shareModal(){
+  if(!SID){ toast('Start a plan first — then you can share it.','err'); return; }
+  const on=!!(S&&S.shared);
+  const url=location.origin+'/p/'+SID;
+  $('modal-body').innerHTML=
+    `<p class=muted>A public, read-only page of this plan: the graded receipts, the decision path, `+
+    `and every part — shareable with a client, cofounder, or the internet. Private by default; `+
+    `flip it off any time.</p>`+
+    `<div class=sharerow><b>${on?'Sharing is ON':'Sharing is OFF'}</b>`+
+    `<button type=button class=${on?'':'primary'} onclick="setShared(${on?'false':'true'})">${on?'Make it private':'Turn on sharing'}</button></div>`+
+    (on?`<input id=shareurl readonly value="${esc(url)}" onclick="this.select()">`+
+        `<div class=cmtacts><button type=button class=primary onclick="copyShare()">Copy link</button>`+
+        `<a class=ghost style="padding:6px 10px" href="${esc(url)}" target=_blank rel=noopener>Open ↗</a></div>`:'');
+  $('modal-acts').innerHTML='<button class=primary onclick="closeModal()">Done</button>';
+  openModal('Share this plan');
+}
+async function setShared(v){
+  const {ok,d}=await api('POST',`/api/plan/${SID}/share`,{shared:v});
+  if(!ok){ toast((d&&d.error)||'Could not change sharing.','err'); return; }
+  if(S)S.shared=!!v&&!!(d&&d.shared);
+  toast(S.shared?'Share link is live.':'Back to private.');
+  shareModal();   // re-render the modal in its new state
+}
+function copyShare(){ const i=$('shareurl'); if(!i)return; i.select();
+  try{ navigator.clipboard?navigator.clipboard.writeText(i.value):document.execCommand('copy');
+       toast('Link copied. ✓'); }catch(e){ toast('Copy failed — select + copy by hand.','err'); } }
+// The PDF fetch goes through JS so a 402 (credits) or 429 lands as guidance, not a broken tab.
+async function downloadPdf(){
+  if(!SID)return;
+  const th=chatSay('status','synthesizing the PDF…');
+  let r;
+  try{ r=await fetch(`/api/plan/${SID}/plan.pdf`); }catch(e){ if(th)th.remove(); toast('Network hiccup — try again.','err'); return; }
+  if(th)th.remove();
+  if(!r.ok){
+    let d={}; try{d=await r.json();}catch(e){}
+    if(d.needPurchase){ chatBot((d.error||'Out of PDF credits.')+' (Credits and subscriptions live on the pricing page.)'); return; }
+    if(gateV2(d))return;
+    toast((d&&d.error)||'Could not build the PDF.','err'); return;
+  }
+  const wm=r.headers.get('X-FILG-Watermark')==='1';
+  const blob=await r.blob();
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+  const fm=(r.headers.get('Content-Disposition')||'').match(/filename="([^"]+)"/);
+  a.download=(fm&&fm[1])||'business-plan.pdf';
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href),4000);
+  toast(wm?'PDF downloaded — free copy, watermarked. $7 unlocks 3 clean ones.':'PDF downloaded. ✓');
 }
 
 // ── Two projections of the same tree: the decision graph, and a left-to-right document reader ──
@@ -1040,7 +1459,9 @@ function render(s){
   // Server status is the truth here: a poll-driven op (merge/commit) sets WIP_LABEL but only the
   // server knows when it's done. Sync ops (run) clear their own label via endWip before render().
   const researching=S.status==='researching';
-  if(!researching&&!WAS_RESEARCHING)WIP_LABEL=null;   // belt-and-braces: never let a stale label stick
+  // belt-and-braces: never let a stale POLL-DRIVEN label stick. A SYNC op's label is its own —
+  // a stray render mid-await (an old poll tick, a board reply) must not blank a live WIP box.
+  if(!researching&&!WAS_RESEARCHING&&!WIP_SYNC)WIP_LABEL=null;
   if(researching&&!WIP_T0)WIP_T0=Date.now();          // e.g. a reload mid-build → the timer still ticks
   const {t}=nodesOf(S);
   if(WAS_RESEARCHING&&!researching){          // a build just finished → stash its log on the node it made
@@ -1048,16 +1469,28 @@ function render(s){
     WIPLOG=[]; LANES=[]; LANES_DONE=new Set(); WIP_LABEL=null; WIP_T0=null; WIP_PENDING=null;
   }
   if(S.activeNode)hydrateLog(S.activeNode.id,S.activeNode.log);   // server-persisted receipts survive a reload
+  // chat-lookup claims persist server-side now — the server's list is the superset, adopt it
+  if(S.lookups&&S.lookups.length>LOOKUPS.length)LOOKUPS=S.lookups.slice();
   WAS_RESEARCHING=researching;
   paintMeter(S);
   if(!researching){
     if(t.active!==LAST_ACTIVE){ LAST_ACTIVE=t.active; FOCUS=t.active; BROWSING=false; PREFOCUS_VIEW=null;
-      promptFocus(); }   // the next step is ready → zoom in, hands back on the keyboard
+      promptFocus(); announceSetAside(); }   // the next step is ready → zoom in, hands back on the keyboard
     else if(FOCUS==null&&!BROWSING){ FOCUS=t.active; }
   }
   if(!researching&&VIEWMODE==='docs')DOCTAB=t.active;   // the reader follows the build
   renderView();
   if(RMODE)renderResearch();   // fresh graded rows (a build just landed) show up in the stack live
+}
+// A set-aside must reach the CHAT too (the record the operator reads back), once per node —
+// "quietly ignore and reroute" is the failure this whole channel exists to kill.
+let SA_SAID=new Set();
+function announceSetAside(){
+  const a=S&&S.activeNode; if(!a||!a.set_aside||!a.set_aside.what)return;
+  if(SA_SAID.has(a.id))return; SA_SAID.add(a.id);
+  chatBot(`⚠ Heads up — part of your ask was set aside, not built in: “${a.set_aside.what}” `+
+    `(${a.set_aside.why||'no reason given'}). The directions run with the rest. Rephrase to force `+
+    `it back in, or pivot from an earlier node to rebuild around it.`);
 }
 function promptFocus(){   // put the cursor back in the chat box so the user can just start typing
   const a=document.activeElement;
@@ -1086,6 +1519,36 @@ function exitResearch(quiet){
 }
 function expandResearch(){ RMODE='expanded'; applyRmode(); renderResearch(); }
 function collapseResearch(){ RMODE='split'; applyRmode(); renderResearch(); }
+// ── The split boundary is DRAGGABLE (Sam, 2026-07-06): one remembered height shared by every
+// in-drawer pane (research/board/help). Dragging sets an inline flex-basis; leaving the split
+// clears it so the full/expanded displays keep their class-driven sizing. ──
+let SPLIT_PX=(function(){try{const v=parseInt(localStorage.getItem('filg_split_px'),10);
+  return (v>=120&&v<=2000)?v:null;}catch(e){return null;}})();
+function applySplitSize(pane,on){
+  if(!pane)return;
+  if(on&&SPLIT_PX){ pane.style.flex=`0 0 ${SPLIT_PX}px`; pane.style.maxHeight='none'; }
+  else { pane.style.flex=''; pane.style.maxHeight=''; }
+}
+function initGrips(){
+  document.querySelectorAll('.vgrip').forEach(g=>{
+    const pane=$(g.dataset.pane); if(!pane)return;
+    g.addEventListener('pointerdown',e=>{
+      e.preventDefault(); g.setPointerCapture(e.pointerId); g.classList.add('dragging');
+      pane.classList.add('resizing');   // the .45s flex ease fights a live drag — off while held
+      const move=ev=>{
+        const L=$('left'), lr=L.getBoundingClientRect(), pr=pane.getBoundingClientRect();
+        const h=Math.max(110,Math.min(ev.clientY-pr.top,lr.height-230));   // chat + box stay usable
+        SPLIT_PX=Math.round(h); applySplitSize(pane,true);
+      };
+      const up=ev=>{ g.classList.remove('dragging'); pane.classList.remove('resizing');
+        g.removeEventListener('pointermove',move); g.removeEventListener('pointerup',up);
+        g.removeEventListener('pointercancel',up);
+        try{localStorage.setItem('filg_split_px',String(SPLIT_PX));}catch(x){} };
+      g.addEventListener('pointermove',move);
+      g.addEventListener('pointerup',up); g.addEventListener('pointercancel',up);
+    });
+  });
+}
 function applyRmode(){
   const L=$('left'), pane=$('rpane'), dr=$('rdrawer');
   // a stale shell (served before the research pane existed) must fail LOUD, not half-collapse the
@@ -1100,13 +1563,30 @@ function applyRmode(){
   pane.setAttribute('aria-hidden',String(!(RMODE==='full'||RMODE==='split')));
   dr.classList.toggle('open',RMODE==='expanded');
   dr.setAttribute('aria-hidden',String(RMODE!=='expanded'));
+  applySplitSize(pane,RMODE==='split');   // the remembered drag height applies to the split only
   if(RMODE!=='full'){ const log=$('chatlog'); if(log)log.scrollTop=log.scrollHeight; }
 }
 function researchItems(){
-  const rows=((S&&S.research&&S.research.rows)||[]).map(r=>(
-    {text:r.text,url:r.url,ok:r.mark==='ok',tier:r.mark==='ok'?'cited':'vendor'}));
-  return rows.concat(LOOKUPS.map(c=>(
-    {text:c.text,url:c.url,ok:!c.flagged,tier:c.tier||(c.flagged?'vendor':'cited'),fresh:true})));
+  // EVERY graded source joins the stack, deduped by text|url. Before the deep build the rows live
+  // on the REFINED NODE (the first-pass read), not the session — the stack reading only S.research
+  // meant a refined-stage Research pill showed empty while graded rows sat in the node (found in
+  // Sam's 2026-07-06 QA). Sources: the plan's deep-build rows · the active node's first-pass rows ·
+  // any browsed node's rows (NODECACHE) · this session's chat lookups.
+  const out=[], seen=new Set();
+  const add=(list,fresh)=>(list||[]).forEach(r=>{
+    const key=(r.text||'')+'|'+(r.url||'');
+    if(!r.text||seen.has(key))return;
+    seen.add(key);
+    const ok=('mark' in r)?r.mark==='ok':!r.flagged;
+    out.push({text:r.text,url:r.url,ok,tier:r.tier&&!('mark' in r)?r.tier:(ok?'cited':'vendor'),
+      fresh:!!fresh});
+  });
+  add(S&&S.research&&S.research.rows);
+  add(S&&S.activeNode&&S.activeNode.research&&S.activeNode.research.rows);
+  Object.keys(NODECACHE).forEach(id=>{const d=NODECACHE[id];
+    add(d&&d.research&&d.research.rows);});
+  add(LOOKUPS,true);
+  return out;
 }
 const _RSTOP=new Set(('the,a,an,and,or,but,of,to,in,on,for,with,is,are,was,were,be,been,do,does,did,'+
   'how,what,why,when,where,who,which,i,my,me,you,your,we,our,us,it,its,this,that,these,those,about,'+
@@ -1132,48 +1612,279 @@ function renderResearch(){
     `${it.ok?'✅':'⚠️'} ${esc(it.text)}`+
     (it.url?` <a href="${esc(it.url)}" target=_blank rel=noopener>src</a>`:'')+
     `<span class=rtier>${esc(it.tier)}${it.fresh?' · lookup':''}</span></div>`).join('')
-    :'<p class=thinking>No graded research yet — it lands with the deep build. Ask a question and I\'ll dig (every claim goes through the gate).</p>';
+    :'<p class=thinking>No graded research yet — the first rows land with the first-pass read (merge a direction), more with the deep build. Ask a question and I\'ll dig (every claim goes through the gate).</p>';
   ['rlist','rlist2'].forEach(id=>{ const el=$(id); if(el)el.innerHTML=html; if(el)el.scrollTop=0; });
   return anyHit;
 }
-// An off-research question: answer it, then offer the way back to building. One chat — exiting is
-// a display change, never a history change.
-function offerExitResearch(){
-  if(R_OFFERED||!RMODE)return; R_OFFERED=true;
-  const txt="That one isn't really about the research — want to switch back to building?";
+// An off-topic question while a display is up: answer it, then offer the way back to building.
+// One chat — exiting is a display change, never a history change. Works for research AND board.
+function offerExitMode(){
+  const mode=RMODE?'research':(BMODE?'board':null);
+  if(!mode)return;
+  if(mode==='research'&&R_OFFERED)return;
+  if(mode==='board'&&B_OFFERED)return;
+  if(mode==='research')R_OFFERED=true; else B_OFFERED=true;
+  const txt=`That one isn't really about the ${mode} — want to switch back to building?`;
   chatPush('bot',txt);
   const m=chatSay('bot',esc(txt)+
     '<div class=cbtns><button type=button class=go>Back to build</button>'+
-    '<button type=button class=nah>Stay in research</button></div>');
+    `<button type=button class=nah>Stay in ${mode}</button></div>`);
   if(!m)return;
-  m.querySelector('.go').onclick=()=>{ m.classList.add('asked'); exitResearch(); };
-  m.querySelector('.nah').onclick=()=>{ m.classList.add('asked'); R_OFFERED=false;
-    chatStatus('Staying in research mode.'); };
+  m.querySelector('.go').onclick=()=>{ m.classList.add('asked'); exitResearch(); exitBoard(); };
+  m.querySelector('.nah').onclick=()=>{ m.classList.add('asked');
+    if(mode==='research')R_OFFERED=false; else B_OFFERED=false;
+    chatStatus(`Staying in ${mode} mode.`); };
 }
 
-// ── Tool drawers (board / help) — one box, colored context ──────────────────
-function openTool(mode){
-  const dr=$('tooldrawer'); dr.hidden=false; dr.className='tooldrawer '+mode;
-  $('drawerback').style.display='block';
-  $('tool-title').textContent={board:'Board of Directors',help:'Help'}[mode]||'Tool';
-  $('tool-body').innerHTML=toolBody(mode);
+// ═══ BOARD MODE — one chat, three displays (the research contract, applied to the board room) ═══
+// 'full' = the convene stack covers the chat history; 'split' = first question slides the chat up;
+// 'expanded' = the stack slides into its own left drawer. The stack = the active path's persisted
+// board history (S.board mirrors the active node, convenes inherit forward) + the stress-test
+// result. Seats row re-picks the bench; ⚒ Forge + 🧪 Stress-test live in the header.
+let BMODE=null, BQUERY='', B_OFFERED=false, BOARD_PICK=null, FORGED=null, STRESS_ON=false;
+function enterBoard(){ if(!BMODE)BMODE='full'; B_OFFERED=false; applyBmode(); renderBoard(); }
+function exitBoard(quiet){
+  if(!BMODE)return;
+  BMODE=null; BQUERY=''; applyBmode();
+  MODE='build';
+  document.querySelectorAll('#modechips .mchip').forEach(b=>b.classList.toggle('on',b.dataset.mode==='build'));
+  $('ws-wrap').className='promptwrap';
+  if(!quiet)chatStatus('Back to build mode.');
 }
-function closeTool(keepMode){ $('tooldrawer').hidden=true; $('drawerback').style.display='none';
-  if(!keepMode&&MODE!=='build'){ MODE='build'; document.querySelectorAll('#modechips .mchip').forEach(b=>b.classList.toggle('on',b.dataset.mode==='build'));
-    $('ws-wrap').className='promptwrap'; } }
-function toolBody(mode){
-  if(mode==='board'){ return '<p class=thinking>Your board of advisors reviews each part and can be convened. Type a question in the box to aim them.</p>'; }
-  return '<p>Type your idea on the landing page, then watch it spread into a few directions, merge the ones you like, and research + build the plan. The prompt box always wins: steer, jump ahead, or start over from it anytime. It runs on us to start.</p>';
+function expandBoard(){ BMODE='expanded'; applyBmode(); renderBoard(); }
+function collapseBoard(){ BMODE='split'; applyBmode(); renderBoard(); }
+function applyBmode(){
+  const L=$('left'), pane=$('bpane'), dr=$('bdrawer');
+  if(!L||!pane||!dr){   // stale shell: fail LOUD, same contract as research
+    if(BMODE){ BMODE=null; toast('This page is stale — hard-refresh (⌘⇧R) to load the board surface.','err'); }
+    if(L){ L.classList.remove('bfull'); L.classList.remove('bsplit'); }
+    return;
+  }
+  L.classList.toggle('bfull',BMODE==='full');
+  L.classList.toggle('bsplit',BMODE==='split');
+  pane.setAttribute('aria-hidden',String(!(BMODE==='full'||BMODE==='split')));
+  dr.classList.toggle('open',BMODE==='expanded');
+  dr.setAttribute('aria-hidden',String(BMODE!=='expanded'));
+  applySplitSize(pane,BMODE==='split');
+  if(BMODE!=='full'){ const log=$('chatlog'); if(log)log.scrollTop=log.scrollHeight; }
+}
+// The stack: newest first — the stress-test result (if any) rides on top, then every convene.
+function boardItems(){
+  const out=[];
+  const sk=S&&S.skeptic;
+  if(sk&&sk.status==='done'&&sk.result)out.push({stress:sk.result});
+  const hist=(S&&S.board)||[];
+  for(let i=hist.length-1;i>=0;i--)out.push({entry:hist[i]});
+  return out;
+}
+function _btext(it){   // the searchable text of a stack item, for the relevance focus
+  if(it.stress){ const r=it.stress;
+    return 'stress test assumptions '+((r.assessments||[]).map(a=>(a.assumption||'')+' '+(a.why||'')).join(' ')); }
+  const e=it.entry||{};
+  return [e.title,e.consensus,e.conflicts,e.verdict,
+    (e.skeptic&&(e.skeptic.take||e.skeptic.rationale))||'',
+    ...(e.directors||[]).map(x=>(x.name||'')+' '+(x.take||''))].join(' ');
+}
+function _vchip(v){ if(!v)return '';
+  const cls=/non.?starter|kill|broken/i.test(v)?'bad':(/concern|dissent|weak/i.test(v)?'warn':(/agree|pursue|surviv/i.test(v)?'ok':''));
+  return `<span class="bverdict ${cls}">${esc(v)}</span>`; }
+function _bcard(it,open){
+  if(it.stress)return _stressCard(it.stress);
+  const e=it.entry||{};
+  const dirs=(e.directors||[]).map(x=>`<div class=bdrow><b>${esc(x.name||x.key)}</b> ${esc(x.take||'')}</div>`).join('');
+  const sk=e.skeptic?`<div class="bdrow skept">🧐 <b>${esc(e.skeptic.name||'The Skeptic')}</b> `+
+    `${esc(e.skeptic.take||e.skeptic.rationale||'')} ${_vchip(e.skeptic.verdict)}</div>`:'';
+  const tail=(e.consensus?`<div class=bdrow><b>Consensus</b> ${esc(e.consensus)}</div>`:'')+
+    (e.conflicts?`<div class=bdrow><b>Clash</b> ${esc(e.conflicts)}</div>`:'');
+  return `<span class=bt>${esc(e.title||'Board review')}</span>${_vchip(e.verdict)}`+
+    `<details${open?' open':''}><summary>${(e.directors||[]).length||''} takes + the skeptic</summary>${dirs}${sk}${tail}</details>`;
+}
+function _stressCard(r){
+  const sm=r.summary||{};
+  const rows=(r.assessments||[]).map(a=>{
+    const ev=(a.evidence||[]).map(x=>`<a href="${esc(x.url||'')}" target=_blank rel=noopener>${esc((x.tier||'src').toLowerCase())}</a>`).join(' ');
+    return `<div class="sline ${esc(a.verdict||'')}"><b>${esc(a.verdict||'')}</b> ${esc(a.assumption||'')}`+
+      (a.why?`<div class=why>${esc(a.why)}</div>`:'')+(ev?`<div class=why>${ev}</div>`:'')+`</div>`;}).join('');
+  return `<span class=bt>🧪 Assumption stress-test</span>`+
+    `<div class=stressbar>${sm.broken||0} broken · ${sm.weakened||0} weakened · ${sm.survives||0} survived</div>`+
+    `<details><summary>the assessments</summary>${rows}</details>`;
+}
+// Paint the stack + the seats row into whichever board surface is live. Returns true if BQUERY
+// matched anything — same relevance signal contract as renderResearch.
+function renderBoard(){
+  const items=boardItems();
+  const qt=_rterms(BQUERY);
+  const scored=items.map((it,i)=>({it,i,s:qt.length?_rscore(qt,{text:_btext(it)}):0}));
+  if(qt.length)scored.sort((a,b)=>b.s-a.s||a.i-b.i);
+  const anyHit=scored.some(x=>x.s>0);
+  const html=items.length?scored.map(({it,s},idx)=>
+    `<div class="brow${s>0?' hit':(qt.length&&anyHit?' dim':'')}">${_bcard(it,idx===0&&!qt.length)}</div>`).join('')
+    :'<p class=thinking>No convenes yet — ask the board anything and the room fills up. '+
+     'Every review sticks to the step it judged.</p>';
+  ['blist','blist2'].forEach(id=>{ const el=$(id); if(el)el.innerHTML=html; if(el)el.scrollTop=0; });
+  renderSeats();
+  return anyHit;
+}
+// ── The bench: seated directors as toggle chips (standing archetypes + forged customs) ──
+function _benchCatalog(){
+  const customs=(S&&S.customDirectors)||[];
+  return (CFG.archetypes||[]).map(a=>({key:a.key,name:a.name||a.key,custom:false}))
+    .concat(customs.map(c=>({key:c.key,name:c.name||c.key,custom:true})));
+}
+function _benchInit(){ if(BOARD_PICK)return;
+  BOARD_PICK=new Set((S&&S.directors&&S.directors.length?S.directors:CFG.defaultBoard)||[]); }
+function renderSeats(){
+  _benchInit();
+  const chips=_benchCatalog().map(p=>
+    `<button type=button class="bseat${BOARD_PICK.has(p.key)?' on':''}${p.custom?' custom':''}" `+
+    `onclick="seatToggle('${esc(p.key)}')" title="${p.custom?'Custom-forged director':'Standing archetype'}">`+
+    `${esc(p.name)}</button>`).join('');
+  ['bseats','bseats2'].forEach(id=>{ const el=$(id); if(el)el.innerHTML=chips; });
+}
+function seatToggle(key){
+  _benchInit();
+  if(BOARD_PICK.has(key)){
+    if(BOARD_PICK.size<=1){ toast('The board needs at least one seat.','err'); return; }
+    BOARD_PICK.delete(key);
+  } else BOARD_PICK.add(key);
+  renderSeats();
+  toast('Bench updated — it rides the next convene.');
+}
+// ── ⚒ Director Forge: describe → forge (draft persona) → seat. Pro / own-key feature; the server
+// gates it and we surface the upgrade copy instead of a dead button. ──
+function forgeModal(){
+  if(!SID){ toast('Start a plan first.','err'); return; }
+  FORGED=null;
+  $('modal-body').innerHTML=
+    `<p class=muted>Describe the director you want at the table — a domain, a temperament, who they `+
+    `fight for. FILG forges a persona; nothing is seated until you approve.</p>`+
+    `<textarea id=forgedesc rows=3 placeholder="e.g. a grizzled dental-practice office manager who has seen every vendor pitch and cares only about no-show rates…"></textarea>`+
+    `<div class=err id=forgeerr></div><div id=forgeout></div>`;
+  $('modal-acts').innerHTML=`<button onclick="closeModal()">Cancel</button>`+
+    `<button class=primary id=forgego onclick="forgeGo()">⚒ Forge</button>`;
+  openModal('Forge a director');
+  setTimeout(()=>{const i=$('forgedesc');if(i)i.focus();},40);
+}
+async function forgeGo(){
+  const desc=(($('forgedesc')||{}).value||'').trim(), er=$('forgeerr'), btn=$('forgego');
+  if(desc.length<4){ er.textContent='Describe the director you want.'; return; }
+  er.textContent=''; btn.disabled=true; btn.textContent='Forging…';
+  const {ok,d}=await api('POST',`/api/plan/${SID}/director/forge`,{description:desc});
+  btn.disabled=false; btn.textContent='⚒ Forge';
+  if(!ok){
+    if(d&&d.upgrade){ er.textContent=d.error||'Forging is a Pro feature.'; return; }
+    if(gateV2(d))return;
+    er.textContent=(d&&d.error)||'The forge misfired — try again.'; return;
+  }
+  FORGED=d.persona||null;
+  if(!FORGED){ er.textContent='The forge came back empty — try rewording.'; return; }
+  $('forgeout').innerHTML=`<div class=forgecard><b>${esc(FORGED.name||'')}</b>`+
+    (FORGED.first?` <span class=muted>· goes by ${esc(FORGED.first)}</span>`:'')+
+    `<p style="margin:6px 0 0">${esc(FORGED.blurb||'')}</p>`+
+    ((FORGED.domains||[]).length?`<div class=doms>Owns: ${esc((FORGED.domains||[]).join(', '))}</div>`:'')+`</div>`;
+  $('modal-acts').innerHTML=`<button onclick="forgeModal()">↻ Different one</button>`+
+    `<button class=primary onclick="forgeSeat()">Seat them</button>`;
+}
+async function forgeSeat(){
+  if(!FORGED)return;
+  const {ok,d}=await api('POST',`/api/plan/${SID}/director/save`,{persona:FORGED});
+  if(!ok){ toast((d&&d.error)||'Could not seat them.','err'); return; }
+  const name=FORGED.name; FORGED=null; closeModal();
+  if(d&&d.id){ S=d; BOARD_PICK=null; }   // the save returns fresh plan state — adopt it, re-init the bench
+  renderBoard();
+  toast(name+' has a seat. ✓');
+  chatStatus(name+' joined the board.');
+}
+// ── 🧪 Assumption stress-test: kick, poll, land the card in the stack + a chat summary ──
+async function stressGo(){
+  if(!SID){ toast('Start a plan first.','err'); return; }
+  if(STRESS_ON){ toast('A stress-test is already running.'); return; }
+  const {ok,d}=await api('POST',`/api/plan/${SID}/stress-test`,{});
+  if(!ok){
+    if(d&&d.upgrade){ toast(d.error||'The stress-test is a Pro feature.','err'); return; }
+    if(d&&d.running){ STRESS_ON=true; stressPoll(); return; }   // rejoin one already in flight
+    if(gateV2(d))return;
+    toast((d&&d.error)||'Could not start the stress-test.','err'); return;
+  }
+  STRESS_ON=true;
+  chatStatus('🧪 Stress-testing the assumptions under your plan…');
+  stressPoll();
+}
+async function stressPoll(){
+  const sid=SID;
+  const {ok,d}=await api('GET',`/api/plan/${sid}/stress-test`);
+  if(sid!==SID)return;   // the plan changed under the poll — drop it
+  if(!ok||!d){ STRESS_ON=false; return; }
+  if(d.status==='running'){ setTimeout(stressPoll,1200); return; }
+  STRESS_ON=false;
+  if(d.status==='error'){ toast(d.error||'The stress-test failed.','err'); return; }
+  if(d.status==='done'&&d.result){
+    if(S)S.skeptic={status:'done',result:d.result};
+    const sm=(d.result.summary)||{};
+    chatBot(`Stress-test done: ${sm.broken||0} broken · ${sm.weakened||0} weakened · `+
+      `${sm.survives||0} survived. The full read is in the board room.`);
+    if(BMODE)renderBoard();
+  }
+}
+
+// ── HELP — a banner above the chat (the split mechanism), not a drawer. The static how-to plus
+// the user's OWN past help Q&As as a personal FAQ: the question is the row, expand for the answer
+// (just that Q+A, never the full chat history). FAQ lives in localStorage — help is product-level,
+// not plan-level, so it follows the browser across plans. ──
+const HELP_BLURB='Type your idea on the landing page, then watch it spread into a few directions, '+
+  'merge the ones you like, and research + build the plan. The prompt box always wins: steer, jump '+
+  'ahead, or start over from it anytime. It runs on us to start.';
+let HMODE=false;
+function enterHelp(){ HMODE=true; applyHmode(); renderHelp(); }
+function exitHelp(quiet){
+  if(!HMODE)return;
+  HMODE=false; applyHmode();
+  MODE='build';
+  document.querySelectorAll('#modechips .mchip').forEach(b=>b.classList.toggle('on',b.dataset.mode==='build'));
+  $('ws-wrap').className='promptwrap';
+  if(!quiet)chatStatus('Back to build mode.');
+}
+function applyHmode(){
+  const L=$('left'), pane=$('hpane');
+  if(!L||!pane){ if(HMODE){ HMODE=false; toast('This page is stale — hard-refresh (⌘⇧R) to load the help surface.','err'); }
+    if(L)L.classList.remove('hsplit'); return; }
+  L.classList.toggle('hsplit',HMODE);
+  pane.setAttribute('aria-hidden',String(!HMODE));
+  applySplitSize(pane,HMODE);
+  if(!HMODE){ const log=$('chatlog'); if(log)log.scrollTop=log.scrollHeight; }
+}
+function helpFaq(){ try{return JSON.parse(localStorage.getItem('filg_help_faq')||'[]');}catch(e){return [];} }
+function faqPush(q,a){
+  if(!q||!a)return;
+  const f=helpFaq().filter(x=>x.q!==q);   // re-asking replaces the old answer
+  f.push({q:q.slice(0,200),a:a.slice(0,1200),t:Date.now()});
+  try{localStorage.setItem('filg_help_faq',JSON.stringify(f.slice(-20)));}catch(e){}
+  if(HMODE)renderHelp();
+}
+function faqClear(){ try{localStorage.removeItem('filg_help_faq');}catch(e){} renderHelp(); }
+function renderHelp(){
+  const el=$('hlist'); if(!el)return;
+  const faq=helpFaq().slice().reverse();   // newest question first
+  el.innerHTML=`<div class=hblurb>${esc(HELP_BLURB)}</div>`+
+    (faq.length?`<div class=hfaqhead><span class=eyebrow>Your questions</span>`+
+      `<button type=button class="ghost small" onclick="faqClear()">Clear</button></div>`+
+      faq.map(x=>`<details class=hfaq><summary>${esc(x.q)}</summary>`+
+        `<div class=hfaqa>${mdToHtml(x.a)}</div></details>`).join('')
+      :`<p class=thinking>Ask anything about using FILG — your questions collect here as a personal FAQ.</p>`);
 }
 
 // ── boot ─────────────────────────────────────────────────────────────────────
-document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeModal();unfocus();if(PIVOT_FROM)clearGhost();}});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeModal();unfocus();if(PIVOT_FROM)clearGhost();
+  if(NAVCUR){NAVCUR=null;if(VIEWMODE==='graph')renderGraph();}}});
+document.addEventListener('keydown',graphKeys);   // graph wayfinding: arrows/Enter/F/+/−//
 // Enter submits (Shift+Enter for a newline) — sendPrompt handles full mode as the landing submit
 document.addEventListener('keydown',e=>{
   if(e.key!=='Enter'||e.shiftKey)return;
   if(e.target&&e.target.id==='ws-box'){ e.preventDefault(); sendPrompt(); }
 });
 initGraphInput();
+initMinimap(); initTrail();   // graph chrome: click-to-jump minimap + hover wayfinding trail
+initGrips();   // the split boundary drags; the height is remembered across modes + reloads
 loadKey();   // paint the key indicator (hosted vs BYOK) on load
 renderStackChips();   // the model-crew chip
 sendLabel();   // 'Start →' in full mode, 'Send →' once a plan exists

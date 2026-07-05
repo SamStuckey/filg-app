@@ -440,10 +440,17 @@ def test_v2_shell_and_assets_serve(client):
     assert client.get("/static/v2.css").status_code == 200
     # the live shell (/) is untouched by the v2 addition
     assert client.get("/").status_code == 200
-    # research mode is a DISPLAY over the one chat: the in-drawer pane + the expanded drawer exist,
-    # and the js carries the three display states + the auto-exit spine
+    # research AND board are DISPLAYS over the one chat: both in-drawer panes + expanded drawers
+    # exist, and the js carries the three display states + the auto-exit spine for each
+    # (offerExitResearch generalized to offerExitMode when the board room landed, 2026-07-06)
     assert 'id=rpane' in page.text and 'id=rdrawer' in page.text and 'id=rexpand' in page.text
+    assert 'id=bpane' in page.text and 'id=bdrawer' in page.text and 'id=bseats' in page.text
+    # help is a banner over the chat (hpane) — the old right-hand tool drawer is GONE (2026-07-06)
+    assert 'id=hpane' in page.text and 'tooldrawer' not in page.text
     js = client.get("/static/v2.js").text
     for needle in ("enterResearch", "exitResearch", "expandResearch", "collapseResearch",
-                   "renderResearch", "offerExitResearch", "RMODE='split'"):
+                   "renderResearch", "offerExitMode", "RMODE='split'",
+                   "enterBoard", "exitBoard", "expandBoard", "collapseBoard",
+                   "renderBoard", "BMODE='split'", "forgeModal", "stressGo", "boardNotesHtml",
+                   "enterHelp", "renderHelp", "faqPush", "HELP_BLURB"):
         assert needle in js, needle

@@ -71,6 +71,7 @@ def diverge(idea: str, mock: bool = False) -> tuple[dict, float]:
     from pipeline import LEDGER, call, extract_json, SONNET  # heavy; real mode only
     start = len(LEDGER.rows)
     is_pivot = idea.startswith("THE OPERATOR IS PIVOTING")
+    pivot = _pivot_text(idea)
     feedback = ""
     directions, spread = [], "loose"
     for _ in range(2):   # generate -> validate -> reprompt once (the research-lane seam contract)
@@ -82,18 +83,86 @@ def diverge(idea: str, mock: bool = False) -> tuple[dict, float]:
         s = str(data.get("spread", "loose")).lower().strip()
         spread = s if s in ("tight", "loose") else "loose"
         directions = _clean_directions(data.get("directions"))
-        if directions:
-            break
-        feedback = ("\n\nYour previous reply had no usable directions — it either echoed the "
-                    "instructions/scaffolding back as a direction, or returned nothing parseable. "
-                    "Reply with ONLY the JSON described, each direction a REAL business direction.")
+        set_aside = _clean_set_aside(data.get("set_aside"))
+        if not directions:
+            feedback = ("\n\nYour previous reply had no usable directions — it either echoed the "
+                        "instructions/scaffolding back as a direction, or returned nothing parseable. "
+                        "Reply with ONLY the JSON described, each direction a REAL business direction.")
+            continue
+        # Seam OUTPUT check #2 (2026-07-06, from Sam's QA): a pivot spread must actually CHANGE
+        # course. The input marks the pivot as outweighing everything, but a cheap model can still
+        # return the same generic directions (or quietly sanitize the ask away) — the schema
+        # validator can't see that, only a judge can. A DECLARED set_aside is the honest escape
+        # hatch: decline part of the ask out loud, honor the rest. Silence is the failure.
+        # Generate -> judge -> reprompt once -> fail LOUD.
+        if is_pivot and pivot and not _honors_pivot(pivot, directions, set_aside):
+            feedback = ("\n\nYour previous directions IGNORED the pivot instruction. Every "
+                        f"direction must visibly change course to honor it: “{pivot}”. "
+                        "Fold its specific ask into the titles and one_liners themselves. If part "
+                        "of it is something you won't build into a direction, DECLARE that part in "
+                        "the set_aside field with the honest reason and honor the rest — never "
+                        "quietly drop or paraphrase away what the operator asked.")
+            directions = []
+            continue
+        break
     if not directions:
-        if is_pivot:   # never launder scaffold or an unusable pivot into a rendered fork — fail LOUD
-            raise RuntimeError("That pivot didn't spread into real directions — try rephrasing what "
-                               "should change.")
+        if is_pivot:   # never launder scaffold or an ignored/unusable pivot into a rendered fork — fail LOUD
+            raise RuntimeError("That pivot didn't take — the directions kept dodging what you asked "
+                               "to change instead of working it in or declining it out loud. Try "
+                               "rephrasing the pivot, or branch from an earlier node and rebuild.")
         directions = [{"title": idea.strip()[:60] or "Your idea", "one_liner": idea.strip()[:160],
                        "mold": "", "leans_on": ""}]   # a plain idea may pass through; scaffold may not
-    return {"spread": spread, "directions": directions}, round(LEDGER.cost_slice(start), 4)
+    out = {"spread": spread, "directions": directions}
+    if set_aside:
+        out["set_aside"] = set_aside   # surfaced to the operator — a set-aside is never silent
+    return out, round(LEDGER.cost_slice(start), 4)
+
+
+def _clean_set_aside(raw) -> dict | None:
+    """Schema-validate the optional set_aside declaration: {what, why}, both real strings, no
+    scaffold echo. Anything malformed is dropped (an invalid declaration is not a declaration)."""
+    if not isinstance(raw, dict):
+        return None
+    what = str(raw.get("what") or "").strip()
+    why = str(raw.get("why") or "").strip()
+    if not what or not why:
+        return None
+    if any(s in (what + " " + why).lower() for s in _SCAFFOLD):
+        return None
+    return {"what": what[:200], "why": why[:300]}
+
+
+def _pivot_text(idea: str) -> str:
+    """The operator's pivot instruction, extracted from the diverge input (between the preamble line
+    and the COMMITTED PATH block)."""
+    if not idea.startswith("THE OPERATOR IS PIVOTING"):
+        return ""
+    body = idea.split("COMMITTED PATH", 1)[0]
+    return "\n".join(ln for ln in body.splitlines()[1:] if ln.strip()).strip()
+
+
+def _honors_pivot(pivot: str, directions: list[dict], set_aside: dict | None = None) -> bool:
+    """Judge whether a pivot spread actually honors the pivot instruction (the diverge seam's
+    responsiveness check — schema validation can't catch a sanitized/ignored pivot). A DECLARED
+    set_aside counts: declining part of the ask OUT LOUD while honoring the rest is honest; only
+    silent dropping fails. One cheap vote on the judge slot (writer != critic on any stack above
+    the floor). Parse failure fails OPEN — 'could not verify' must not brick every pivot."""
+    from pipeline import call, extract_json, HAIKU
+    blob = "\n".join(f"- {d.get('title', '')}: {d.get('one_liner', '')}" for d in directions)
+    declared = (f"\nIT ALSO DECLARED, TO THE OPERATOR'S FACE: it set aside “{set_aside['what']}” "
+                f"because {set_aside['why']}" if set_aside else "")
+    out = call("judge", HAIKU, max_tokens=160, prompt=(
+        "A business brainstorm was told to pivot. THE PIVOT INSTRUCTION:\n"
+        f"{pivot}\n\nTHE DIRECTIONS IT RETURNED:\n{blob}{declared}\n\n"
+        "honors_pivot is true if the directions visibly incorporate the instruction's specific ask "
+        "(its subject matter, not just its general vibe), OR if the openly declared set-aside covers "
+        "the missing part and the directions engage the rest. It is false when part of the ask "
+        "simply vanished with no declaration. Default to false when unsure.\n"
+        'Reply ONLY with JSON: {"honors_pivot": true|false, "why": "one line"}'))
+    data = extract_json(out)
+    if not isinstance(data, dict) or "honors_pivot" not in data:
+        return True   # unverifiable verdict — fail open, don't brick the pivot on judge flake
+    return bool(data.get("honors_pivot"))
 
 
 # prompt scaffolding must NEVER render as product — a direction echoing it is invalid at the seam

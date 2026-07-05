@@ -57,6 +57,7 @@ import plan_pdf   # noqa: E402 — styled PDF generation (synthesis + fpdf2 rend
 import advisor    # noqa: E402 — "chat with your plan" (grounded advisory layer)
 import context    # noqa: E402 — THE CONTEXT ENGINE: every model-facing view of session state
 import skeptic    # noqa: E402 — adversarial assumption-checking on the live research path
+import skill_registry as skills  # noqa: E402 — the skill bodies (help/system blocks)
 import provider   # noqa: E402 — BYOK: per-run LLM provider (FILG's key vs a user's OpenRouter key)
 import pipeline   # noqa: E402 — engine: per-run cost ledger (run_ledger) for safe concurrency
 import model_catalog  # noqa: E402 — model ids/prices/slugs + cached Models API availability
@@ -577,14 +578,39 @@ async def share(job_id: str):
 
 @app.get("/p/{sid}", response_class=HTMLResponse)
 async def share_plan(sid: str):
-    """Public, read-only view of a plan the owner explicitly shared (private by default)."""
+    """Public, read-only view of a plan the owner explicitly shared (private by default). Carries the
+    two things nothing else in-market shows: the graded receipts and the decision path that led here —
+    the share page IS the pitch, watermarked with the maker line."""
     s = store.plan_get(sid)
     if not s or not s.get("shared"):
         return HTMLResponse(render.not_found("This plan isn't shared or doesn't exist."), status_code=404)
     idea = planner._working_idea(s)
     inner = markdown.markdown(planner.bundle_markdown(idea, s.get("files") or {}), extensions=["extra"])
     title = ((s.get("shaped") or {}).get("thesis") or s["idea"] or "Shared business plan")[:120]
-    return HTMLResponse(render.shared_plan_page(title, inner))
+    rows = ((s.get("research") or {}).get("rows") or [])
+    return HTMLResponse(render.shared_plan_page(title, inner, receipts=rows, path=_share_path(s)))
+
+
+def _share_path(s: dict) -> list[dict]:
+    """The committed decision path (root → active) as public-safe steps: kind + label + the operator's
+    pivot/steer note. This is the provenance trail — what the plan decided and why, not just the output.
+    Reads the STORED tree (nodes = dict keyed by id; kind derived via _kind), not the frontend view."""
+    tree = s.get("tree") or {}
+    nodes = tree.get("nodes") or {}
+    chain, cur = [], tree.get("active")
+    while cur is not None and cur in nodes:
+        chain.append(nodes[cur])
+        cur = nodes[cur].get("parent")
+    chain.reverse()
+    out = []
+    for n in chain:
+        kind = _kind(n)
+        label = (n.get("title")
+                 or {"idea": "The idea", "brainstorm": "Directions explored", "refined": "Refined idea",
+                     "fork": "Fork"}.get(kind, f"Part {int(n.get('step') or 0) + 1}"))
+        out.append({"kind": kind or "section", "label": label,
+                    "note": (n.get("feedback") or "").strip()})
+    return out
 
 
 # ── Interactive plan builder (idea → decision tree → downloadable file tree) ──
@@ -631,6 +657,10 @@ def _plan_state(s: dict) -> dict:
         "stage": s.get("stage"),                      # funnel position: brainstorm | refined | building | done
         "activeNode": _active_node_view(s),           # the active node's funnel payload (option cards / refined idea / fork)
         "chat": s.get("chat") or [], "chatStarters": advisor.STARTERS,
+        "lookups": s.get("lookups") or [],   # persisted chat-lookup claims — the research stack survives a reload
+        # the stress-test's durable state (status + result only; live progress rides its poll route)
+        "skeptic": ({"status": (s.get("skeptic") or {}).get("status"),
+                     "result": (s.get("skeptic") or {}).get("result")} if s.get("skeptic") else None),
         "progress": s.get("progress") or [],
         "cost": s.get("cost") or 0, "tokens": s.get("tokens") or 0,   # live session usage meter
         "stack": s.get("stack") or provider.DEFAULT_STACK,            # chosen model stack
@@ -680,6 +710,7 @@ def _active_node_view(s: dict) -> dict | None:
     if k == "brainstorm":
         view["spread"] = a.get("spread")
         view["feedback"] = a.get("feedback")   # the pivot ask this spread answers (if any)
+        view["set_aside"] = a.get("set_aside")  # declined-out-loud part of the ask — shown, not hidden
         view["options"] = [{"id": c, "direction": ((t["nodes"].get(c) or {}).get("direction"))}
                            for c in a.get("children", []) if _kind(t["nodes"].get(c) or {}) == "option"]
     elif k == "option":
@@ -806,6 +837,9 @@ def _diverge_tree(diverge: dict, parent: str | None = None,
     `board` seeds the fork (and its options) with the pivot point's board history."""
     b = _new_node({"kind": "brainstorm", "step": 0, "title": "A few directions",
                    "spread": diverge.get("spread"), "draft": None, "files": {}, "history": [],
+                   # a declared set-aside (part of the ask the engine declined, with its reason) is
+                   # SURFACED, never silent — it rides the node so every view can show it
+                   "set_aside": diverge.get("set_aside"),
                    "board": list(board or [])}, parent)
     nodes = {b["id"]: b}
     for d in (diverge.get("directions") or []):
@@ -906,10 +940,13 @@ def _run_merge(sid: str, option_ids: list, user: str, tok: str | None = None) ->
         store.plan_save(sid, status="error", error=_humanize_error(e)[0])
 
 
-def _deep_build(sid: str, thesis: str, user: str, tok: str | None = None) -> None:
+def _deep_build(sid: str, thesis: str, user: str, tok: str | None = None,
+                picks: list | None = None) -> None:
     """Background: the COMMIT step — the one deep research run + first section draft, attached to the
     tree under the active (refined) node so the funnel history is preserved. Same engine as the legacy
-    welcome run, but it grows the existing tree instead of reseeding a fresh root."""
+    welcome run, but it grows the existing tree instead of reseeding a fresh root. `picks` = option
+    ids a direct brainstorm-commit chose: recorded as `selected` on the built node so the graph draws
+    the join through them (the choice is part of the story, not just its text)."""
     try:
         s0 = store.plan_get(sid) or {}
         base_cost, base_tokens = s0.get("cost") or 0, s0.get("tokens") or 0
@@ -928,6 +965,8 @@ def _deep_build(sid: str, thesis: str, user: str, tok: str | None = None) -> Non
         nodes = tree.get("nodes") or {}
         parent = tree.get("active")
         root = _new_node(planner.root_node(prep["proposal"]), parent)   # a plain section node (kind absent)
+        if picks:
+            root["selected"] = [i for i in picks if i in nodes]   # the join the graph rides through
         root["log"] = _op_log(progress, len(s0.get("progress") or []))
         _inherit_board(nodes, root)
         nodes[root["id"]] = root
@@ -1137,25 +1176,72 @@ async def api_plan_commit(sid: str, request: Request):
     thesis = (body.get("thesis") or "").strip()
     tree = s.get("tree") or {}
     nodes = tree.get("nodes") or {}
-    # building from an explicitly named node (the one the user had open) jumps the active pointer
-    # there first, so the deep build grows out of THAT node
+    # Building from an explicitly named node (the one the user had open) grows the build out of THAT
+    # node — but VALIDATE FIRST, MUTATE LAST. This used to jump the active pointer before checking
+    # the thesis: a commit from a browsed brainstorm fork 400'd AND stranded `active` on the fork,
+    # so every surface then described two different nodes and every retry re-failed (Sam's
+    # roll-forward freeze, 2026-07-06). A rejected request must leave the plan untouched.
+    # picks riding a direct commit ("I'm sold" straight off the brainstorm, skipping the merge):
+    # the CHOICE must be recorded, not just its text — without `selected` on the built node the
+    # graph drew the checked option as passed-over and the pivot read as abandoned (Sam's QA,
+    # 2026-07-06), even though the thesis carried it.
+    picks = [i for i in (body.get("options") or [])
+             if isinstance(i, str) and _kind(nodes.get(i) or {}) == "option"]
+    if not thesis and picks:   # derive the joined thesis server-side if the client didn't
+        thesis = " + ".join(
+            ((nodes[i].get("direction") or {}).get("one_liner")
+             or (nodes[i].get("direction") or {}).get("title") or "") for i in picks).strip(" +")
+
     at_id = (body.get("node") or "").strip()
-    if at_id and nodes.get(at_id):
-        tree["active"] = at_id
-        store.plan_save(sid, tree=tree)
-    a = nodes.get(tree.get("active")) or {}
+    target = nodes.get(at_id) if at_id else None
+    a = target or nodes.get(tree.get("active")) or {}
+    build_from = a
+
+    def _thesis_of(n: dict) -> str:
+        k = _kind(n or {})
+        if k == "refined":
+            return (n.get("thesis") or "").strip()
+        if k == "option":
+            dr = n.get("direction") or {}
+            return (dr.get("one_liner") or dr.get("title") or "").strip()
+        return ""
+
     if not thesis:
-        if _kind(a) == "refined":
-            thesis = a.get("thesis") or ""
-        elif _kind(a) == "option":
-            dr = a.get("direction") or {}
-            thesis = dr.get("one_liner") or dr.get("title") or ""
+        thesis = _thesis_of(a)
+        # POINTER-DRIFT RESILIENCE (2026-07-06): "build the plan" must mean the nearest buildable
+        # idea, not "hope the active pointer is exactly right". A drifted/stranded pointer (the old
+        # mutate-before-validate bug corrupted live sessions) landed commits on forks/sections and
+        # every retry re-failed. Resolve instead: walk UP the ancestors for a refined/option node,
+        # then fall back to the NEWEST buildable node anywhere. Only refuse when the tree genuinely
+        # has nothing to build from (a raw brainstorm with no picks).
+        cur = a
+        while not thesis and cur is not None:
+            cur = nodes.get(cur.get("parent")) if cur.get("parent") else None
+            if cur is not None:
+                t = _thesis_of(cur)
+                if t:
+                    thesis, build_from = t, cur
+        if not thesis:
+            # anywhere-fallback targets REFINED nodes only: a refined idea is a converged CHOICE;
+            # an option is an unchosen candidate — never build one the operator didn't pick
+            for n in reversed(list(nodes.values())):   # dict order = creation order → newest first
+                if _kind(n) == "refined":
+                    t = _thesis_of(n)
+                    if t:
+                        thesis, build_from = t, n
+                        break
     if len(thesis) < 8:
-        return JSONResponse({"error": "Refine an idea or pick a direction to build first."}, status_code=400)
+        return JSONResponse(
+            {"error": "Refine an idea or pick a direction to build first "
+                      f"(the current step is a {_kind(a) or 'missing'} node and there is no refined "
+                      "idea to build from yet)."}, status_code=400)
+    if build_from.get("id") and build_from["id"] != tree.get("active"):
+        tree["active"] = build_from["id"]    # the jump happens only when the build actually starts
     tok = uuid.uuid4().hex[:8]
     tree["_run"] = tok                       # this run's epoch — a pivot mid-run invalidates it
     store.plan_save(sid, status="researching", stage="researching", tree=tree)
-    threading.Thread(target=_deep_build, args=(sid, thesis, s.get("user"), tok), daemon=True).start()
+    threading.Thread(target=_deep_build, args=(sid, thesis, s.get("user"), tok, picks),
+                     daemon=True).start()
     return {"id": sid}
 
 
@@ -1229,7 +1315,9 @@ async def api_plan_lookup(sid: str, request: Request):
     if len(question) > 500:
         return JSONResponse({"error": "Keep it under 500 characters."}, status_code=400)
     if MOCK:
-        return {"claims": [dict(c) for c in _MOCK_LOOKUP], "cost": 0, "tokens": 0}
+        claims = [dict(c) for c in _MOCK_LOOKUP]
+        _save_lookups(sid, s, claims)
+        return {"claims": claims, "cost": 0, "tokens": 0}
 
     def _work():
         with _run_slot(s.get("user"), s.get("stack")):
@@ -1244,9 +1332,21 @@ async def api_plan_lookup(sid: str, request: Request):
         return _engine_error(e)
     _meter(s.get("user"), cost)
     nc, nt = _fold_usage(sid, s, cost, toks)
-    return {"claims": [{"text": v.claim.text, "url": v.claim.source_url, "tier": v.tier,
-                        "flagged": bool(v.flagged), "reason": v.reason or ""} for v in verdicts],
-            "cost": nc, "tokens": nt}
+    claims = [{"text": v.claim.text, "url": v.claim.source_url, "tier": v.tier,
+               "flagged": bool(v.flagged), "reason": v.reason or ""} for v in verdicts]
+    _save_lookups(sid, s, claims)
+    return {"claims": claims, "cost": nc, "tokens": nt}
+
+
+def _save_lookups(sid: str, s: dict, claims: list) -> None:
+    """Persist chat-lookup claims on the session (deduped by text|url, bounded) so the research stack
+    survives a reload — they used to live only in the client's memory."""
+    if not claims:
+        return
+    have = list(s.get("lookups") or [])
+    seen = {f"{c.get('text')}|{c.get('url')}" for c in have}
+    have += [c for c in claims if f"{c.get('text')}|{c.get('url')}" not in seen]
+    store.plan_save(sid, lookups=have[-60:])
 
 
 @app.post("/api/plan/{sid}/chatlog")
@@ -1281,7 +1381,8 @@ async def api_plan_node(sid: str, nid: str, request: Request):
     k = _kind(n)
     out = {"id": n["id"], "kind": k, "title": n.get("title"), "parent": n.get("parent"),
            "children": n.get("children") or [], "feedback": n.get("feedback"), "step": n.get("step", 0),
-           "log": n.get("log") or []}   # the persisted build receipts — survive a reload (§v2 #10)
+           "log": n.get("log") or [],   # the persisted build receipts — survive a reload (§v2 #10)
+           "board": n.get("board") or []}   # this step's board history — the node view shows the convenes
     if k == "section":
         sec = next((x for x in planner.SECTIONS if x["key"] == n.get("section")), None)
         content = (n.get("files") or {}).get(sec["file"]) if sec else None
@@ -1295,6 +1396,7 @@ async def api_plan_node(sid: str, nid: str, request: Request):
     elif k == "brainstorm":
         out["spread"] = n.get("spread")
         out["feedback"] = n.get("feedback")   # the pivot ask this spread was answering (if any)
+        out["set_aside"] = n.get("set_aside")  # declined-out-loud part of the ask
         # the fork's story, self-contained: every direction offered + which were picked (a pick =
         # named in any join's `selected` anywhere in the tree)
         nodes = (s.get("tree") or {}).get("nodes") or {}
@@ -1333,30 +1435,42 @@ async def api_plans(request: Request):
 
 
 # ── In-app product help (a standard website help chat; runs on the user's key) ──
-HELP_SYSTEM = (
-    "You are the in-app help assistant for FILG (a tool that turns a rough business idea, or just "
-    "someone's skills and interests, into a vetted, buildable business plan). Help the user USE the "
-    "product. Be brief and concrete (2 to 5 sentences), friendly and plain.\n\n"
-    "How FILG works:\n"
-    "- Start on the home page: type your idea (or just what you're good at) and submit. FILG researches "
-    "the market and grades every stat through a source-credibility gate, so vendor marketing is labeled, "
-    "not repeated as fact. Then it vets the idea (pursue / pivot / kill).\n"
-    "- Then you build the plan one part at a time (7 parts: the setup, what you sell, why you win, "
-    "pricing, go-to-market, delivery, and a 30-day plan).\n"
-    "- To move through the build, use the buttons at the bottom: 'I'm with you' locks the current part in "
-    "and builds the next one; 'Not feeling it' redraws the current part, and you can add a note to steer "
-    "the rewrite. You can branch back to an earlier part anytime from the plan tree.\n"
-    "- Board of Directors: optional AI advisors that review your sections; you can convene them or forge a "
-    "custom one. 'Chat with your plan' is an advisor grounded in your actual plan and research.\n"
-    "- Export: the raw files (.zip) and the LLM hand-off prompt are free; the polished investor-grade PDF "
-    "is a one-time $13 unlock.\n"
-    "- Your key: FILG runs on your own API key (OpenRouter or Anthropic). Add or change it in the key "
-    "modal or the API config tab of your profile. Everything uses your key, usually pennies per plan.\n"
-    "- Your profile (/account) has tabs for your plans, files, API config, and account settings.\n\n"
-    "Only answer questions about USING FILG. If they ask for strategy on their specific business, point "
-    "them to 'Chat with your plan' or the Board. Do not invent features you're unsure about. Write "
-    "plainly: no em-dashes, no AI-tell words."
-)
+_FEATURE_WORDS = {"director_forge": "Director Forge", "custom_directors": "custom directors",
+                  "skeptic": "the assumption stress-test"}
+
+
+def _help_pricing() -> str:
+    """The PRICING FACTS block for the help prompt, GENERATED from tiers.py + billing.py — the single
+    sources of truth — so help can never drift from the live ladder again. (The 2026-07-06 QA caught
+    help quoting the dead '$13 one-time, no subscription' model from a hardcoded prompt.)"""
+    price = billing.PDF_PRICE_CENTS / 100
+    lines = [
+        "PRICING FACTS (answer any cost/subscription question ONLY from these, never from memory):",
+        "- Free on your own API key (OpenRouter or Anthropic): unlimited use, every model crew. Model "
+        "usage bills to their key, typically well under a dollar per plan.",
+        f"- Raw export (.zip/.md) is always free. The polished investor-grade PDF: free WITH a small "
+        f"'Built with FILG' watermark on your own key, or ${price:g} buys "
+        f"{store.PDF_CREDITS_PER_PURCHASE} clean (watermark-free) plan PDFs. Every subscription "
+        "includes clean PDFs.",
+        "- Monthly subscriptions run on FILG's hosted key (no API key needed). Each has a fair-use "
+        "monthly usage allowance that resets with the billing period; hitting it means add your own "
+        "key or wait for the renewal:",
+    ]
+    for t in tiers.catalog():
+        opus = any(s["opus"] for s in t["stacks"])
+        feats = ("; includes " + ", ".join(_FEATURE_WORDS.get(f, f) for f in t["features"])
+                 if t["features"] else "")
+        lines.append(f"  * {t['label']}: ${t['price']:g}/mo, "
+                     f"{'premium (Opus-class) model crews included' if opus else 'the cost-efficient model crews'}"
+                     f"{feats}.")
+    return "\n".join(lines)
+
+
+def _help_system() -> str:
+    """The help system block: the `help` SKILL (app/skills/help/SKILL.md — how-to, money-answer rules,
+    the not-authoritative-on-pricing/legal disclaimer) + the PRICING FACTS generated from the live
+    ladder. Skill = judgment and rules; generated block = numbers. Neither can drift alone."""
+    return skills.system("help") + "\n\n" + _help_pricing()
 
 _HELP_MOCK = ("This is mock help (no key bound). In the real app: type your idea on the home page, then "
               "use 'I'm with you' to lock each part and build the next, or 'Not feeling it' to redo a part. "
@@ -1390,7 +1504,7 @@ async def api_help(request: Request):
         convo += f"\n{who}: {str(m.get('content', ''))[:600]}"
     try:
         with provider.use(prov), provider.use_stack(provider.DEFAULT_STACK), pipeline.run_ledger():
-            reply = pipeline.call("help", pipeline.SONNET, max_tokens=400, system=HELP_SYSTEM, cache=True,
+            reply = pipeline.call("help", pipeline.SONNET, max_tokens=400, system=_help_system(), cache=True,
                                   prompt=f"Conversation so far:{convo or ' (none)'}\n\nUser: {message}\n\n"
                                          "Reply as the FILG help assistant.")
             _meter(user, round(pipeline.LEDGER.cost(), 4))   # FILG-key help → daily + a subscriber's monthly cap
@@ -2173,17 +2287,25 @@ async def api_plan_pdf(sid: str, request: Request):
     authed = auth.user_from_request(request)
     email = (authed or {}).get("email", "")
     # Subscribers get the polished PDF free (it's part of the plan). Otherwise claim it: free if comped
-    # or already unlocked, else spend one of the account's credits. Billing off (dev) → always open.
-    # False → no access and no credits → ask for payment.
+    # or already unlocked, else spend one of the account's credits. No credits → a BYOK user still gets
+    # a FREE WATERMARKED copy (synth runs on their own key — the share loop needs an artifact that
+    # circulates; $7 removes the line). No credits and no key → payment, as before.
+    watermark = False
     if (billing.PDF_BILLING_ENABLED and not _is_subscriber(email)
             and not billing.claim_pdf(email, _plan_key(s))):
-        return JSONResponse(
-            {"error": "You're out of PDF credits. Unlock 3 plans for $7. Your raw export is free.",
-             "needPurchase": True, "price": billing.PDF_PRICE_CENTS}, status_code=402)
+        owner = (s.get("user") or email or "").strip().lower()
+        if keys.enabled() and owner and keys.has_key(owner):
+            watermark = True
+        else:
+            return JSONResponse(
+                {"error": "You're out of PDF credits. Unlock 3 plans for $7, or add your own API key "
+                          "for a free watermarked copy. Your raw export is always free.",
+                 "needPurchase": True, "price": billing.PDF_PRICE_CENTS}, status_code=402)
     try:
         with _run_slot(s.get("user"), s.get("stack")):
             plan, cost = plan_pdf.synthesize(s, mock=MOCK)
-            data = plan_pdf.render(plan, style=(request.query_params.get("style") or "filg"))
+            data = plan_pdf.render(plan, style=(request.query_params.get("style") or "filg"),
+                                   watermark=watermark)
             toks = pipeline.LEDGER.tokens()
     except BusyError as be:
         return _busy_response(be)
@@ -2197,7 +2319,8 @@ async def api_plan_pdf(sid: str, request: Request):
     fn = f"{_slug(s.get('idea'))}-business-plan.pdf"
     return Response(data, media_type="application/pdf",
                     headers={"Content-Disposition": f'attachment; filename="{fn}"',
-                             "X-FILG-Cost": str(nc), "X-FILG-Tokens": str(nt)})
+                             "X-FILG-Cost": str(nc), "X-FILG-Tokens": str(nt),
+                             "X-FILG-Watermark": "1" if watermark else "0"})
 
 
 def _page_head(deep: bool = False) -> str:
