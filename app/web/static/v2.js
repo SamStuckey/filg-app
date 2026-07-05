@@ -507,11 +507,12 @@ async function doMerge(){
   beginWip('Merging your picks + first-pass research',{join:picks,poll:true}); poll();
 }
 let COMMIT_BUSY=false;   // the big-step button is click-spammable while a request is in flight
-async function commit(thesis,fromNode){
+async function commit(thesis,fromNode,picks){
   if(COMMIT_BUSY)return;
   COMMIT_BUSY=true;
   try{
     const body={}; if(thesis)body.thesis=thesis; if(fromNode)body.node=fromNode;   // build out of THAT node
+    if(picks&&picks.length)body.options=picks;   // a direct brainstorm-commit RECORDS its choice
     const {ok,d}=await api('POST',`/api/plan/${SID}/commit`,body);
     if(!ok){ if(gateV2(d))return; chatErr((d&&d.error)||'Could not start the build.'); return; }
     beginWip('Deep research: pulling + grading sources',{parent:fromNode||(nodesOf(S).t||{}).active,poll:true}); poll();
@@ -551,7 +552,9 @@ async function pivotSpread(fromNode,feedback){
 function commitFromBrainstorm(){
   if(!SEL.size){toast('Check a direction to build, or refine first.','err');return;}
   const chosen=(stageOptions()||[]).filter(o=>SEL.has(o.id)).map(o=>o.direction.one_liner||o.direction.title);
-  commit(chosen.join(' + '));
+  // the PICKS ride along, not just their text — without them the graph drew the checked option as
+  // passed-over and a pivot-commit read as "nevermind" even though the build honored it (Sam's QA)
+  commit(chosen.join(' + '),null,[...SEL]);
 }
 async function keepGoing(){
   const {t}=nodesOf(S);   // inline comments on this doc ride the roll-forward (backlog #8)
@@ -675,8 +678,9 @@ function nodesOf(s){const t=(s&&s.tree)||{};const m={};(t.nodes||[]).forEach(n=>
 function pathSetOf(m,active){const set={};let cur=active;
   while(cur!=null&&m[cur]){set[cur]=1;
     const n=m[cur];
-    // a refined node JOINS its selected options — they're part of the taken path, not passed-over
-    if(n.kind==='refined'&&Array.isArray(n.selected))n.selected.forEach(s=>{if(m[s])set[s]=1;});
+    // ANY join node credits its selected options — a refined merge OR a direct brainstorm-commit's
+    // section both carry `selected`; the picked options are part of the taken path, not passed-over
+    if(Array.isArray(n.selected))n.selected.forEach(s=>{if(m[s])set[s]=1;});
     cur=n.parent;}
   return set;}
 // ── Collapse passed-over subtrees to stubs (the wide-tree lever; Sublime Merge's commit-folding

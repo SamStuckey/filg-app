@@ -940,10 +940,13 @@ def _run_merge(sid: str, option_ids: list, user: str, tok: str | None = None) ->
         store.plan_save(sid, status="error", error=_humanize_error(e)[0])
 
 
-def _deep_build(sid: str, thesis: str, user: str, tok: str | None = None) -> None:
+def _deep_build(sid: str, thesis: str, user: str, tok: str | None = None,
+                picks: list | None = None) -> None:
     """Background: the COMMIT step — the one deep research run + first section draft, attached to the
     tree under the active (refined) node so the funnel history is preserved. Same engine as the legacy
-    welcome run, but it grows the existing tree instead of reseeding a fresh root."""
+    welcome run, but it grows the existing tree instead of reseeding a fresh root. `picks` = option
+    ids a direct brainstorm-commit chose: recorded as `selected` on the built node so the graph draws
+    the join through them (the choice is part of the story, not just its text)."""
     try:
         s0 = store.plan_get(sid) or {}
         base_cost, base_tokens = s0.get("cost") or 0, s0.get("tokens") or 0
@@ -962,6 +965,8 @@ def _deep_build(sid: str, thesis: str, user: str, tok: str | None = None) -> Non
         nodes = tree.get("nodes") or {}
         parent = tree.get("active")
         root = _new_node(planner.root_node(prep["proposal"]), parent)   # a plain section node (kind absent)
+        if picks:
+            root["selected"] = [i for i in picks if i in nodes]   # the join the graph rides through
         root["log"] = _op_log(progress, len(s0.get("progress") or []))
         _inherit_board(nodes, root)
         nodes[root["id"]] = root
@@ -1176,6 +1181,17 @@ async def api_plan_commit(sid: str, request: Request):
     # the thesis: a commit from a browsed brainstorm fork 400'd AND stranded `active` on the fork,
     # so every surface then described two different nodes and every retry re-failed (Sam's
     # roll-forward freeze, 2026-07-06). A rejected request must leave the plan untouched.
+    # picks riding a direct commit ("I'm sold" straight off the brainstorm, skipping the merge):
+    # the CHOICE must be recorded, not just its text — without `selected` on the built node the
+    # graph drew the checked option as passed-over and the pivot read as abandoned (Sam's QA,
+    # 2026-07-06), even though the thesis carried it.
+    picks = [i for i in (body.get("options") or [])
+             if isinstance(i, str) and _kind(nodes.get(i) or {}) == "option"]
+    if not thesis and picks:   # derive the joined thesis server-side if the client didn't
+        thesis = " + ".join(
+            ((nodes[i].get("direction") or {}).get("one_liner")
+             or (nodes[i].get("direction") or {}).get("title") or "") for i in picks).strip(" +")
+
     at_id = (body.get("node") or "").strip()
     target = nodes.get(at_id) if at_id else None
     a = target or nodes.get(tree.get("active")) or {}
@@ -1224,7 +1240,8 @@ async def api_plan_commit(sid: str, request: Request):
     tok = uuid.uuid4().hex[:8]
     tree["_run"] = tok                       # this run's epoch — a pivot mid-run invalidates it
     store.plan_save(sid, status="researching", stage="researching", tree=tree)
-    threading.Thread(target=_deep_build, args=(sid, thesis, s.get("user"), tok), daemon=True).start()
+    threading.Thread(target=_deep_build, args=(sid, thesis, s.get("user"), tok, picks),
+                     daemon=True).start()
     return {"id": sid}
 
 

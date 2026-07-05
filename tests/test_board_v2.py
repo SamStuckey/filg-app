@@ -147,3 +147,22 @@ def test_commit_resolves_a_drifted_pointer(client):
     while cur:
         chain.add(cur); cur = parents.get(cur)
     assert refined in chain
+
+
+def test_direct_commit_records_its_picks(client):
+    """'I'm sold' straight off the brainstorm (skipping the merge) must RECORD the choice: the built
+    node carries selected=[picks] so the graph joins through the checked option instead of drawing
+    it passed-over (a pivot-commit read as 'nevermind' while the build honored it — Sam's QA)."""
+    r = client.post("/api/brainstorm", json={"idea": GRAB_BAG, "email": "pk@x.com"})
+    sid = r.json()["id"]
+    s = client.get(f"/api/plan/{sid}").json()
+    opt = next(n["id"] for n in s["tree"]["nodes"] if n["kind"] == "option")
+    r2 = client.post(f"/api/plan/{sid}/commit", json={"options": [opt]})   # thesis derived server-side
+    assert r2.status_code == 200
+    s2 = wait_status(client, sid)
+    built = next(n for n in s2["tree"]["nodes"] if n["id"] == s2["tree"]["active"])
+    assert built.get("selected") == [opt], "the pick must ride the built node as a join"
+    # the fork's own story shows the option as picked (the ✓ in the history view)
+    fork = next(n["id"] for n in s2["tree"]["nodes"] if n["kind"] == "brainstorm")
+    story = client.get(f"/api/plan/{sid}/node/{fork}").json()
+    assert any(o.get("picked") for o in story.get("options", []))

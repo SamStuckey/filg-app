@@ -343,7 +343,29 @@ def chain_reload_midstates(mk, rng):
     mk.check()
 
 
-CHAINS = [chain_pivot_board_pivot, chain_feedback_pick_roll, chain_reload_midstates]
+def chain_pivot_pick_sold(mk, rng):
+    """pivot from the landed step -> single option -> check it -> 'I'm sold' (skip the merge).
+    The checked option must join the committed path, not render passed-over (Sam's QA)."""
+    mk.act_pivot_here(rng)
+    mk.pg.fill("#ws-box", "add a cause tie-in where proceeds fund at-risk youth orgs")
+    mk.pg.click("#ws-send")
+    mk.settle()
+    mk.check()
+    if mk.pg.locator(".gnode.focus .opt input[type=checkbox]").count():
+        mk.pg.locator(".gnode.focus .opt input[type=checkbox]").first.click()
+        if mk.pg.locator(".gnode.focus button:has-text(\"I'm sold\")").count():
+            mk.pg.locator(".gnode.focus button:has-text(\"I'm sold\")").first.click()
+            mk.settle(90)
+            mk.check()
+            picked_on_path = mk.js(
+                "(function(){const {m,t}=nodesOf(S);const set=pathSetOf(m,t.active);"
+                "return Object.values(m).some(n=>n.kind==='option'&&set[n.id]);})()")
+            if not picked_on_path:
+                raise AssertionError("chain: checked option not on the committed path after direct commit")
+
+
+CHAINS = [chain_pivot_board_pivot, chain_feedback_pick_roll, chain_reload_midstates,
+          chain_pivot_pick_sold]
 
 
 def run_one(base, seed, steps, chains_only, headed=False):
