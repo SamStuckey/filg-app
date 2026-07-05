@@ -675,7 +675,8 @@ def _active_node_view(s: dict) -> dict | None:
     if not a:
         return None
     k = _kind(a)
-    view = {"id": a["id"], "kind": k, "title": a.get("title")}
+    view = {"id": a["id"], "kind": k, "title": a.get("title"),
+            "log": a.get("log") or []}   # persisted build receipts, so a reload restores them (§v2 #10)
     if k == "brainstorm":
         view["spread"] = a.get("spread")
         view["feedback"] = a.get("feedback")   # the pivot ask this spread answers (if any)
@@ -699,8 +700,9 @@ def _mirror(tree: dict) -> dict:
     no proposal — the funnel payload rides on _active_node_view instead."""
     a = tree["nodes"][tree["active"]]
     if _kind(a) != "section":
-        return {"step": 0, "files": {}, "history": [], "board": [], "proposal": None,
-                "qa": None, "status": "building"}
+        # funnel nodes carry no plan state, but chat convenes stored on them still surface
+        return {"step": 0, "files": {}, "history": [], "board": a.get("board") or [],
+                "proposal": None, "qa": None, "status": "building"}
     done = a["step"] >= planner.N
     return {"step": a["step"], "files": a["files"], "history": a["history"], "board": a["board"],
             "proposal": (None if done else {"section": a["section"], "title": a["title"],
@@ -766,6 +768,7 @@ def _plan_research(session_id: str, idea: str, user: str) -> None:
                 usage.record_run(auth.normalize_email(user), prep["research_cost"])  # free run + daily total
                 usage.record_spend(prep["cost"] - prep["research_cost"])  # intake + vet + first draft → daily
         root = _new_node(planner.root_node(prep["proposal"]), None)  # seed the decision tree's root
+        root["log"] = _op_log(progress, 0)
         tree = {"nodes": {root["id"]: root}, "active": root["id"]}
         store.plan_save(session_id, status="building", research=prep["research"], step=0,
                         proposal=prep["proposal"], shaped=prep["shaped"], vetting=prep["vetting"],
@@ -776,17 +779,39 @@ def _plan_research(session_id: str, idea: str, user: str) -> None:
 
 
 # ── The diverge/converge funnel (brainstorm → merge → commit), layered on the same node tree ──
-def _diverge_tree(diverge: dict, parent: str | None = None) -> tuple[dict, str]:
+_MAX_BOARD_HISTORY = 12   # per-node board entries (section reviews + chat convenes) stay bounded
+_MAX_NODE_LOG = 40        # per-node build-log lines (receipts + 🔎 lane details) stay bounded
+
+
+def _op_log(progress: list, start: int) -> list:
+    """This op's slice of the progress stream, persisted on the node it built — the durable
+    'how this was built' record (backlog §v2 #10; the client stash alone died on reload). The
+    §LANES§/§LANEDONE§ sentinels only drive the live leaflet animation, so they're dropped;
+    the readable receipts and the 🔎 per-lane details stay."""
+    return [ln for ln in progress[start:] if not str(ln).startswith("§")][-_MAX_NODE_LOG:]
+
+
+def _inherit_board(nodes: dict, node: dict) -> None:
+    """A freshly created node carries its parent's accumulated board history forward (per-section
+    reviews + chat convenes), so a convene during the funnel still steers + exports after commit."""
+    p = nodes.get(node.get("parent") or "")
+    if p and p.get("board"):
+        node["board"] = list(p["board"])[-_MAX_BOARD_HISTORY:]
+
+
+def _diverge_tree(diverge: dict, parent: str | None = None,
+                  board: list | None = None) -> tuple[dict, str]:
     """A `brainstorm` fork node with one `option` child per direction. Returns (nodes_by_id,
-    brainstorm_node_id). The active pointer sits on the brainstorm node (the fork being decided)."""
+    brainstorm_node_id). The active pointer sits on the brainstorm node (the fork being decided).
+    `board` seeds the fork (and its options) with the pivot point's board history."""
     b = _new_node({"kind": "brainstorm", "step": 0, "title": "A few directions",
                    "spread": diverge.get("spread"), "draft": None, "files": {}, "history": [],
-                   "board": []}, parent)
+                   "board": list(board or [])}, parent)
     nodes = {b["id"]: b}
     for d in (diverge.get("directions") or []):
         o = _new_node({"kind": "option", "step": 0, "title": d.get("title") or "Direction",
                        "direction": d, "draft": d.get("one_liner"), "files": {}, "history": [],
-                       "board": []}, b["id"])
+                       "board": list(board or [])}, b["id"])
         b["children"].append(o["id"])
         nodes[o["id"]] = o
     return nodes, b["id"]
@@ -868,6 +893,8 @@ def _run_merge(sid: str, option_ids: list, user: str, tok: str | None = None) ->
         nodes = tree.get("nodes") or {}
         parent = tree.get("active")
         refined = _refined_node(m, option_ids, parent)
+        refined["log"] = _op_log(progress, len(s0.get("progress") or []))
+        _inherit_board(nodes, refined)
         nodes[refined["id"]] = refined
         if parent and nodes.get(parent):
             nodes[parent].setdefault("children", []).append(refined["id"])
@@ -901,6 +928,8 @@ def _deep_build(sid: str, thesis: str, user: str, tok: str | None = None) -> Non
         nodes = tree.get("nodes") or {}
         parent = tree.get("active")
         root = _new_node(planner.root_node(prep["proposal"]), parent)   # a plain section node (kind absent)
+        root["log"] = _op_log(progress, len(s0.get("progress") or []))
+        _inherit_board(nodes, root)
         nodes[root["id"]] = root
         if parent and nodes.get(parent):
             nodes[parent].setdefault("children", []).append(root["id"])
@@ -1064,7 +1093,7 @@ async def api_plan_rebrainstorm(sid: str, request: Request):
     # permanent evidence line — pivots are core IP, every hop must be verifiable in the server log
     print(f"[pivot] sid={sid} node_in={(body.get('node') or None)!r} resolved={at.get('id')}/"
           f"{_kind(at) if at else None} parent={parent} feedback={feedback[:80]!r}")
-    new_nodes, bid = _diverge_tree(d, parent)
+    new_nodes, bid = _diverge_tree(d, parent, board=(at or {}).get("board"))
     new_nodes[bid]["feedback"] = feedback or idea[:120]   # the pivot ask, visible on the fork forever
     nodes.update(new_nodes)
     if parent and nodes.get(parent):
@@ -1251,7 +1280,8 @@ async def api_plan_node(sid: str, nid: str, request: Request):
         return JSONResponse({"error": "unknown node"}, status_code=404)
     k = _kind(n)
     out = {"id": n["id"], "kind": k, "title": n.get("title"), "parent": n.get("parent"),
-           "children": n.get("children") or [], "feedback": n.get("feedback"), "step": n.get("step", 0)}
+           "children": n.get("children") or [], "feedback": n.get("feedback"), "step": n.get("step", 0),
+           "log": n.get("log") or []}   # the persisted build receipts — survive a reload (§v2 #10)
     if k == "section":
         sec = next((x for x in planner.SECTIONS if x["key"] == n.get("section")), None)
         content = (n.get("files") or {}).get(sec["file"]) if sec else None
@@ -1669,6 +1699,18 @@ async def api_plan_board(sid: str, request: Request):
         return _engine_error(e)
     _meter(s.get("user"), cost)
     extra = {"directors": directors} if picked else {}   # persist a freshly chosen board for later steps
+    # Persist the convene on the ACTIVE NODE's board history (bounded), so it survives tree navigation
+    # (the flat `board` column is a mirror of the active node — writing only there gets clobbered),
+    # steers later drafts via planner._board_notes, and shows up in the exports/handoff.
+    tree = _ensure_tree(s)
+    a = (tree.get("nodes") or {}).get(tree.get("active"))
+    if a is not None:
+        entry = {"section": "convene", "title": f"Board convened: “{question[:90]}”", **res}
+        # the legacy /respond flow advances the flat mirror without the tree — trust whichever is ahead
+        base = max((a.get("board") or []), (s.get("board") or []), key=len)
+        reviews = (list(base) + [entry])[-_MAX_BOARD_HISTORY:]
+        a["board"] = reviews
+        extra.update(tree=tree, board=reviews)
     nc, nt = _fold_usage(sid, s, cost, toks, **extra)
     return {**res, "cost": nc, "tokens": nt}
 

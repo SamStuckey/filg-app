@@ -56,6 +56,13 @@ def test_full_plan_flow_with_board(client):
                     json={"question": "is pricing right?", "directors": ["closer", "cfo"]}).json()
     assert len(b["directors"]) == 2 and b["verdict"] and b["consensus"]
 
+    # the convene persists on the board history (not just the chat record) — it survives a reload
+    # and the exports/handoff/board-notes steering all see it
+    s = client.get(f"/api/plan/{sid}").json()
+    assert len(s["board"]) == 2
+    assert s["board"][-1]["section"] == "convene" and "pricing" in s["board"][-1]["title"]
+    assert s["board"][-1]["verdict"]
+
     # one-off expert
     a = client.post(f"/api/plan/{sid}/ask",
                     json={"archetype": "growth", "question": "which channel?"}).json()
