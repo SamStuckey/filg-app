@@ -11,8 +11,10 @@ The old engine was strictly linear: one raw idea -> intake.shape picks ONE thesi
 
 Both are deliberately cheaper than the deep run. `diverge` is a single LLM call, no
 web at all. `merge` reconciles (one LLM call) then runs the teardown engine with the
-re-search chase OFF (`headlines=0`) for a quick graded skim, not the full deep pass.
-The deep run (teardown headlines=3, in planner.prepare) still happens later, at commit.
+re-search chase OFF (`headlines=0`) and the fan-out capped (`max_lanes=2`) for a quick
+graded skim, not the full deep pass. The refined idea is the funnel's PRELAUNCH GATE:
+the merge may also return up to 3 clarifying questions the operator can answer (via
+/refine) before the deep run (teardown headlines=3, in planner.prepare) fires at commit.
 
 `mock=True` returns canned data with no API calls, for local/frontend dev and tests.
 """
@@ -27,8 +29,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "prototype"))  #
 import skill_registry as skills  # noqa: E402
 import teardown  # noqa: E402
 
-# How light the merge-stage research skim is: grade the lanes, skip the re-source chase.
+# How light the merge-stage research skim is: grade the lanes, skip the re-source chase,
+# and research only the top lanes (the deep run at commit covers the full spread).
 MERGE_RESEARCH_HEADLINES = 0
+MERGE_RESEARCH_LANES = 2
 
 _MOCK_DIVERGE = {
     "spread": "loose",
@@ -54,6 +58,7 @@ _MOCK_MERGE = {
              "the cross-country story as the audience/marketing engine"],
     "dropped": [{"thread": "the standing weekly office drop",
                  "why": "it needs a fixed local route, which fights the on-the-road model"}],
+    "questions": ["Who is the first buyer: people who moved away from your region, or gift senders?"],
 }
 
 
@@ -215,8 +220,22 @@ def _reconcile(idea: str, directions: list[dict], mock: bool = False) -> tuple[d
         "mold": (data.get("mold") or "").strip(),
         "kept": [str(k).strip() for k in (data.get("kept") or []) if str(k).strip()],
         "dropped": dropped,
+        "questions": _clean_questions(data.get("questions")),
     }
     return reconciled, round(LEDGER.cost_slice(start), 4)
+
+
+def _clean_questions(raw) -> list[str]:
+    """Schema-validate the optional clarifying questions: real question strings, no scaffold echo,
+    max 3. The refined card renders them as the operator's pre-deep-dive prompts, so a malformed
+    or echoed question must never reach the screen."""
+    out = []
+    for q in (raw or [])[:3]:
+        q = str(q or "").strip()
+        if len(q) < 8 or any(s in q.lower() for s in _SCAFFOLD):
+            continue
+        out.append(q[:200])
+    return out
 
 
 def merge(idea: str, directions: list[dict], mock: bool = False,
@@ -238,9 +257,10 @@ def merge(idea: str, directions: list[dict], mock: bool = False,
     for d in reconciled["dropped"]:
         emit(f"✂ dropped: {d['thread']}")
     if research:
-        emit("Running a first-pass market skim")
+        emit("Running a light first-pass skim")
         res = teardown.generate(reconciled["thesis"], headlines=MERGE_RESEARCH_HEADLINES,
-                                mock=mock, on_progress=on_progress)
+                                mock=mock, on_progress=on_progress,
+                                max_lanes=MERGE_RESEARCH_LANES)
         reconciled["research"] = res
         cost = round(cost + res.get("cost", 0.0), 4)
     return reconciled, round(cost, 4)
@@ -260,6 +280,10 @@ if __name__ == "__main__":  # self-test (mock, no API)
     assert isinstance(m["kept"], list) and isinstance(m["dropped"], list)
     assert m["dropped"] and m["dropped"][0]["thread"] and m["dropped"][0]["why"]  # honest cut, with a reason
     assert m.get("research") and m["research"]["prose"]["title"]                  # light skim attached
+    assert m.get("questions") and all(isinstance(q, str) for q in m["questions"])  # gate questions ride along
+    assert len(m["research"]["lanes"]) <= MERGE_RESEARCH_LANES                     # the skim stays light
+    assert _clean_questions(["ok, a real question about the buyer?", "spread it into directions", "x"]) \
+        == ["ok, a real question about the buyer?"]                                # scaffold + stubs dropped
     # research=False → fast re-merge, no skim
     m2, _ = merge("baker", d["directions"], mock=True, research=False)
     assert "research" not in m2

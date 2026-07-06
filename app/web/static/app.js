@@ -595,13 +595,25 @@ async function lookupInChat(q,offerExit){
 }
 async function steer(note){
   if(!note) return;
+  const {m,t}=nodesOf(S);
   if(S&&(S.stage==='building'||S.stage==='done')){
-    const {t}=nodesOf(S);   // inline comments on the current doc ride the rework (backlog #8)
+    // inline comments on the current doc ride the rework (backlog #8)
     if(await run(`/api/plan/${SID}/redraft`,{feedback:note+cmtSteer(t.active)},'Reworking this part'))
       delete DOCCMTS[t.active];
+  } else if(((m[t.active]||{}).kind)==='refined'){
+    // the prelaunch gate: a steer (or an answer to the gate's questions) SHARPENS the refined idea
+    // in place — it must never blow the funnel back up into a fresh spread
+    await refineIdea(note);
   } else {
     await reBrainstorm(note+' — '+(S&&S.idea||''));   // upstream: fold the note into a fresh spread
   }
+}
+async function refineIdea(note){
+  const {t}=nodesOf(S);
+  const {ok,d}=await api('POST',`/api/plan/${SID}/refine`,{note});
+  if(ok&&d&&d.gibberish){ render(S); roastChat(d); return; }   // a mash answer → the roast, no run
+  if(!ok){ render(S); if(gateV2(d))return; chatErr((d&&d.error)||'Could not fold that in.'); return; }
+  beginWip('Folding that into the refined idea',{parent:t.active,poll:true}); poll();
 }
 
 // ── Inline doc comments (backlog #8): select text in any rendered doc → leave a note. Comments key
@@ -679,7 +691,7 @@ async function doMerge(){
   const {ok,d}=await api('POST',`/api/plan/${SID}/merge`,{options:picks});
   if(!ok){ if(gateV2(d))return; chatErr((d&&d.error)||'Could not merge.'); return; }
   try{localStorage.removeItem(selKey);}catch(e){}   // consumed — the refined node records the picks
-  beginWip('Merging your picks + first-pass research',{join:picks,poll:true}); poll();
+  beginWip('Merging your picks + a light research pass',{join:picks,poll:true}); poll();
 }
 let COMMIT_BUSY=false;   // the big-step button is click-spammable while a request is in flight
 async function commit(thesis,fromNode,picks){
@@ -1432,7 +1444,11 @@ function stepCtas(){
   if(decided||busy)return `<div class=ctarow><button class=stage-cta onclick=pivotActive()>⑂ Pivot</button></div>`+
     `<p class=thinking>${busy&&!decided?'The next part is already being written — pivot to change course.'
       :'This step is already decided — pivot to take it somewhere else.'}</p>`;
-  return `<div class=ctarow><button class=stage-cta onclick=keepGoing()>Keep going →</button>`+
+  // name the actual next part on the button — "what happens on click" at every hop (§v2 #17)
+  const nx=(S.sections||[])[(S.step||0)+1];
+  const nxt=nx?`Next up: Part ${(S.step||0)+2} of ${S.total} — ${nx.title}`:'Next up: draft the next section';
+  return `<div class=ctarow><button class=stage-cta onclick=keepGoing()>Keep going →`+
+    `<span class=ctasub>${esc(nxt)}</span></button>`+
     `<button class="stage-cta secondary" onclick=pivotActive()>⑂ Pivot</button></div>`+
     `<p class=thinking>Comment or steer in the box anytime, it wins.</p>`;
 }
@@ -1453,8 +1469,10 @@ function brainstormHtml(s){
   const piv=(s.activeNode&&s.activeNode.feedback)?`<p class=react style="font-size:14px">↳ Pivoting on: “${esc(s.activeNode.feedback)}”</p>`:'';
   const sa=setAsideHtml(s.activeNode&&s.activeNode.set_aside);
   return piv+sa+`<p class=eyebrow>Pick what clicks</p><div class=optgrid>${cards}</div>`+
-    `<div class=ctarow><button class=stage-cta onclick=doMerge()>Let's try it →</button>`+
-    `<button class="stage-cta secondary" onclick=commitFromBrainstorm()>I'm sold, build the plan</button></div>`+
+    `<div class=ctarow><button class=stage-cta onclick=doMerge()>Let's try it →`+
+    `<span class=ctasub>Next up: refine + a light research pass</span></button>`+
+    `<button class="stage-cta secondary" onclick=commitFromBrainstorm()>I'm sold, build the plan`+
+    `<span class=ctasub>Skips refining — straight to deep research</span></button></div>`+
     `<p class=thinking>Or just type in the box, it always wins.</p>`;
 }
 // checkbox picks survive a refresh — they were client-memory only, so a reload silently dropped
@@ -1469,19 +1487,26 @@ function loadSel(){ try{
 function toggleSel(id){ if(SEL.has(id))SEL.delete(id); else SEL.add(id); saveSel(); renderView(); }
 function refinedHtml(s){
   const a=s.activeNode||{};
+  const fb=a.feedback?`<p class=react style="font-size:14px">↳ Folded in: “${esc(a.feedback)}”</p>`:'';
   const kept=(a.kept||[]).map(k=>`<li>${esc(k)}</li>`).join('');
   const dropped=(a.dropped||[]).map(d=>`<li>${esc(d.thread)} <span class=why>— ${esc(d.why)}</span></li>`).join('');
   const R=(a.research&&a.research.prose)||{};
   const rows=((a.research&&a.research.rows)||[]).slice(0,4).map(x=>
     `<li>${x.mark==='ok'?'✅':'⚠️'} ${esc(x.text)} <span class="badge ${x.mark==='ok'?'b-ok':'b-warn'}">${x.mark==='ok'?'cited':'vendor'}</span></li>`).join('');
-  return `<p class=react>${esc(a.thesis||'')}</p>`+
+  const qs=(a.questions||[]).map(q=>`<li>${esc(q)}</li>`).join('');
+  return fb+`<p class=react>${esc(a.thesis||'')}</p>`+
     (a.mold?`<span class=mold>${esc(a.mold)}</span>`:'')+
     (kept?`<p class=eyebrow style="margin-top:14px">Kept</p><ul class=kept>${kept}</ul>`:'')+
     (dropped?`<p class=eyebrow>Cut (and why)</p><ul class=dropped>${dropped}</ul>`:'')+
-    (R.offer?`<p class=eyebrow>First-pass read</p><p><b>${esc(R.title||'')}</b> — ${esc(R.offer)}</p>`:'')+
+    (R.offer?`<p class=eyebrow>First-pass read (light pass)</p><p><b>${esc(R.title||'')}</b> — ${esc(R.offer)}</p>`:'')+
     (rows?`<ul class=ev>${rows}</ul>`:'')+
-    `<div class=ctarow><button class=stage-cta onclick="commit()">I'm sold, build the plan →</button></div>`+
-    `<p class=thinking>Not quite? Steer it in the box.</p>`;
+    (qs?`<p class=eyebrow>Worth answering first</p><ul class=qs>${qs}</ul>`+
+      `<p class=thinking>Answer any of these in the box — they sharpen the idea before the deep dive. Or skip ahead.</p>`:'')+
+    `<div class=gate>⛳ <b>Prelaunch gate.</b> That read was a quick skim. The next step is the deep one: `+
+    `full graded research on every claim, then the plan drafts section by section.</div>`+
+    `<div class=ctarow><button class=stage-cta onclick="commit()">I'm sold, build the plan →`+
+    `<span class=ctasub>Next up: deep research — the graded vetting pass</span></button></div>`+
+    `<p class=thinking>Not quite? Steer it in the box — it refines this idea in place.</p>`;
 }
 function firstPageHtml(s){
   const v=s.vetting||{}, R=(s.research&&s.research.prose)||{};

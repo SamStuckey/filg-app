@@ -42,7 +42,8 @@ two incompatible businesses into one nonsense offer just to honor every checkbox
   "kept": ["the thread you kept and folded in", "another kept thread"],
   "dropped": [
     {"thread": "the thread you cut", "why": "one blunt sentence on why it clashed with the core"}
-  ]
+  ],
+  "questions": ["an optional clarifying question, only if answering it would change the deep research"]
 }
 ```
 
@@ -54,3 +55,9 @@ Rules:
 - `dropped` may be empty if everything genuinely reinforced the core, but do not
   force that, an honest cut is better than a laundered blend.
 - Be concrete. No statistics, no invented numbers, research runs next.
+- `questions`: at most 3, and only when a MATERIAL unknown would change what the
+  deep research investigates or what the offer becomes (who the first buyer is,
+  where, what capacity or price floor the operator has). Each one is a plain
+  question answerable in a sentence. If the input already answered it (including
+  a clarification the operator gave after an earlier merge), do not re-ask it.
+  Omit the field or return [] when the idea is clear; never pad with filler.

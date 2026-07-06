@@ -61,6 +61,65 @@ def test_merge_needs_a_selection(client):
     assert r.status_code == 400
 
 
+# ── refine: the prelaunch gate sharpens in place, never re-spreads ────────────
+def test_refined_gate_carries_questions_and_a_light_skim(client):
+    import brainstorm
+    s = _brainstorm(client)
+    sid = s["id"]
+    client.post(f"/api/plan/{sid}/merge", json={"options": [s["activeNode"]["options"][0]["id"]]})
+    s = wait_status(client, sid)
+    an = s["activeNode"]
+    assert an["questions"] and len(an["questions"]) <= 3        # the gate's clarifying questions
+    assert len(an["research"]["lanes"]) <= brainstorm.MERGE_RESEARCH_LANES   # the skim stays light
+
+
+def test_refine_chains_a_sharper_idea_under_the_gate(client, monkeypatch):
+    from app import main
+    s = _brainstorm(client)
+    sid = s["id"]
+    opt_ids = [o["id"] for o in s["activeNode"]["options"]]
+    client.post(f"/api/plan/{sid}/merge", json={"options": opt_ids})
+    s = wait_status(client, sid)
+    v1 = s["activeNode"]["id"]
+    captured = {}
+    real = main.brainstorm.merge
+    def spy(idea, directions, **kw):
+        captured["idea"], captured["directions"] = idea, directions
+        return real(idea, directions, **kw)
+    monkeypatch.setattr(main.brainstorm, "merge", spy)
+    note = "the first buyer is gift senders, not homesick expats"
+    r = client.post(f"/api/plan/{sid}/refine", json={"note": note})
+    assert r.status_code == 200
+    s = wait_status(client, sid)
+    an = s["activeNode"]
+    assert s["stage"] == "refined" and an["kind"] == "refined" and an["id"] != v1
+    assert an["feedback"] == note                               # the clarification stays visible
+    node = next(n for n in s["tree"]["nodes"] if n["id"] == an["id"])
+    assert node["parent"] == v1                                 # lineage: it chains under the gate
+    # the re-merge saw the prior thesis + the clarification on top, and re-ran the SAME picks
+    assert "THE MERGED THESIS SO FAR" in captured["idea"] and note in captured["idea"]
+    assert len(captured["directions"]) == len(opt_ids)
+    # committing now builds the deep run off the sharpened node
+    client.post(f"/api/plan/{sid}/commit", json={})
+    s = wait_status(client, sid)
+    assert s["stage"] == "building" and s["proposal"]
+
+
+def test_refine_requires_a_refined_node(client):
+    s = _brainstorm(client)
+    r = client.post(f"/api/plan/{s['id']}/refine", json={"note": "the buyer is gift senders"})
+    assert r.status_code == 400
+
+
+def test_refine_roasts_a_mash_answer(client):
+    s = _brainstorm(client)
+    sid = s["id"]
+    client.post(f"/api/plan/{sid}/merge", json={"options": [s["activeNode"]["options"][0]["id"]]})
+    wait_status(client, sid)
+    r = client.post(f"/api/plan/{sid}/refine", json={"note": "asdfjkl qwerty zxcvbn hjkl"})
+    assert r.status_code == 200 and r.json().get("gibberish")
+
+
 # ── commit: the deep run, attached under the refined node ────────────────────
 def test_commit_runs_deep_build_and_starts_the_plan(client):
     s = _brainstorm(client)

@@ -761,7 +761,8 @@ def _active_node_view(s: dict) -> dict | None:
     elif k == "option":
         view["direction"] = a.get("direction")
     elif k == "refined":
-        for f in ("thesis", "founder_edge", "mold", "kept", "dropped", "research", "selected"):
+        for f in ("thesis", "founder_edge", "mold", "kept", "dropped", "research", "selected",
+                  "questions", "feedback"):
             view[f] = a.get(f)
     elif k == "fork":
         view["question"] = a.get("question")
@@ -896,12 +897,15 @@ def _diverge_tree(diverge: dict, parent: str | None = None,
     return nodes, b["id"]
 
 
-def _refined_node(m: dict, selected: list, parent: str | None) -> dict:
-    """The reconciled single idea (+ the adversarial cull + a light research skim) as one `refined`
-    node, a child of the brainstorm fork. `selected` records which option ids fed the merge."""
+def _refined_node(m: dict, selected: list, parent: str | None, feedback: str | None = None) -> dict:
+    """The reconciled single idea (+ the adversarial cull + a light research skim + any clarifying
+    questions) as one `refined` node, a child of the brainstorm fork — or, for a /refine re-merge,
+    a child of the refined node it sharpens. `selected` records which option ids fed the merge;
+    `feedback` is the operator's clarification a refine folded in (visible on the node forever)."""
     return _new_node({"kind": "refined", "step": 0, "title": "Refined idea", "thesis": m["thesis"],
                       "founder_edge": m.get("founder_edge"), "mold": m.get("mold"),
                       "kept": m.get("kept"), "dropped": m.get("dropped"), "research": m.get("research"),
+                      "questions": m.get("questions") or [], "feedback": feedback or None,
                       "selected": selected, "draft": m["thesis"], "files": {}, "history": [],
                       "board": []}, parent)
 
@@ -948,9 +952,13 @@ def _fresh_tree_or_abandon(sid: str, tok: str | None):
     return s1, tree
 
 
-def _run_merge(sid: str, option_ids: list, user: str, tok: str | None = None) -> None:
+def _run_merge(sid: str, option_ids: list, user: str, tok: str | None = None,
+               refine_of: str | None = None, note: str | None = None) -> None:
     """Background: reconcile the chosen directions into one refined idea (+ light research skim), then
-    attach a `refined` node under the brainstorm fork and advance the active pointer to it."""
+    attach a `refined` node under the brainstorm fork and advance the active pointer to it.
+    `refine_of` + `note` = the /refine re-merge: fold the operator's clarification (answers to the
+    gate's questions, a steer) into a re-reconcile of the SAME picks, and chain the new refined node
+    under the one it sharpens — the refinement lineage stays visible in the graph."""
     try:
         s0 = store.plan_get(sid) or {}
         base_cost, base_tokens = s0.get("cost") or 0, s0.get("tokens") or 0
@@ -958,10 +966,16 @@ def _run_merge(sid: str, option_ids: list, user: str, tok: str | None = None) ->
         nodes0 = (s0.get("tree") or {}).get("nodes") or {}
         directions = [(nodes0.get(i) or {}).get("direction") for i in option_ids]
         directions = [d for d in directions if d]
+        idea_in = s0["idea"]
+        if refine_of and note:
+            prev = ((nodes0.get(refine_of) or {}).get("thesis") or "").strip()
+            idea_in = (f"{s0['idea']}\n\nTHE MERGED THESIS SO FAR (refine THIS, do not start over):\n"
+                       f"{prev}\n\nTHE OPERATOR'S CLARIFICATION — it outweighs everything above; fold "
+                       f"it in and do not re-ask what it answers:\n{note}")
         prov = _provider_for(user)
         stk = tiers.clamp_stack(s0.get("stack"), tier=_tier(user), byok=bool(prov and not prov.bills_filg))
         with provider.use(prov), provider.use_stack(stk), pipeline.run_ledger():
-            m, cost = brainstorm.merge(s0["idea"], directions, mock=MOCK,
+            m, cost = brainstorm.merge(idea_in, directions, mock=MOCK,
                                        on_progress=_bg_progress(sid, base_cost, base_tokens, progress))
             toks = pipeline.LEDGER.tokens()
         _meter_bg(user, prov, cost, toks)
@@ -970,8 +984,10 @@ def _run_merge(sid: str, option_ids: list, user: str, tok: str | None = None) ->
             return                                # the user pivoted mid-run — their newer state wins
         _s1, tree = fresh
         nodes = tree.get("nodes") or {}
-        parent = tree.get("active")
-        refined = _refined_node(m, option_ids, parent)
+        # a refine chains under the refined node it sharpens (if it survived the wait); a first
+        # merge joins its picks under the brainstorm fork
+        parent = (refine_of if refine_of and nodes.get(refine_of) else tree.get("active"))
+        refined = _refined_node(m, [] if refine_of else option_ids, parent, feedback=note)
         refined["log"] = _op_log(progress, len(s0.get("progress") or []))
         _inherit_board(nodes, refined)
         nodes[refined["id"]] = refined
@@ -1231,6 +1247,45 @@ async def api_plan_merge(sid: str, request: Request):
     tree["_run"] = tok                       # this run's epoch — a pivot mid-run invalidates it
     store.plan_save(sid, status="researching", stage="merging", tree=tree)
     threading.Thread(target=_run_merge, args=(sid, valid, s.get("user"), tok), daemon=True).start()
+    return {"id": sid}
+
+
+@app.post("/api/plan/{sid}/refine")
+async def api_plan_refine(sid: str, request: Request):
+    """Sharpen the refined idea IN PLACE: fold the operator's clarification (answers to the gate's
+    questions, a steer) into a re-merge of the same picks, chained under the refined node it sharpens.
+    Part of the pre-commit funnel, so it sits on the free side of the wall like /merge — and reads
+    the same kill switch, for the same reason. Background; the frontend polls."""
+    s = store.plan_get(sid)
+    if not s or not _owns(request, s):
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    body = await request.json()
+    note = (body.get("note") or "").strip()
+    if len(note) < 4:
+        return JSONResponse({"error": "Tell me what to fold in."}, status_code=400)
+    # a keyboard-mash "answer" gets the same free roast as a mash pivot (no run, no LLM)
+    if gibberish.looks_like_gibberish(note):
+        return JSONResponse({"gibberish": True, **gibberish.roast(note)})
+    tree = s.get("tree") or {"nodes": {}, "active": None}
+    nodes = tree.get("nodes") or {}
+    at = nodes.get((body.get("node") or "").strip()) or nodes.get(tree.get("active")) or {}
+    if _kind(at) != "refined":
+        return JSONResponse({"error": "Nothing here to refine yet — pick directions and merge first."},
+                            status_code=400)
+    # the picks that fed this refined idea: a refine-of-a-refine walks up to the original merge's
+    sel, cur = [], at
+    while cur and not sel:
+        sel = [i for i in (cur.get("selected") or []) if _kind(nodes.get(i) or {}) == "option"]
+        cur = nodes.get(cur.get("parent")) if cur.get("parent") else None
+    prov = _provider_for(s.get("user"))
+    if (prov is not None and getattr(prov, "bills_filg", False) and not MOCK
+            and not _is_subscriber(s.get("user")) and usage.kill_switch_tripped()):
+        return _engine_error(DailyCapError(), 402)
+    tok = uuid.uuid4().hex[:8]
+    tree["_run"] = tok                       # this run's epoch — a pivot mid-run invalidates it
+    store.plan_save(sid, status="researching", stage="merging", tree=tree)
+    threading.Thread(target=_run_merge, args=(sid, sel, s.get("user"), tok),
+                     kwargs={"refine_of": at.get("id"), "note": note}, daemon=True).start()
     return {"id": sid}
 
 
