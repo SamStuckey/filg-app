@@ -34,8 +34,9 @@ def _acct(user: str) -> str:
 
 
 def _tier(user: str) -> str | None:
-    """The active paid subscription tier for this user, or None (free / BYOK)."""
-    return store.account_tier(_acct(user)) if user else None
+    """The active paid subscription tier for this user, or None (free / BYOK). Legacy tier ids from
+    the retired 3-tier ladder fold onto the live ladder (tiers.canonical)."""
+    return tiers.canonical(store.account_tier(_acct(user))) if user else None
 
 
 def _is_subscriber(user: str) -> bool:

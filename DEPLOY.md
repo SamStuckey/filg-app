@@ -37,8 +37,9 @@ On the Render URL (`https://filg-xxxx.onrender.com`):
 Just fill env in **Environment** and save — no redeploy logic changes. See `.env.example` for the full list.
 - **Supabase** (`SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_JWT_SECRET` — Settings → API).
   Add `https://fuckitletsgo.ai` as an Auth redirect URL.
-- **Stripe — the LIVE model is the one-time $35 polished-PDF unlock** (business_plan §16.1). It needs
-  only `STRIPE_SECRET_KEY` + `STRIPE_WEBHOOK_SECRET` (the $35 price is built inline via Stripe
+- **Stripe — the LIVE model is the $13 per-plan clean-PDF unlock + the Pro $29/mo subscription**
+  (owner: filg-docs/subscription_tiers.md). It needs `STRIPE_SECRET_KEY` + `STRIPE_WEBHOOK_SECRET`
+  (both prices are built inline via Stripe
   `price_data`, so no dashboard Price/`STRIPE_PRICE_ID` is required). Optional `FILG_PDF_PRICE_CENTS`
   overrides the amount (default `3500`). Webhook endpoint: `https://fuckitletsgo.ai/api/stripe/webhook`,
   event **`checkout.session.completed`** (the handler routes `mode=payment` → records the per-account

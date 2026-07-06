@@ -2,12 +2,13 @@
 """
 Stripe billing — two paid surfaces.
 
-1. ONE-TIME PDF unlock (BYOK users): a $7 payment grants 3 plan-unlock credits. Free on your own key
-   otherwise; the PDF is the paid artifact.
-2. MONTHLY SUBSCRIPTION (paid tiers): runs on FILG's own key — Starter / Pro / Studio (see
-   app/tiers.py). The subscription unlocks a model-stack ceiling + a monthly fair-use allowance, and
-   the polished PDF is free. Tier prices/labels are passed in by the caller (main.py owns tiers.py) so
-   this module stays free of the provider dependency.
+1. ONE-TIME PDF unlock (BYOK users): a flat $13 unlocks ONE plan's clean (watermark-free) PDF —
+   re-downloading that plan is free forever; a new branch is a new plan and pays again. Free on your
+   own key otherwise; the PDF is the paid artifact.
+2. MONTHLY SUBSCRIPTION (paid tiers): runs on FILG's own key — Pro $29 / Ultimate $99 (see
+   app/tiers.py). Every tier unlocks every feature + model stack and includes unlimited clean PDFs;
+   the tiers differ only in the monthly usage allowance. Tier prices/labels are passed in by the
+   caller (main.py owns tiers.py) so this module stays free of the provider dependency.
 
 stdlib-only: Checkout Sessions are created via Stripe's REST API over `urllib`, and webhook
 signatures are verified with `hmac` — no `stripe` SDK / `cryptography` dependency, so it runs
@@ -17,7 +18,7 @@ runs (the PDF is treated as unlocked in dev). State lives in the shared SQLite D
 Env:
   STRIPE_SECRET_KEY      sk_live_… / sk_test_…
   STRIPE_WEBHOOK_SECRET  whsec_… (signing secret for the webhook endpoint)
-  FILG_PDF_PRICE_CENTS   override the $7 PDF price (default 700)
+  FILG_PDF_PRICE_CENTS   override the $13 PDF price (default 1300)
   FILG_PUBLIC_URL        public base url for checkout success/cancel redirects
   (subscription tier prices are set in app/tiers.py, env-overridable there)
 """
@@ -40,9 +41,9 @@ SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY", "")
 WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
 PUBLIC_URL = os.environ.get("FILG_PUBLIC_URL", "http://localhost:8000").rstrip("/")
 
-# The one paid action: a one-time $7 for the polished investor-grade PDF. Built inline (Stripe
-# `price_data`) so no dashboard Price needs to exist — only the secret key. Override via env.
-PDF_PRICE_CENTS = int(os.environ.get("FILG_PDF_PRICE_CENTS", "700"))
+# The one BYOK paid action: a flat $13 unlocks ONE plan's clean PDF (re-download free). Built inline
+# (Stripe `price_data`) so no dashboard Price needs to exist — only the secret key. Override via env.
+PDF_PRICE_CENTS = int(os.environ.get("FILG_PDF_PRICE_CENTS", "1300"))
 PDF_BILLING_ENABLED = bool(SECRET_KEY)
 
 _API = "https://api.stripe.com/v1"
@@ -68,14 +69,16 @@ def _post(path: str, data: dict) -> dict:
 
 
 def create_pdf_checkout_url(email: str, *, user_id: str | None = None,
-                            plan_id: str | None = None, plan_key: str | None = None) -> str:
-    """Create a ONE-TIME ($7) Checkout Session for the polished PDF unlock and return its hosted URL.
-    `plan_key` ("{sid}:{leaf-node-id}") scopes the unlock to ONE finished branch — a new branch is a
-    new key and pays again. Inline `price_data` so no pre-made Stripe Price is needed. On success
-    Stripe sends a `checkout.session.completed` event with `mode=payment` → handle_event records it."""
+                            plan_id: str | None = None, plan_key: str | None = None,
+                            return_path: str | None = None) -> str:
+    """Create a ONE-TIME ($13) Checkout Session unlocking ONE plan's clean PDF and return its hosted
+    URL. `plan_key` ("{sid}:{leaf-node-id}") scopes the unlock to that finished branch — re-downloads
+    are free, a new branch is a new key and pays again. Inline `price_data` so no pre-made Stripe
+    Price is needed. On success Stripe sends `checkout.session.completed` with `mode=payment` →
+    handle_event records the unlock for exactly that plan."""
     if not PDF_BILLING_ENABLED:
         raise StripeError("billing not configured")
-    ret = f"/plan/{plan_id}" if plan_id else "/"
+    ret = return_path or (f"/plan/{plan_id}" if plan_id else "/")
     fields = {
         "mode": "payment",
         "line_items[0][price_data][currency]": "usd",
@@ -96,7 +99,8 @@ def create_pdf_checkout_url(email: str, *, user_id: str | None = None,
 
 
 def create_subscription_checkout_url(email: str, *, tier: str, price_cents: int, label: str,
-                                     user_id: str | None = None) -> str:
+                                     user_id: str | None = None,
+                                     return_path: str | None = None) -> str:
     """Create a MONTHLY subscription Checkout Session for a paid tier and return its hosted URL. Inline
     recurring `price_data` (no dashboard Price needed). `tier` rides on both the session metadata and
     `subscription_data[metadata]` so the subscription object carries it too — the webhook reads it back
@@ -118,7 +122,7 @@ def create_subscription_checkout_url(email: str, *, tier: str, price_cents: int,
         "subscription_data[metadata][kind]": "subscription",
         "subscription_data[metadata][tier]": tier,
         "allow_promotion_codes": "true",
-        "success_url": f"{PUBLIC_URL}/account?sub=1",
+        "success_url": f"{PUBLIC_URL}{return_path or '/account'}?sub=1",
         "cancel_url": f"{PUBLIC_URL}/?sub_canceled=1",
     }
     return _post("/checkout/sessions", fields)["url"]
@@ -206,18 +210,22 @@ def _event_email(obj: dict) -> str:
 
 
 def handle_event(event: dict) -> None:
-    """Route a verified Stripe webhook to account/credit state. Handles the one-time PDF payment (+3
-    credits, idempotent on session id) and the subscription lifecycle (checkout → created/updated →
-    deleted). All account writes key on the NORMALIZED email so aliases resolve to one account."""
+    """Route a verified Stripe webhook to account/credit state. Handles the one-time $13 PDF payment
+    (unlocks the exact plan in the metadata, idempotent on session id) and the subscription lifecycle
+    (checkout → created/updated → deleted). All account writes key on the NORMALIZED email so aliases
+    resolve to one account."""
     etype = event.get("type")
     obj = event.get("data", {}).get("object", {})
 
     if etype == "checkout.session.completed":
         mode = obj.get("mode")
-        if mode == "payment":                                   # one-time PDF unlock → 3 credits
+        if mode == "payment":                                   # one-time $13 → unlock THAT plan
             email = _event_email(obj)
-            if email:
-                store.credit_for_session(auth.normalize_email(email), obj.get("id"))
+            plan_key = (obj.get("metadata") or {}).get("plan_key")
+            if email and plan_key:
+                store.unlock_for_session(auth.normalize_email(email), obj.get("id"), plan_key)
+            elif email:                                         # no plan_key (legacy event) → 1 credit
+                store.credit_for_session(auth.normalize_email(email), obj.get("id"), n=1)
         elif mode == "subscription":                            # a tier went live
             email = _event_email(obj)
             tier = (obj.get("metadata") or {}).get("tier")
@@ -262,20 +270,20 @@ if __name__ == "__main__":  # self-test (no network): webhook verification + eve
         sig = hmac.new(WEBHOOK_SECRET.encode(), ts.encode() + b"." + raw, hashlib.sha256).hexdigest()
         return raw, f"t={ts},v1={sig}"
 
-    # a $7 payment (mode=payment) → 3 plan-unlock credits on the normalized account
+    # a $13 payment (mode=payment) unlocks exactly the plan in the metadata, on the normalized account
     pdf_ev = {"type": "checkout.session.completed",
-              "data": {"object": {"mode": "payment", "id": "cs_77", "amount_total": 700,
-                                  "metadata": {"kind": "pdf"},
+              "data": {"object": {"mode": "payment", "id": "cs_13", "amount_total": 1300,
+                                  "metadata": {"kind": "pdf", "plan_key": "sid:leaf"},
                                   "customer_details": {"email": "Pdf+x@Gmail.com"}}}}
     raw, header = _signed(pdf_ev)
     assert verify_webhook(raw, header) == pdf_ev
     assert verify_webhook(raw, header.replace("v1=", "v1=dead")) is None   # bad signature
     assert verify_webhook(raw, "garbage") is None
     handle_event(verify_webhook(raw, header))
-    assert credits_left("pdf@gmail.com") == 3              # normalized alias gets the credits
-    handle_event(verify_webhook(raw, header))              # Stripe retries the SAME session → no double grant
-    assert credits_left("pdf@gmail.com") == 3
-    assert claim_pdf("pdf@gmail.com", "sid:leaf") is True and credits_left("pdf@gmail.com") == 2
+    assert has_purchased("pdf@gmail.com", "sid:leaf") is True    # normalized alias gets the unlock
+    handle_event(verify_webhook(raw, header))                    # Stripe retries the SAME session → no double
+    assert claim_pdf("pdf@gmail.com", "sid:leaf") is True        # free re-download
+    assert has_purchased("pdf@gmail.com", "other:leaf") is False # a different plan pays its own $13
 
     # subscription lifecycle: checkout → tier live; subscription.updated fills the period; deleted cancels
     assert account_tier("subby@x.com") is None
@@ -294,4 +302,4 @@ if __name__ == "__main__":  # self-test (no network): webhook verification + eve
     handle_event({"type": "customer.subscription.deleted", "data": {"object": {
         "id": "sub_A", "customer": "cus_A", "status": "canceled"}}})
     assert account_tier("subby@x.com") is None                                  # canceled → free
-    print("billing.py self-test OK — $7 PDF credits + subscription lifecycle")
+    print("billing.py self-test OK — $13 per-plan PDF unlock + subscription lifecycle")

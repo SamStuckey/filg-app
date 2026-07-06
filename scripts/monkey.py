@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The interaction monkey — seeded random-walk UI testing for /v2 (2026-07-06, Sam's ask).
+"""The interaction monkey — seeded random-walk UI testing for the build surface (2026-07-06).
 
 Humans break the app with "inexplicable random interaction chains": open node A, arm a pivot,
 switch to the board, type something, browse an earlier node, arm a pivot somewhere else, reload
@@ -376,7 +376,7 @@ def run_one(base, seed, steps, chains_only, headed=False):
         pg = b.new_page(viewport={"width": 1440, "height": 900})
         mk = Monkey(pg, log)
         try:
-            pg.goto(base + "/v2")
+            pg.goto(base + "/")
             pg.fill("#ws-box", IDEA)
             pg.click("#ws-send")
             pg.wait_for_selector(".gnode.on", timeout=30000)

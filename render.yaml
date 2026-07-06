@@ -1,7 +1,11 @@
 # Render blueprint — one-click deploy once the repo is on GitHub.
 # Render dashboard → New → Blueprint → pick the filg-app repo. Set the `sync: false` secrets when prompted.
-# Auth + billing are optional: leave the SUPABASE_*/STRIPE_* keys blank to launch free-tier-only;
-# fill them to turn on real login + the $39/mo Operator plan (no redeploy logic changes).
+#
+# THE LIVE MODEL (2026-07-06, the gating wave): the free taste (brainstorm → merge) runs anonymous on
+# FILG's hosted key, bounded by the daily kill switch; the deep build requires an account + (a BYOK
+# key OR the Pro $29/mo subscription). The one BYOK purchase = a flat $13 unlocking one plan's clean
+# PDF. Auth (Supabase) + billing (Stripe) degrade gracefully: leave their keys blank and the app
+# still runs dev-style (no wall, PDF open).
 services:
   - type: web
     name: filg
@@ -9,46 +13,47 @@ services:
     plan: starter
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
-    # Persistent disk so the SQLite DB (jobs, results, usage caps) survives redeploys — without it
-    # the container filesystem is ephemeral and caps/share-links reset on every deploy.
+    # Persistent disk so the SQLite DB (plans, accounts, unlocks, usage caps) survives redeploys —
+    # without it the container filesystem is ephemeral and everything resets on each deploy.
     disk:
       name: filg-data
       mountPath: /var/data
       sizeGB: 1
     envVars:
-      - key: ANTHROPIC_API_KEY     # secret — set in the dashboard
+      # ── The hosted key (funds the anonymous free taste + subscriber runs) ──
+      # FILG_ANTHROPIC_API_KEY is preferred (doesn't collide with a dev's own ANTHROPIC_API_KEY);
+      # plain ANTHROPIC_API_KEY also works. No hosted key → fully BYOK from the first submit.
+      - key: FILG_ANTHROPIC_API_KEY    # secret — set in the dashboard
         sync: false
-      - key: FILG_DB               # SQLite path on the persistent disk (jobs + usage share it)
+      - key: FILG_DB                   # SQLite path on the persistent disk
         value: /var/data/filg.db
-      - key: FILG_PAID_EMAILS      # secret — manual comp allowlist (real paid status comes from Stripe)
-        sync: false
-      - key: FILG_FREE_RUNS        # free plans per user; 0 = uncapped (DEV — restore to 3 before charging)
-        value: "0"
-      - key: FILG_DAILY_BUDGET     # global $/day kill switch (cost guardrail)
-        value: "5"                 # conservative launch default (~12 real runs/day); raise once validated
-      - key: FILG_PUBLIC_URL       # public base url for Stripe checkout success/cancel redirects
+      - key: FILG_DAILY_BUDGET         # global $/day kill switch on FILG-key spend (the taste's ceiling)
+        value: "10"                    # taste ≈ pennies each; raise from the dashboard as traffic proves out
+      - key: FILG_PUBLIC_URL           # public base url for Stripe checkout success/cancel redirects
         value: https://fuckitletsgo.ai
-      # ── BYOK (bring-your-own-key) — leave blank to keep BYOK OFF ──
-      # Fernet key that encrypts users' API keys at rest. Generate one with:
-      #   python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-      # Rotating it invalidates stored keys (users re-enter). Set in the dashboard, never commit it.
-      - key: FILG_KEY_SECRET       # secret — Fernet key for encrypting BYOK keys
+      - key: FILG_ORPHAN_TTL_HOURS     # account-less taste plans purge after this many hours
+        value: "48"
+      # ── BYOK (bring-your-own-key) — REQUIRED for the paid regime (unset = no wall, dev mode) ──
+      # Fernet key that encrypts users' API keys at rest; any string works (it's hashed), so Render's
+      # "Generate" button is fine. Rotating it invalidates stored keys (users re-enter).
+      - key: FILG_KEY_SECRET           # secret
         sync: false
-      # ── Auth (Supabase, asymmetric/JWKS) — leave blank for free-tier-only launch ──
-      # Server verifies user JWTs against the project's public JWKS via SUPABASE_URL — no shared
-      # secret. Needs an asymmetric signing key active (Settings → JWT Keys).
+      # ── Auth (Supabase, asymmetric/JWKS) — REQUIRED for the account wall ──
       - key: SUPABASE_URL              # project url; also the JWKS source for token verification
         sync: false
       - key: SUPABASE_PUBLISHABLE_KEY  # sb_publishable_… (frontend) — safe in the browser
         sync: false
-      # ── Billing (Stripe) — leave blank until you're ready to charge ──
-      # LIVE model = one-time $35 polished-PDF unlock: set SECRET_KEY + WEBHOOK_SECRET only (the $35
-      # price is built inline, no Price id needed). STRIPE_PRICE_ID is for the DORMANT $39/mo sub.
-      - key: STRIPE_SECRET_KEY     # secret — sk_live_… / sk_test_… (also turns on the $35 PDF unlock)
+      # ── Billing (Stripe) — the $13 PDF unlock + the Pro subscription ──
+      # Both prices are built inline (no dashboard Price objects needed). The webhook endpoint is
+      # POST /api/stripe/webhook and must be subscribed to: checkout.session.completed,
+      # customer.subscription.created, customer.subscription.updated, customer.subscription.deleted.
+      # Activate the Customer Portal for the manage/cancel link. Blank keys = billing off (dev).
+      - key: STRIPE_SECRET_KEY         # secret — sk_live_… / sk_test_…
         sync: false
-      - key: STRIPE_PRICE_ID       # the (dormant) $39/mo recurring price id (price_…) — sub not sold yet
+      - key: STRIPE_WEBHOOK_SECRET     # secret — whsec_… for POST /api/stripe/webhook
         sync: false
-      - key: FILG_PDF_PRICE_CENTS  # one-time PDF price in cents (default 3500 = $35)
-        sync: false
-      - key: STRIPE_WEBHOOK_SECRET # secret — whsec_… for POST /api/stripe/webhook
-        sync: false
+      # ── Optional price/allowance dials (all read live, no deploy needed) ──
+      # FILG_PDF_PRICE_CENTS (1300) · FILG_PRICE_PRO_CENTS (2900) · FILG_CAP_PRO_CENTS (1600)
+      # FILG_PRICE_ULTIMATE_CENTS (9900) · FILG_CAP_ULTIMATE_CENTS (5500)
+      # FILG_SHOW_ULTIMATE=1 re-lights the hidden Ultimate tier when it earns features.
+      # FILG_FREE_RUNS caps the legacy per-user counter (inert in the auth-on regime).

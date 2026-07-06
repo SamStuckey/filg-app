@@ -54,10 +54,9 @@ def patch_call(monkeypatch):
 
 
 def frontend(client):
-    """The full SPA source across the extracted display layer — the templated shell (`/`) plus the
-    external stylesheet and script (`/static/*`). UI-wiring guards use this so they keep asserting on
-    the same total content after the CSS/JS were split out of Python into app/web/static. Also proves
-    the /static mount actually serves the assets."""
+    """The full SPA source across the display layer — the templated shell (`/`, the former v2
+    surface promoted to root when v1 retired, 2026-07-06) plus the external stylesheet and script
+    (`/static/*`). UI-wiring guards assert on this; it also proves the /static mount serves."""
     return (client.get("/").text
             + "\n" + client.get("/static/styles.css").text
             + "\n" + client.get("/static/app.js").text)

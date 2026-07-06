@@ -1,7 +1,9 @@
 """Subscription tiers — the paid ladder that runs on FILG's key.
 
-Covers the load-bearing seams: the model-stack unlock ladder + clamp, the monthly fair-use budget
-math, PDF-free-for-subscribers, the premium-feature gate, and that a subscriber is not key-walled.
+Covers the load-bearing seams of the 2026-07-06 restructure (Pro $29 / Ultimate $99, everything
+unlocked, tiers differ only in allowance): the stack unlock + clamp, the monthly fair-use budget
+math, PDF-free-for-subscribers, the feature gate, legacy tier folding, the allowance-exhausted
+upgrade prompt, and that a subscriber is not key-walled.
 """
 
 import provider
@@ -16,31 +18,48 @@ def _sub(email, tier, period_end="2099-01-01T00:00:00Z"):
 
 
 def test_stack_ladder_and_clamp():
-    # starter unlocks the three Opus-free stacks; pro adds one Opus stack; studio adds them all
-    assert tiers.allowed_stacks("starter") == provider.STACK_ORDER[:3]
-    assert not any(provider.uses_opus(s) for s in tiers.allowed_stacks("starter"))
-    assert "the-wonder-kid" in tiers.allowed_stacks("pro")
-    assert tiers.allowed_stacks("studio") == provider.STACK_ORDER
-    # clamp: a starter asking for Opus is pulled down to their best allowed (non-Opus) stack
-    assert tiers.clamp_stack("trust-fund-baby", tier="starter") == provider.STACK_ORDER[2]
-    assert not provider.uses_opus(tiers.clamp_stack("trust-fund-baby", tier="starter"))
-    # entitled tiers keep what they picked; BYOK gets anything; free taste → Opus-free default
-    assert tiers.clamp_stack("the-wonder-kid", tier="pro") == "the-wonder-kid"
-    assert tiers.clamp_stack("trust-fund-baby", tier="studio") == "trust-fund-baby"
+    # every live tier unlocks every stack — the ladder differs only in the monthly allowance
+    assert tiers.allowed_stacks("pro") == provider.STACK_ORDER
+    assert tiers.allowed_stacks("ultimate") == provider.STACK_ORDER
+    assert tiers.monthly_cap_cents("ultimate") > tiers.monthly_cap_cents("pro")
+    # subscribers keep what they picked; BYOK gets anything; free taste → Opus-free default
+    assert tiers.clamp_stack("trust-fund-baby", tier="pro") == "trust-fund-baby"
+    assert tiers.clamp_stack("the-wonder-kid", tier="ultimate") == "the-wonder-kid"
     assert tiers.clamp_stack("trust-fund-baby", byok=True) == "trust-fund-baby"
     assert tiers.clamp_stack("the-wonder-kid", tier=None) == provider.DEFAULT_STACK
 
 
-def test_budget_math_and_over_cap():
+def test_legacy_tiers_fold_onto_live_ladder():
+    # a pre-restructure account row (starter/studio) never drops to free — it folds to the nearest tier
+    assert tiers.canonical("starter") == "pro" and tiers.canonical("studio") == "ultimate"
+    assert tiers.is_tier("starter") and tiers.label("studio") == "Ultimate"
+    assert tiers.clamp_stack("trust-fund-baby", tier="starter") == "trust-fund-baby"
+    email = "legacy@x.com"
+    _sub(email, "studio")                         # stored as the retired id
+    assert access._tier(email) == "ultimate"      # read back canonical
+
+
+def test_budget_math_over_cap_and_upgrade_prompt():
     email = "budget@x.com"
-    _sub(email, "starter")
+    _sub(email, "pro")
     b = main._budget(email)
-    assert b["tier"] == "starter" and b["cap_cents"] == 450 and not b["over"]
-    # spend past the $4.50 cap → over-limit, tokens tracked for the meter
-    usage.record_monthly(main._acct(email), main._period(email), 5.00, 12345)
+    assert b["tier"] == "pro" and b["cap_cents"] == 1600 and not b["over"]
+    # spend past the $16 cap → over-limit, tokens tracked for the meter
+    usage.record_monthly(main._acct(email), main._period(email), 17.00, 12345)
     b = main._budget(email)
-    assert b["over"] and b["spent_cents"] >= 450 and b["tokens"] == 12345
+    assert b["over"] and b["spent_cents"] >= 1600 and b["tokens"] == 12345
     assert main._budget("noone@x.com") is None   # non-subscriber has no budget
+    # Ultimate is HIDDEN for launch: the allowance-exhausted response pitches only the BYOK fallback
+    # (no upgrade rung on the public ladder), and checkout refuses the hidden tier.
+    resp = main._budget_response(main.BudgetError(b))
+    body = resp.body.decode()
+    assert resp.status_code == 402 and "upgradeTier" not in body
+    assert "fallback" in body
+    assert tiers.next_tier("pro") is None and tiers.next_tier(None) == "pro"
+    assert tiers.purchasable("pro") and not tiers.purchasable("ultimate")
+    # …but an account already holding it keeps the full allowance + everything unlocked
+    assert tiers.monthly_cap_cents("ultimate") == 5500
+    assert tiers.allowed_stacks("ultimate") == provider.STACK_ORDER
 
 
 def test_pdf_free_for_subscribers(monkeypatch):
@@ -48,17 +67,16 @@ def test_pdf_free_for_subscribers(monkeypatch):
     email = "pdf-sub@x.com"
     assert main._has_pdf_access(email) is False   # billing on, no sub, no purchase → gated
     _sub(email, "pro")
-    assert main._has_pdf_access(email) is True     # subscription includes the polished PDF
+    assert main._has_pdf_access(email) is True     # every subscription includes unlimited clean PDFs
 
 
 def test_feature_gate(monkeypatch):
     monkeypatch.setattr(keys, "enabled", lambda: True)   # paid regime on
     email = "feat@x.com"
-    _sub(email, "starter")
-    assert main._feature_ok(email, "director_forge") is False   # Starter lacks the premium feature
-    assert main._feature_ok(email, "skeptic") is False
+    assert main._feature_ok(email, "director_forge") is False    # free + keyless → gated
     _sub(email, "pro")
-    assert main._feature_ok(email, "director_forge") is True     # Pro unlocks it
+    assert main._feature_ok(email, "director_forge") is True     # the $29 tier includes everything
+    assert main._feature_ok(email, "skeptic") is True
     monkeypatch.setattr(keys, "enabled", lambda: False)          # dev/local → no paywall, open
     assert main._feature_ok("anyone@x.com", "director_forge") is True
 
@@ -68,22 +86,30 @@ def test_subscriber_not_key_walled(monkeypatch):
     monkeypatch.setattr(access, "_is_byok", lambda u: False)
     email = "wall@x.com"
     assert main._needs_key(email) is True     # no key, no sub → behind the BYOK wall
-    _sub(email, "starter")
+    _sub(email, "pro")
     assert main._needs_key(email) is False    # subscriber runs on FILG's key → not walled
 
 
 def test_me_logged_out_carries_catalog(client):
     d = client.get("/api/me").json()
     assert d["signed_in"] is False
-    assert len(d["tiers"]) == 3 and {t["id"] for t in d["tiers"]} == {"starter", "pro", "studio"}
-    starter = next(t for t in d["tiers"] if t["id"] == "starter")
-    assert starter["price"] == 9.0 and all(not s["opus"] for s in starter["stacks"])
+    # the public ladder for launch: just Pro (Ultimate defined but hidden until it earns features)
+    assert [t["id"] for t in d["tiers"]] == ["pro"]
+    pro = d["tiers"][0]
+    assert pro["price"] == 29.0 and any(s["opus"] for s in pro["stacks"])   # $29 includes Opus stacks
+    assert d["pdf_price"] == 1300                                            # the $13 per-plan unlock
 
 
 def test_subscribe_route_validates(client, monkeypatch):
     monkeypatch.setattr(billing, "PDF_BILLING_ENABLED", True)
     # unauthenticated (no token, auth disabled in tests) → 401 before any Stripe call
     assert client.post("/api/subscribe", json={"tier": "pro"}).status_code == 401
+    # a hidden tier is never sold, even to a signed-in user — 400 before any Stripe call
+    import app.auth as app_auth
+    monkeypatch.setattr(app_auth, "user_from_request",
+                        lambda req: {"id": "u", "email": "buyer@x.com"})
+    assert client.post("/api/subscribe", json={"tier": "ultimate"}).status_code == 400
+    assert client.post("/api/subscribe", json={"tier": "studio"}).status_code == 400
 
 
 def test_key_precedence_paid_allowance_first(monkeypatch):
@@ -99,10 +125,10 @@ def test_key_precedence_paid_allowance_first(monkeypatch):
     # subscriber UNDER allowance → OUR key even though they have a key (spend paid credits first)
     _sub(email, "pro")
     assert main._on_filg_key(email) is True
-    # exhaust the $16 allowance → fall back to their own key (the overflow)
+    # exhaust the allowance → fall back to their own key (the BYOK fallback)
     usage.record_monthly(main._acct(email), main._period(email), 100.0, 0)
     assert main._on_filg_key(email) is False
-    # over allowance but NO key → still ours (the fair-use gate then prompts add-key/wait)
+    # over allowance but NO key → still ours (the fair-use gate then prompts upgrade/add-key/wait)
     monkeypatch.setattr(access, "_is_byok", lambda u: False)
     assert main._on_filg_key(email) is True
 
