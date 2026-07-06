@@ -27,6 +27,25 @@ def test_merge_mock_reconciles_and_shows_the_cut():
     assert m["research"]["prose"]["title"]        # a light first-pass skim rides along
 
 
+def test_merge_mock_carries_gate_questions_and_a_capped_skim():
+    d, _ = brainstorm.diverge(RAW, mock=True)
+    m, _ = brainstorm.merge(RAW, d["directions"], mock=True)
+    assert m["questions"] and len(m["questions"]) <= 3
+    assert len(m["research"]["lanes"]) <= brainstorm.MERGE_RESEARCH_LANES
+
+
+def test_merge_skim_requests_the_lane_cap(monkeypatch):
+    seen = {}
+    def fake_generate(idea, headlines=3, mock=False, on_progress=None, max_lanes=None):
+        seen["headlines"], seen["max_lanes"] = headlines, max_lanes
+        return {"prose": {"title": "t"}, "rows": [], "stats": {}, "lanes": [], "cost": 0.0}
+    monkeypatch.setattr(brainstorm.teardown, "generate", fake_generate)
+    d, _ = brainstorm.diverge(RAW, mock=True)
+    brainstorm.merge(RAW, d["directions"], mock=True)
+    assert seen == {"headlines": brainstorm.MERGE_RESEARCH_HEADLINES,
+                    "max_lanes": brainstorm.MERGE_RESEARCH_LANES}
+
+
 def test_merge_mock_research_false_skips_the_skim():
     d, _ = brainstorm.diverge(RAW, mock=True)
     m, _ = brainstorm.merge(RAW, d["directions"], mock=True, research=False)
@@ -72,6 +91,15 @@ def test_merge_real_reconcile_parses_kept_and_dropped(patch_call):
     m, _ = brainstorm.merge(RAW, [{"title": "box", "one_liner": "x"}], mock=False, research=False)
     assert m["thesis"].startswith("Sell a homemade") and m["kept"] == ["the box"]
     assert m["dropped"][0]["thread"] == "office drop" and m["dropped"][0]["why"]
+
+
+def test_merge_real_parses_and_validates_questions(patch_call):
+    patch_call('{"thesis": "T is a real thesis", "founder_edge": "e", "mold": "m", "kept": [], '
+               '"dropped": [], "questions": ["Who is the first buyer for the box?", '
+               '"Spread it into directions now", 17, "x", "One question too many?"]}')
+    m, _ = brainstorm.merge(RAW, [{"title": "box"}], mock=False, research=False)
+    # scaffold echo + stubs dropped, and the seam caps at 3 BEFORE validating
+    assert m["questions"] == ["Who is the first buyer for the box?"]
 
 
 def test_merge_real_tolerates_non_object_reply(patch_call):

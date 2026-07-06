@@ -189,12 +189,14 @@ def run_author(generate, validate, feedback_fn=None, max_fix: int = 3):
 
 
 # ── the conductor ────────────────────────────────────────────────────────────
-def run_engine(idea: str, headlines: int, on_progress=None, on_phase=None, cost_cap: float | None = -1.0):
+def run_engine(idea: str, headlines: int, on_progress=None, on_phase=None, cost_cap: float | None = -1.0,
+               max_lanes: int | None = None):
     """Walk the engine phase DAG, delegating to the pipeline at each seam, and return
     `(rows, stats, lanes)` — byte-identical to the legacy build_evidence chain. `on_progress(line)`
     streams the `§LANES§`/`§LANEDONE§` leaf sentinels for the live UI; `on_phase(PhaseEvent)`
-    streams the typed run log (verdict + cost per phase). Lazy import keeps `--rebuild` API-free and
-    lets tests monkeypatch the pipeline functions."""
+    streams the typed run log (verdict + cost per phase). `max_lanes` caps the research fan-out
+    (the funnel's light refine-stage skim researches fewer lanes than the deep run). Lazy import
+    keeps `--rebuild` API-free and lets tests monkeypatch the pipeline functions."""
     from pipeline import (LEDGER, bound, gate_claims, plan, research_lane,  # noqa: PLC0415
                           research_primary)
 
@@ -227,6 +229,8 @@ def run_engine(idea: str, headlines: int, on_progress=None, on_phase=None, cost_
     # P1 · plan (author) — decompose the idea into research lanes
     s = _start()
     lanes = plan(idea)
+    if max_lanes:
+        lanes = lanes[:max_lanes]
     # Announce the fan-out shape so the UI can paint one leaf per research lane up front (grey), then
     # turn each leaf green as its §LANEDONE§ arrives. All emits run on THIS (the prepare) thread.
     emit("§LANES§" + json.dumps(lanes))
