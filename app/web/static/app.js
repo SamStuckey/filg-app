@@ -1444,8 +1444,11 @@ function stepCtas(){
   if(decided||busy)return `<div class=ctarow><button class=stage-cta onclick=pivotActive()>⑂ Pivot</button></div>`+
     `<p class=thinking>${busy&&!decided?'The next part is already being written — pivot to change course.'
       :'This step is already decided — pivot to take it somewhere else.'}</p>`;
+  // name the actual next part on the button — "what happens on click" at every hop (§v2 #17)
+  const nx=(S.sections||[])[(S.step||0)+1];
+  const nxt=nx?`Next up: Part ${(S.step||0)+2} of ${S.total} — ${nx.title}`:'Next up: draft the next section';
   return `<div class=ctarow><button class=stage-cta onclick=keepGoing()>Keep going →`+
-    `<span class=ctasub>Next up: draft the next section</span></button>`+
+    `<span class=ctasub>${esc(nxt)}</span></button>`+
     `<button class="stage-cta secondary" onclick=pivotActive()>⑂ Pivot</button></div>`+
     `<p class=thinking>Comment or steer in the box anytime, it wins.</p>`;
 }
