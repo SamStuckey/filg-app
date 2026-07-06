@@ -8,6 +8,7 @@ __FILG_HEAD__
      centered. The first prompt collapses it into the sidebar — no swap, no fly-away. ── -->
 <div id=workspace class="workspace full">
   <aside class=left id=left>
+    <button type=button class=mgrip onclick="mToggle()" aria-label="Open or close the chat drawer"></button>
     <div class=left-top>
       <button type=button class=logo onclick="v2newPlan()">FILG</button>
       <div class=lt-right>
@@ -81,11 +82,13 @@ __FILG_HEAD__
   <!-- Research EXPANDED: the stack slides out into its own left-anchored drawer (v1-style column)
        and the chat gets the full leftmost drawer back. -->
   <aside class=rdrawer id=rdrawer aria-hidden=true>
+    <button type=button class=mgrip onclick="mToggle()" aria-label="Open or close the research drawer"></button>
     <div class=rpane-head><span>Graded research</span>
       <button type=button class="ghost small" onclick="collapseResearch()" title="Tuck the research back into the chat drawer">⇤ Tuck in</button></div>
     <div class=rlist id=rlist2></div>
   </aside>
   <aside class=rdrawer id=bdrawer aria-hidden=true>
+    <button type=button class=mgrip onclick="mToggle()" aria-label="Open or close the board drawer"></button>
     <div class=rpane-head><span>Board room</span>
       <span class=bacts>
         <button type=button class="ghost small" onclick="forgeModal()" title="Forge a custom director">⚒ Forge</button>

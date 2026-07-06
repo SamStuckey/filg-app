@@ -1741,8 +1741,8 @@ function exitResearch(quiet){
   $('ws-wrap').className='promptwrap';
   if(!quiet)chatStatus('Back to build mode.');
 }
-function expandResearch(){ RMODE='expanded'; applyRmode(); renderResearch(); }
-function collapseResearch(){ RMODE='split'; applyRmode(); renderResearch(); }
+function expandResearch(){ RMODE='expanded'; mOpen(); applyRmode(); renderResearch(); }
+function collapseResearch(){ RMODE='split'; mOpen(); applyRmode(); renderResearch(); }
 // ── The split boundary is DRAGGABLE (Sam, 2026-07-06): one remembered height shared by every
 // in-drawer pane (research/board/help). Dragging sets an inline flex-basis; leaving the split
 // clears it so the full/expanded displays keep their class-driven sizing. ──
@@ -1773,6 +1773,16 @@ function initGrips(){
     });
   });
 }
+// ── Mobile drawer model (Sam, 2026-07-06): the graph owns the screen; the chat is a bottom
+// sheet with a grab handle. An expanded section (research/board) REPLACES the chat sheet
+// (workspace.rx hides .left); Tuck in returns to the split chat drawer; the handle collapses
+// whichever sheet is up (workspace.mclosed) so the decision tree shows. Desktop CSS ignores
+// all three classes — the handles only render under the mobile media query. ──
+function mToggle(){ const w=$('workspace'); if(w)w.classList.toggle('mclosed'); }
+function syncRx(){ const w=$('workspace'); if(!w)return;
+  const rx=(typeof RMODE!=='undefined'&&RMODE==='expanded')||(typeof BMODE!=='undefined'&&BMODE==='expanded');
+  w.classList.toggle('rx',rx); }
+function mOpen(){ const w=$('workspace'); if(w)w.classList.remove('mclosed'); }
 function applyRmode(){
   const L=$('left'), pane=$('rpane'), dr=$('rdrawer');
   // a stale shell (served before the research pane existed) must fail LOUD, not half-collapse the
@@ -1787,6 +1797,7 @@ function applyRmode(){
   pane.setAttribute('aria-hidden',String(!(RMODE==='full'||RMODE==='split')));
   dr.classList.toggle('open',RMODE==='expanded');
   dr.setAttribute('aria-hidden',String(RMODE!=='expanded'));
+  syncRx();
   applySplitSize(pane,RMODE==='split');   // the remembered drag height applies to the split only
   if(RMODE!=='full'){ const log=$('chatlog'); if(log)log.scrollTop=log.scrollHeight; }
 }
@@ -1875,8 +1886,8 @@ function exitBoard(quiet){
   $('ws-wrap').className='promptwrap';
   if(!quiet)chatStatus('Back to build mode.');
 }
-function expandBoard(){ BMODE='expanded'; applyBmode(); renderBoard(); }
-function collapseBoard(){ BMODE='split'; applyBmode(); renderBoard(); }
+function expandBoard(){ BMODE='expanded'; mOpen(); applyBmode(); renderBoard(); }
+function collapseBoard(){ BMODE='split'; mOpen(); applyBmode(); renderBoard(); }
 function applyBmode(){
   const L=$('left'), pane=$('bpane'), dr=$('bdrawer');
   if(!L||!pane||!dr){   // stale shell: fail LOUD, same contract as research
@@ -1889,6 +1900,7 @@ function applyBmode(){
   pane.setAttribute('aria-hidden',String(!(BMODE==='full'||BMODE==='split')));
   dr.classList.toggle('open',BMODE==='expanded');
   dr.setAttribute('aria-hidden',String(BMODE!=='expanded'));
+  syncRx();
   applySplitSize(pane,BMODE==='split');
   if(BMODE!=='full'){ const log=$('chatlog'); if(log)log.scrollTop=log.scrollHeight; }
 }
