@@ -232,10 +232,38 @@ ul.qs li{margin:4px 0}
 .toast{background:var(--fg);color:var(--bg);padding:8px 14px;border-radius:8px;font-size:13px}
 .toast.err{background:var(--red);color:#fff}
 
+/* ── Mobile = the v1 drawer model (Sam, 2026-07-06). The decision graph/docs own the SCREEN;
+   the chat lives in a bottom DRAWER over it with a grab-handle to open/close. An expanded
+   section (research/board ⇥) REPLACES the chat drawer; ⇤ Tuck in returns to the split chat
+   drawer; the handle collapses whichever sheet is up so the tree shows. dvh tracks the
+   browser bar — the old stacked layout (.right min-height:62vh inside an overflow:hidden
+   100% workspace) pushed the bottom clean off the phone screen. ── */
+.mgrip{display:none;flex:0 0 auto;width:100%;background:none;border:none;padding:3px 0 5px;cursor:pointer}
+.mgrip::before{content:"";display:block;width:44px;height:5px;border-radius:3px;background:var(--line);margin:0 auto}
 @media (max-width:820px){
-  .workspace{flex-direction:column}
-  .left{width:100%;min-width:0;border-right:none;border-bottom:1px solid var(--line)}
-  .right{min-height:62vh}
+  .workspace{height:100vh;height:100dvh}
+  .right{min-width:0}
+  .left{position:fixed;left:0;right:0;bottom:0;width:auto;min-width:0;z-index:24;
+    max-height:62dvh;border-right:none;border-top:1px solid var(--line);
+    border-radius:14px 14px 0 0;background:var(--bg);box-shadow:0 -10px 30px rgba(0,0,0,.35);
+    transition:transform .3s ease}
+  .workspace.mclosed .left{transform:translateY(calc(100% - 40px))}
+  .workspace.rx .left{visibility:hidden}          /* an expanded section replaces the chat drawer */
+  .rdrawer{position:fixed;left:0;right:0;bottom:0;width:auto;min-width:0;z-index:25;
+    transition:transform .3s ease,opacity .2s ease}
+  .rdrawer.open{flex:none;width:auto;max-height:62dvh;padding:14px;display:flex;flex-direction:column;
+    border-top:1px solid var(--line);border-radius:14px 14px 0 0;background:var(--bg);
+    box-shadow:0 -10px 30px rgba(0,0,0,.35)}
+  .workspace.mclosed .rdrawer.open{transform:translateY(calc(100% - 40px))}
+  .mgrip{display:block}
+  /* the landing keeps the whole screen (there's no graph yet) and scrolls itself */
+  .workspace.full .left{position:fixed;inset:0;max-height:none;border-radius:0;transform:none;
+    overflow-y:auto;border-top:none;box-shadow:none}
+  .workspace.full .mgrip{display:none}
+  /* graph chrome clears the sheet: the step pill moves up top, the minimap above the peek bar */
+  #gpill{bottom:auto;top:52px}
+  #minimap{bottom:54px}
+  .toasts{z-index:40}
 }
 .jokecard{border:1px solid var(--line);border-radius:12px;padding:16px;margin-top:16px;text-align:left}
 
