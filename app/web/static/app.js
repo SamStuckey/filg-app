@@ -1034,7 +1034,9 @@ function renderGraph(){
   // panel width overflowed the phone — Sam's QA, 2026-07-06)
   const MOB=window.matchMedia&&window.matchMedia('(max-width:820px)').matches;
   const FW=MOB?Math.max(200,rrect.width-12):focusW(rrect);
-  const FH=rrect.height-(MOB?96:120);
+  // mobile height budget leaves ~90px above AND below the open doc — real room to tap outside
+  // to close (Sam: 50% more than the old 60px gap)
+  const FH=rrect.height-(MOB?180:120);
   const {pos,kids,joins,tp}=layoutGraph(m,wip,active,FOCUS?{fw:FW,fh:FH}:null);
   LAYOUT={pos,kids,tp,m};   // the minimap, fit-view, and keyboard nav all read the LAST layout
   const qhits=GQUERY?new Set(Object.keys(m).filter(id=>nodeMatches(m[id],GQUERY))):null;
@@ -1079,11 +1081,12 @@ function renderGraph(){
       inner=`<div class=nk><span aria-hidden=true>${KICON[n.kind]||'▤'}</span>${esc(n.kind||'part')}${tuck}</div>`+
         `<div class=nt>${esc(nodeLabel(n))}</div>`;
     }
-    // mobile: an open node carries its own collapse tab (sticky, top-right) — tap to drop back to
-    // the compact node view with the camera restored (unfocus), so jumping in/out is one thumb-tap
-    if(isFocus)inner+=`<button type=button class=nfold aria-label="Collapse this node" `+
+    // mobile: an open node carries a plain × close anchored in its top-right CORNER (first in flow +
+    // sticky, so it stays pinned while the doc scrolls) — tap to drop back to the compact node view
+    // with the camera restored (unfocus), so jumping in/out is one thumb-tap
+    if(isFocus)inner=`<button type=button class=nfold aria-label="Collapse this node" `+
       `title="Collapse back to the graph" onclick="event.stopPropagation();unfocus()">×</button>`+
-      `<div class=nbody>${nodeBody(n)}</div>`;
+      inner+`<div class=nbody>${nodeBody(n)}</div>`;
     el.innerHTML=inner;
     if(fresh)requestAnimationFrame(()=>requestAnimationFrame(()=>el.classList.remove('enter')));
   });

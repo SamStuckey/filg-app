@@ -275,10 +275,12 @@ ul.qs li{margin:4px 0}
   .ctarow{gap:8px}
   .ctarow .stage-cta{flex:1 1 40%;min-width:0;padding:8px 10px;font-size:13.5px}
   .stage-cta .ctasub{font-size:10.5px}
-  /* an open node's collapse tab: sticky top-right, one tap back to the compact node + camera */
-  .nfold{display:flex;position:sticky;top:-14px;margin:-6px -10px 0 auto;z-index:3;
-    align-items:center;justify-content:center;width:40px;height:26px;border:0;padding:0;
-    cursor:pointer;background:#555;color:#fff;border-radius:0 0 8px 8px;font-size:16px;line-height:1}
+  /* an open node's ×: a plain close anchored in the top-right corner (no tab chrome), sticky so
+     it stays pinned while the doc scrolls — one tap back to the compact node + restored camera */
+  .nfold{display:block;position:sticky;top:-14px;margin:-10px -14px -26px auto;z-index:3;
+    width:36px;height:32px;border:0;padding:0;cursor:pointer;background:none;color:var(--muted);
+    font-size:21px;line-height:1;text-align:center}
+  .nfold:hover,.nfold:active{color:var(--fg)}
 }
 .jokecard{border:1px solid var(--line);border-radius:12px;padding:16px;margin-top:16px;text-align:left}
 
