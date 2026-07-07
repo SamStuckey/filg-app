@@ -383,12 +383,14 @@ function seedGraph(idea){   // a placeholder working node while the first spread
 }
 function v2newPlan(){ location.href='/'; }
 function adoptPlan(d){ SID=d.id; SEL=new Set(); PENDING_FORK=null; resetGraph();
+  mCollapse();   // the first spread draws the graph — the mobile drawer bows out so it takes the stage
   history.replaceState(null,'','/plan/'+SID); }   // the plan gets a real URL — reload restores it
 async function restorePlan(id){   // boot straight into an existing plan: graph + docs + conversation
   const {ok,d}=await api('GET',`/api/plan/${id}?touch=1`);
   if(!ok||!d||!d.id){ history.replaceState(null,'','/'); return; }   // unknown → the landing
   $('workspace').classList.remove('full'); sendLabel();
   SID=d.id; SEL=new Set(); PENDING_FORK=null; resetGraph();
+  mCollapse();   // a deep link opens onto the PLAN — the graph first, the chat one tap away
   replayChat(d.chat);
   render(d);
   if(SESSION&&!d.owned)claimPending();   // signed in, restoring an anonymous taste → claim it
@@ -857,6 +859,7 @@ let WIP_SYNC=false;   // sync ops (await-style: /next, /redraft, pivot spreads) 
                       // only endWip may clear it. Poll-driven ops defer to the server's status.
 function beginWip(label,opts){ WIP_LABEL=label; WIP_T0=Date.now(); WIPLOG=[]; LANES=[]; LANES_DONE=new Set();
   WIP_SYNC=!(opts&&opts.poll);
+  mCollapse();   // a graph-drawing submission collapses the mobile drawer — the tree takes the stage
   WIP_PENDING={label,parent:(opts&&opts.parent)||null,join:(opts&&opts.join)||null};
   if(VIEWMODE==='docs')DOCTAB='_wip';   // docs view rolls forward like the tree: the new step gets its own tab
   LEAF_OPEN=new Set(); FOCUS=null; BROWSING=false; PREFOCUS_VIEW=null; renderView(); }   // content collapses back, the pending node takes the stage
@@ -1264,7 +1267,8 @@ function centerOn(p,w,k,yFrac){   // ease the camera so node at p (width w) sits
   applyView(true);
 }
 let PREFOCUS_VIEW=null;   // the camera as it was BEFORE a doc opened — closing restores it exactly
-function focusW(r){ return Math.min(860,Math.max(460,r.width-170)); }   // doc width: panel minus margins
+function focusW(r){ // doc width: panel minus margins — but never wider than the screen (phones < the 460 floor)
+  return Math.min(Math.min(860,Math.max(460,r.width-170)), Math.max(200,r.width-24)); }
 function focusCam(p){   // an open doc reads at NATURAL scale (k=1), panel-fit with margin all around
   if(!PREFOCUS_VIEW)PREFOCUS_VIEW={...VIEW};
   const r=$('right').getBoundingClientRect();
@@ -1779,6 +1783,9 @@ function initGrips(){
 // whichever sheet is up (workspace.mclosed) so the decision tree shows. Desktop CSS ignores
 // all three classes — the handles only render under the mobile media query. ──
 function mToggle(){ const w=$('workspace'); if(w)w.classList.toggle('mclosed'); }
+function mCollapse(){ // any submission that DRAWS THE GRAPH collapses the drawer fully (mobile only)
+  if(window.matchMedia&&window.matchMedia('(max-width:820px)').matches){
+    const w=$('workspace'); if(w)w.classList.add('mclosed'); } }
 function syncRx(){ const w=$('workspace'); if(!w)return;
   const rx=(typeof RMODE!=='undefined'&&RMODE==='expanded')||(typeof BMODE!=='undefined'&&BMODE==='expanded');
   w.classList.toggle('rx',rx); }
