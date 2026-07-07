@@ -154,10 +154,10 @@ def test_wire_shape_per_kind_golden(client):
 
 
 def test_share_path_labels_match_legacy(client):
-    from app import main, store
+    from app import store, views
     sid = _drive_funnel(client)
     s = store.plan_get(sid)
-    path = main._share_path(s)
+    path = views.share_path(s)
     kinds = [p["kind"] for p in path]
     assert kinds[0] == "idea" and kinds[-1] == "section"
     labels = [p["label"] for p in path]

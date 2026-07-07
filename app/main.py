@@ -25,7 +25,6 @@ from __future__ import annotations
 import io
 import json
 import os
-import re
 import threading
 import time
 import traceback
@@ -54,13 +53,13 @@ from app import plan_pdf   # noqa: E402 — styled PDF generation (synthesis + f
 from app import advisor    # noqa: E402 — "chat with your plan" (grounded advisory layer)
 from app import context    # noqa: E402 — THE CONTEXT ENGINE: every model-facing view of session state
 from app import skeptic    # noqa: E402 — adversarial assumption-checking on the live research path
-from app import skill_registry as skills  # noqa: E402 — the skill bodies (help/system blocks)
 from engine import provider   # noqa: E402 — BYOK: per-run LLM provider (FILG's key vs a user's OpenRouter key)
 from engine import pipeline   # noqa: E402 — engine: per-run cost ledger (run_ledger) for safe concurrency
 from engine import model_catalog  # noqa: E402 — model ids/prices/slugs + cached Models API availability
 from engine import tree as dtree  # noqa: E402 — the decision tree: node wiring, kinds, attachments, run epochs
 
-from . import auth, billing, keys, ops, planner, render, store, tiers  # noqa: E402 — persistence, auth, billing, keys, tiers, share-page HTML
+from . import auth, billing, exports, keys, ops, planner, render, store, tiers, views  # noqa: E402
+from .domain import help as domain_help  # noqa: E402 — generated help copy (pricing facts) — persistence, auth, billing, keys, tiers, share-page HTML
 # Entitlement/provider/metering decisions live in access.py (the pure service layer). Re-exported here
 # so the route bodies call them as bare names and `main._budget` etc. stay importable by tests.
 from .access import (  # noqa: E402,F401 — entitlement/provider/metering (the pure service layer)
@@ -447,21 +446,7 @@ async def share_plan(sid: str):
     inner = markdown.markdown(planner.bundle_markdown(idea, s.get("files") or {}), extensions=["extra"])
     title = ((s.get("shaped") or {}).get("thesis") or s["idea"] or "Shared business plan")[:120]
     rows = ((s.get("research") or {}).get("rows") or [])
-    return HTMLResponse(render.shared_plan_page(title, inner, receipts=rows, path=_share_path(s)))
-
-
-def _share_path(s: dict) -> list[dict]:
-    """The committed decision path (root → active) as public-safe steps: kind + label + the operator's
-    pivot/steer note. This is the provenance trail — what the plan decided and why, not just the output.
-    Reads the STORED tree (nodes = dict keyed by id; kind derived via _kind), not the frontend view."""
-    tree = s.get("tree") or {}
-    nodes = tree.get("nodes") or {}
-    out = []
-    for n in dtree.chain(nodes, tree.get("active")):
-        out.append({"kind": _kind(n),
-                    "label": dtree.label(n, f"Part {int(n.get('step') or 0) + 1}"),
-                    "note": (n.get("feedback") or "").strip()})
-    return out
+    return HTMLResponse(render.shared_plan_page(title, inner, receipts=rows, path=views.share_path(s)))
 
 
 # ── Interactive plan builder (idea → decision tree → downloadable file tree) ──
@@ -487,111 +472,9 @@ def _owns(request: Request, session: dict) -> bool:
     return bool(authed and (authed["email"] or "").strip().lower() == owner)
 
 
-def _plan_state(s: dict) -> dict:
-    """Shape a session row for the frontend."""
-    return {
-        "id": s["id"], "status": s["status"], "idea": s["idea"], "error": s.get("error"),
-        "research": s.get("research"),
-        "shaped": s.get("shaped"), "vetting": s.get("vetting"),
-        "directors": s.get("directors") or [], "board": s.get("board") or [],
-        "customDirectors": [{"key": p["key"], "name": p["name"], "first": p.get("first"),
-                             "blurb": p.get("blurb"), "domains": p.get("domains") or []}
-                            for p in (s.get("custom_directors") or [])],   # custom-forged board chips
-        "files": [{"path": p, "content": c} for p, c in (s.get("files") or {}).items()],
-        "sections": [{"file": x["file"], "title": x["title"], "sub": x["sub"]}
-                     for x in planner.SECTIONS],
-        "step": s.get("step", 0), "total": planner.N, "proposal": s.get("proposal"),
-        "done": s["status"] == "done", "shared": bool(s.get("shared")),
-        "owned": bool((s.get("user") or "").strip()),   # anonymous taste vs claimed-by-an-account
-        "qa": s.get("qa"),   # final QA-pass report {notes, fixed} on the finished plan
-
-        "tree": _tree_view(s["tree"]) if s.get("tree") else None,
-        "stage": s.get("stage"),                      # funnel position: brainstorm | refined | building | done
-        "activeNode": _active_node_view(s),           # the active node's funnel payload (option cards / refined idea / fork)
-        "chat": s.get("chat") or [], "chatStarters": advisor.STARTERS,
-        "lookups": s.get("lookups") or [],   # persisted chat-lookup claims — the research stack survives a reload
-        # the stress-test's durable state (status + result only; live progress rides its poll route)
-        "skeptic": ({"status": (s.get("skeptic") or {}).get("status"),
-                     "result": (s.get("skeptic") or {}).get("result")} if s.get("skeptic") else None),
-        "progress": s.get("progress") or [],
-        "cost": s.get("cost") or 0, "tokens": s.get("tokens") or 0,   # live session usage meter
-        "stack": s.get("stack") or provider.DEFAULT_STACK,            # chosen model stack
-        # PDF access for THIS active branch + the account's remaining credits. The button shows
-        # Download when this plan is already unlocked OR there are credits to spend; else Unlock ($7=3).
-        # A new branch built from an earlier node is a fresh plan_key → locked until claimed.
-        "pdfUnlocked": _has_pdf_access((s.get("user") or "").strip(), ops.plan_key(s), verified=True),
-        "pdfCredits": store.credits_left((s.get("user") or "").strip()),
-    }
-
-
-# ── Branching decision tree — engine/tree.py owns the wiring; planner supplies pure content ──
-_new_node = dtree.new_node   # node bookkeeping (id / parent / children) has one owner: the engine
-_kind = context.kind         # one owner for "what kind is this node" — the context engine
-
-
-def _tree_view(tree: dict) -> dict:
-    """Trim the stored node tree to what the frontend needs to draw + navigate it. Carries each node's
-    `kind` so the graph can render option/refined/section/fork nodes differently. `show` is on from the
-    first render (even a single node) so the decision-graph surface is always there."""
-    nodes = tree.get("nodes") or {}
-    return {"active": tree.get("active"),
-            "nodes": [{"id": n["id"], "parent": n.get("parent"), "step": n.get("step", 0),
-                       "kind": _kind(n), "title": n.get("title"), "feedback": n.get("feedback"),
-                       # a refined node names the options it JOINED — the graph draws it as a merge
-                       # of those branches, not a sibling branch off the brainstorm fork
-                       **({"selected": n.get("selected")} if n.get("selected") else {})}
-                      for n in nodes.values()],
-            "show": bool(nodes)}
-
-
-def _active_node_view(s: dict) -> dict | None:
-    """The active node's full funnel payload, so the frontend can render the current stage (the option
-    cards, the refined idea, a pending fork) without a second fetch. Section nodes carry no extra
-    payload (the existing `proposal`/`sections` fields already cover them)."""
-    t = s.get("tree") or {}
-    a = (t.get("nodes") or {}).get(t.get("active"))
-    if not a:
-        return None
-    k = _kind(a)
-    view = {"id": a["id"], "kind": k, "title": a.get("title"),
-            "log": a.get("log") or []}   # persisted build receipts, so a reload restores them (§v2 #10)
-    if k == "brainstorm":
-        view["spread"] = a.get("spread")
-        view["feedback"] = a.get("feedback")   # the pivot ask this spread answers (if any)
-        view["set_aside"] = a.get("set_aside")  # declined-out-loud part of the ask — shown, not hidden
-        view["options"] = [{"id": c, "direction": ((t["nodes"].get(c) or {}).get("direction"))}
-                           for c in a.get("children", []) if _kind(t["nodes"].get(c) or {}) == "option"]
-    elif k == "option":
-        view["direction"] = a.get("direction")
-    elif k == "refined":
-        for f in ("thesis", "founder_edge", "mold", "kept", "dropped", "research", "selected",
-                  "questions", "feedback"):
-            view[f] = a.get(f)
-    elif k == "fork":
-        view["question"] = a.get("question")
-        view["options"] = a.get("options")
-    return view
-
-
-def _mirror(tree: dict) -> dict:
-    """Flat session fields (step/files/proposal/history/board/status) for the active node, so the
-    existing _plan_state + frontend renders keep working off the active branch unchanged. A funnel node
-    (brainstorm/option/refined/fork) isn't a plan section, so it mirrors to neutral 'building' state with
-    no proposal — the funnel payload rides on _active_node_view instead."""
-    a = tree["nodes"][tree["active"]]
-    if _kind(a) != "section":
-        # funnel nodes carry no plan state, but chat convenes stored on them still surface
-        return {"step": 0, "files": {}, "history": [], "board": a.get("board") or [],
-                "proposal": None, "qa": None, "status": "building"}
-    done = a["step"] >= planner.N
-    return {"step": a["step"], "files": a["files"], "history": a["history"], "board": a["board"],
-            "proposal": (None if done else {"section": a["section"], "title": a["title"],
-                                            "draft": a["draft"], "change": a.get("change")}),
-            "qa": a.get("qa") if done else None,   # the final QA-pass report, surfaced on the finished branch
-            "status": "done" if done else "building",
-            # the funnel stage must land on 'done' too, or the frontend keeps offering the next
-            # chapter forever ('Part 8 of 7' + Keep going — the off-ramp bug, 2026-07-04)
-            **({"stage": "done"} if done else {})}
+# Node bookkeeping (id/parent/children) and kind resolution each have one owner.
+_new_node = dtree.new_node
+_kind = context.kind
 
 
 def _regrade_setup(s: dict, node: dict, cost: float) -> tuple[dict | None, float]:
@@ -607,23 +490,6 @@ def _regrade_setup(s: dict, node: dict, cost: float) -> tuple[dict | None, float
     except Exception:  # noqa: BLE001
         return None, cost
     return vetting, round(cost + vc, 4)
-
-
-def _ensure_tree(s: dict) -> dict:
-    """Return the session's node tree, lazily seeding a single-node tree from legacy flat state for
-    plans created before branching existed (so resumed in-progress plans still go Next/Back)."""
-    t = s.get("tree")
-    if t and t.get("nodes"):
-        return t
-    p = s.get("proposal") or {}
-    step = s.get("step", 0) or 0
-    sec = next((x for x in planner.SECTIONS if x["key"] == p.get("section")), None)
-    node = _new_node({"step": step, "section": (sec or {}).get("key"),
-                      "title": (sec or {}).get("title", "Plan complete"),
-                      "sub": (sec or {}).get("sub", ""), "draft": p.get("draft"),
-                      "files": s.get("files") or {}, "history": s.get("history") or [],
-                      "board": s.get("board") or [], "feedback": None}, None)
-    return dtree.seed(node)
 
 
 def _plan_research(session_id: str, idea: str, user: str) -> None:
@@ -902,7 +768,7 @@ async def api_brainstorm(request: Request):
     _attach_spread(tree, d, base["id"])
     store.plan_save(sid, status="building", stage="brainstorm", tree=tree,
                     cost=round(cost, 4), tokens=toks)
-    return _plan_state(store.plan_get(sid))
+    return views.plan_state(store.plan_get(sid))
 
 
 @app.post("/api/plan/{sid}/rebrainstorm")
@@ -959,8 +825,8 @@ async def api_plan_rebrainstorm(sid: str, request: Request):
     bid = _attach_spread(tree, d, parent, board=(at or {}).get("board"))
     nodes[bid]["feedback"] = feedback or idea[:120]   # the pivot ask, visible on the fork forever
     dtree.begin_run(tree)                    # pivoting abandons any run still in flight — you moved on
-    ops.fold_usage(sid, s, cost, toks, tree=tree, stage="brainstorm", **_mirror(tree))
-    return _plan_state(store.plan_get(sid))
+    ops.fold_usage(sid, s, cost, toks, tree=tree, stage="brainstorm", **views.mirror(tree))
+    return views.plan_state(store.plan_get(sid))
 
 
 @app.post("/api/plan/{sid}/merge")
@@ -1311,54 +1177,12 @@ _FEATURE_WORDS = {"director_forge": "Director Forge", "custom_directors": "custo
                   "skeptic": "the assumption stress-test"}
 
 
-def _help_pricing() -> str:
-    """The PRICING FACTS block for the help prompt, GENERATED from tiers.py + billing.py — the single
-    sources of truth — so help can never drift from the live ladder again. (The 2026-07-06 QA caught
-    help quoting the dead '$13 one-time, no subscription' model from a hardcoded prompt.)"""
-    price = billing.PDF_PRICE_CENTS / 100
-    lines = [
-        "PRICING FACTS (answer any cost/subscription question ONLY from these, never from memory):",
-        "- Getting started is free, no account: your idea spreads into directions and merges into a "
-        "refined, first-pass-researched idea on the house. Building the full plan (the deep research "
-        "step) is where an account comes in — sign up, then either bring your own key or subscribe. "
-        "A plan without an account is cleaned up after about 48 hours.",
-        "- Free on your own API key (OpenRouter or Anthropic, BYOK): unlimited use, every model crew, "
-        "every feature. Model usage bills to their key, typically well under a dollar per plan.",
-        f"- Raw export (.zip/.md) is always free. The polished investor-grade PDF: free WITH a small "
-        f"'Built with FILG' watermark on your own key, or a one-time ${price:g} unlocks THAT plan's "
-        "clean (watermark-free) PDF — re-downloading it is free, a new plan pays its own unlock. "
-        "Every subscription includes unlimited clean PDFs.",
-    ]
-    cat = tiers.catalog()
-    up = ("upgrade for a bigger allowance, add your own key as a fallback, or wait for the renewal"
-          if len(cat) > 1 else "add your own key as a fallback, or wait for the renewal")
-    lines.append(
-        "- The monthly subscription runs on FILG's hosted key (no API key needed) and unlocks every "
-        "feature and every model crew. It has a monthly usage allowance that resets with the "
-        f"billing period; hitting it means {up}:")
-    for t in cat:
-        lines.append(f"  * {t['label']}: ${t['price']:g}/mo — all features and model crews, "
-                     f"unlimited clean PDFs, ~${t['cap_cents'] / 100:g}/mo of included model usage.")
-    return "\n".join(lines)
-
-
-def _help_system() -> str:
-    """The help system block: the `help` SKILL (app/skills/help/SKILL.md — how-to, money-answer rules,
-    the not-authoritative-on-pricing/legal disclaimer) + the PRICING FACTS generated from the live
-    ladder. Skill = judgment and rules; generated block = numbers. Neither can drift alone."""
-    return skills.system("help") + "\n\n" + _help_pricing()
-
-_HELP_MOCK = ("This is mock help (no key bound). In the real app: type your idea on the home page, then "
-              "use 'I'm with you' to lock each part and build the next, or 'Not feeling it' to redo a part. "
-              "It runs on your own API key.")
-
-
 @app.post("/api/help")
 async def api_help(request: Request):
     """A standard website-style help chat for using the product. Runs on the user's own key (BYOK),
     same as every other engine call; no plan/session required."""
     if ops.MOCK:
-        return {"reply": _HELP_MOCK}
+        return {"reply": domain_help.MOCK_REPLY}
     authed = auth.user_from_request(request)
     user = authed["email"] if authed else None
     prov = _provider_for(user)   # the user's own key, else FILG's hosted free key (if configured)
@@ -1380,7 +1204,7 @@ async def api_help(request: Request):
         convo += f"\n{who}: {str(m.get('content', ''))[:600]}"
     try:
         with provider.use(prov), provider.use_stack(provider.DEFAULT_STACK), pipeline.run_ledger():
-            reply = pipeline.call("help", pipeline.SONNET, max_tokens=400, system=_help_system(), cache=True,
+            reply = pipeline.call("help", pipeline.SONNET, max_tokens=400, system=domain_help.system(), cache=True,
                                   prompt=f"Conversation so far:{convo or ' (none)'}\n\nUser: {message}\n\n"
                                          "Reply as the FILG help assistant.")
             _meter(user, round(pipeline.LEDGER.cost(), 4))   # FILG-key help → daily + a subscriber's monthly cap
@@ -1396,7 +1220,7 @@ async def api_plan_get(sid: str, request: Request):
         return JSONResponse({"error": "unknown session"}, status_code=404)
     if request.query_params.get("touch"):   # explicit open (not a status poll) → bump recency for the profile sort
         store.plan_touch(sid)
-    return _plan_state(s)
+    return views.plan_state(s)
 
 
 @app.post("/api/plan/{sid}/claim")
@@ -1411,7 +1235,7 @@ async def api_plan_claim(sid: str, request: Request):
         return JSONResponse({"error": "unknown session"}, status_code=404)
     if not store.plan_claim(sid, authed["email"]):
         return JSONResponse({"error": "unknown session"}, status_code=404)   # owned by someone else — don't leak
-    return _plan_state(store.plan_get(sid))
+    return views.plan_state(store.plan_get(sid))
 
 
 @app.post("/api/plan/{sid}/respond")
@@ -1439,7 +1263,7 @@ async def api_plan_respond(sid: str, request: Request):
         return ops.engine_error(e)
     _meter(s.get("user"), round((upd.get("cost", 0) or 0) - (s.get("cost") or 0), 4))  # draft + board review
     store.plan_save(sid, **upd)
-    return _plan_state(store.plan_get(sid))
+    return views.plan_state(store.plan_get(sid))
 
 
 @app.post("/api/plan/{sid}/next")
@@ -1457,7 +1281,7 @@ async def api_plan_next(sid: str, request: Request):
     killed = (s.get("vetting") or {}).get("verdict") == "kill"
     if killed and not force:   # soft gate: a non-forced advance still gets the advisement (off-ramp = /revet)
         return _kill_gate(s)
-    tree = _ensure_tree(s)
+    tree = views.ensure_tree(s)
     active = tree["nodes"][tree["active"]]
     if active["step"] >= planner.N:
         return JSONResponse({"error": "This plan is already complete."}, status_code=409)
@@ -1479,8 +1303,8 @@ async def api_plan_next(sid: str, request: Request):
         return ops.engine_error(e)
     dtree.attach(tree, _new_node(child, active["id"]))
     _meter(s.get("user"), cost)
-    ops.fold_usage(sid, s, cost, toks, tree=tree, **_mirror(tree))
-    return _plan_state(store.plan_get(sid))
+    ops.fold_usage(sid, s, cost, toks, tree=tree, **views.mirror(tree))
+    return views.plan_state(store.plan_get(sid))
 
 
 @app.post("/api/plan/{sid}/revet")
@@ -1515,10 +1339,10 @@ async def api_plan_revet(sid: str, request: Request):
     if proposal is not None:
         root = _new_node(planner.root_node(proposal), None)   # no branches exist yet on a kill, so reseed
         tree = dtree.seed(root)
-        updates.update({"proposal": proposal, "step": 0, "tree": tree, **_mirror(tree)})
+        updates.update({"proposal": proposal, "step": 0, "tree": tree, **views.mirror(tree)})
     _meter(s.get("user"), cost)
     ops.fold_usage(sid, s, cost, toks, **updates)
-    return _plan_state(store.plan_get(sid))
+    return views.plan_state(store.plan_get(sid))
 
 
 @app.post("/api/plan/{sid}/back")
@@ -1537,7 +1361,7 @@ async def api_plan_back(sid: str, request: Request):
         return JSONResponse(
             {"error": "Add a quick note on what to change — feedback's required to go back a step."},
             status_code=400)
-    tree = _ensure_tree(s)
+    tree = views.ensure_tree(s)
     active = tree["nodes"][tree["active"]]
     if not active.get("parent"):
         return JSONResponse({"error": "You're on the first part — nothing to go back to."},
@@ -1555,11 +1379,11 @@ async def api_plan_back(sid: str, request: Request):
         return ops.engine_error(e)
     dtree.attach(tree, _new_node(sib, prev.get("parent")))   # sibling of `prev` → branches from prev's parent
     _meter(s.get("user"), cost)
-    updates = dict(tree=tree, **_mirror(tree))
+    updates = dict(tree=tree, **views.mirror(tree))
     if regrade:
         updates["vetting"] = regrade
     ops.fold_usage(sid, s, cost, toks, **updates)
-    return _plan_state(store.plan_get(sid))
+    return views.plan_state(store.plan_get(sid))
 
 
 @app.post("/api/plan/{sid}/redraft")
@@ -1578,7 +1402,7 @@ async def api_plan_redraft(sid: str, request: Request):
         return JSONResponse(
             {"error": "Add a quick note on what's not landing — a rework needs something to steer it."},
             status_code=400)
-    tree = _ensure_tree(s)
+    tree = views.ensure_tree(s)
     active = tree["nodes"][tree["active"]]
     if active["step"] >= planner.N:
         return JSONResponse({"error": "This plan is already complete."}, status_code=409)
@@ -1596,11 +1420,11 @@ async def api_plan_redraft(sid: str, request: Request):
         return ops.engine_error(e)
     dtree.attach(tree, _new_node(sib, active.get("parent")))   # sibling of the active node → same step, new branch
     _meter(s.get("user"), cost)
-    updates = dict(tree=tree, **_mirror(tree))
+    updates = dict(tree=tree, **views.mirror(tree))
     if regrade:
         updates["vetting"] = regrade
     ops.fold_usage(sid, s, cost, toks, **updates)
-    return _plan_state(store.plan_get(sid))
+    return views.plan_state(store.plan_get(sid))
 
 
 @app.post("/api/plan/{sid}/stack")
@@ -1613,7 +1437,7 @@ async def api_plan_stack(sid: str, request: Request):
     body = await request.json()
     want = provider.stack_name(body.get("stack"))
     store.plan_save(sid, stack=want)
-    return _plan_state(store.plan_get(sid))
+    return views.plan_state(store.plan_get(sid))
 
 
 @app.post("/api/plan/{sid}/goto")
@@ -1625,12 +1449,12 @@ async def api_plan_goto(sid: str, request: Request):
         return JSONResponse({"error": "unknown session"}, status_code=404)
     body = await request.json()
     node_id = body.get("node")
-    tree = _ensure_tree(s)
+    tree = views.ensure_tree(s)
     if node_id not in (tree.get("nodes") or {}):
         return JSONResponse({"error": "unknown node"}, status_code=404)
     tree["active"] = node_id
-    store.plan_save(sid, tree=tree, **_mirror(tree))
-    return _plan_state(store.plan_get(sid))
+    store.plan_save(sid, tree=tree, **views.mirror(tree))
+    return views.plan_state(store.plan_get(sid))
 
 
 @app.post("/api/plan/{sid}/ask")
@@ -1696,7 +1520,7 @@ async def api_plan_board(sid: str, request: Request):
     # Persist the convene on the ACTIVE NODE's board history (bounded), so it survives tree navigation
     # (the flat `board` column is a mirror of the active node — writing only there gets clobbered),
     # steers later drafts via planner._board_notes, and shows up in the exports/handoff.
-    tree = _ensure_tree(s)
+    tree = views.ensure_tree(s)
     a = (tree.get("nodes") or {}).get(tree.get("active"))
     if a is not None:
         entry = {"section": "convene", "title": f"Board convened: “{question[:90]}”", **res}
@@ -1772,7 +1596,7 @@ async def api_director_save(sid: str, request: Request):
     if clean["key"] not in directors:                        # seat them on the active board
         directors.append(clean["key"])
     store.plan_save(sid, custom_directors=customs, directors=directors)
-    return _plan_state(store.plan_get(sid))
+    return views.plan_state(store.plan_get(sid))
 
 
 @app.post("/api/plan/{sid}/research/query")
@@ -1959,166 +1783,6 @@ async def api_plan_download(sid: str, request: Request):
                     headers={"Content-Disposition": 'attachment; filename="filg-business-plan.zip"'})
 
 
-def _export_text(s: dict) -> str:
-    """Everything the operator has generated so far, as ONE plain-text dump: the idea + offer summary,
-    the straight read, the plan part by part, the annotated graded research, and the board's takes.
-    Minimal formatting on purpose — it's a get-your-data-out file, available at any point, always free."""
-    out: list[str] = []
-    W = out.append
-    BAR = "=" * 64
-    R = s.get("research") or {}
-    prose = R.get("prose") or {}
-    v = s.get("vetting") or {}
-    sh = s.get("shaped") or {}
-    W("FILG — YOUR BUSINESS PLAN, SO FAR")
-    W("Built with FILG. Every number is graded by a source-credibility gate: vendor-marketing stats are")
-    W("labeled, not laundered. This is your raw export, it's always free.")
-    W("")
-    W(BAR); W("THE IDEA"); W(BAR)
-    W((s.get("idea") or "").strip())
-    if prose.get("title"):
-        W(""); W("Offer: " + prose["title"])
-    if prose.get("offer"):
-        W("What you'd sell: " + prose["offer"])
-    if prose.get("gtm"):
-        W("How you'd sell it: " + prose["gtm"])
-    if v.get("verdict"):
-        shape = ("  ·  shape: " + v["model_type"].replace("-", " ")) if v.get("model_type") else ""
-        W("Verdict: " + v["verdict"].upper() + shape)
-    W("")
-    if sh or v:
-        W(BAR); W("THE STRAIGHT READ"); W(BAR)
-        if sh.get("thesis"):
-            W("Focus: " + sh["thesis"])
-        if sh.get("founder_edge"):
-            W("Your edge: " + sh["founder_edge"])
-        if v.get("reason"):
-            W(v["reason"])
-        if v.get("biggest_risk"):
-            W("Biggest risk: " + v["biggest_risk"])
-        if v.get("first_test"):
-            W("Cheapest first test: " + v["first_test"])
-        for a in (v.get("premortem") or []):
-            why = ("  (" + a["why"] + ")") if a.get("why") else ""
-            W("  - [" + str(a.get("status", "")) + "] " + str(a.get("assumption", "")) + why)
-        W("")
-    files = s.get("files") or {}
-    if files:
-        W(BAR); W("THE PLAN, PART BY PART"); W(BAR)
-        for sec in planner.SECTIONS:
-            if sec["file"] in files:
-                W(""); W("## " + sec["title"] + " — " + sec.get("sub", ""))
-                W((files[sec["file"]] or "").strip())
-        W("")
-    rows = R.get("rows") or []
-    if rows:
-        W(BAR); W("THE RESEARCH, GRADED"); W(BAR)
-        W("Each claim is marked CITED (passed the gate) or VENDOR/UNVERIFIED (treat with care).")
-        for r in rows:
-            mark = "CITED" if r.get("mark") == "ok" else "VENDOR/UNVERIFIED"
-            W(""); W("[" + mark + "] " + (r.get("text") or ""))
-            meta = [x for x in (r.get("url"), r.get("note"),
-                                ("as of " + str(r["as_of"])) if r.get("as_of") else None) if x]
-            if meta:
-                W("    " + "  ·  ".join(meta))
-        W("")
-    board = s.get("board") or []
-    if board:
-        W(BAR); W("YOUR BOARD'S TAKE (composite advisors, not real people)"); W(BAR)
-        for rev in board:
-            W(""); W("On “" + (rev.get("title") or "") + "”:")
-            sk = rev.get("skeptic") or {}
-            if sk.get("rationale"):
-                W("  Skeptic (" + str(sk.get("verdict", "")) + "): " + sk["rationale"])
-            for d in (rev.get("directors") or []):
-                W("  " + (d.get("first") or d.get("name") or "Director") + ": " + (d.get("take") or ""))
-            if rev.get("verdict"):
-                W("  Board takeaway: " + rev["verdict"])
-        W("")
-    W(BAR)
-    W("Generated by FILG · fuckitletsgo.ai · your raw export is always free.")
-    return "\n".join(out)
-
-
-def _handoff_prompt(s: dict) -> str:
-    """An LLM-ingestion prompt so the operator can paste their work into ANY model and pick up exactly
-    where they left off: the idea + straight read, the plan parts already written, the part they're on
-    now, the graded research WITH source links, and the board's notes — then a continue-from-here task.
-    We never include sections ahead of where they are."""
-    out: list[str] = []
-    W = out.append
-    R = s.get("research") or {}
-    prose = R.get("prose") or {}
-    v = s.get("vetting") or {}
-    sh = s.get("shaped") or {}
-    files = s.get("files") or {}
-    prop = s.get("proposal") or {}
-    W("You are a pragmatic business-planning partner for a solo operator. They started building a plan "
-      "in another tool and want you to continue from exactly where they left off. Everything generated "
-      "so far is below: the idea, the honest read on it, the plan parts already written, the part they "
-      "are on now, the graded research (with source links), and their board's notes.")
-    W("")
-    W("Rules: keep the same buyer, offer, price, and numbers already chosen; stay concise; build on the "
-      "parts already written instead of redoing them; treat any source marked VENDOR/UNVERIFIED as "
-      "unproven; do not invent statistics.")
-    W("")
-    W("=== THE IDEA ===")
-    W((s.get("idea") or "").strip())
-    if prose.get("title"):
-        W("Offer: " + prose["title"])
-    if prose.get("offer"):
-        W("What they'd sell: " + prose["offer"])
-    if prose.get("gtm"):
-        W("How they'd sell it: " + prose["gtm"])
-    if v.get("verdict"):
-        W("Verdict so far: " + v["verdict"].upper()
-          + (("  ·  shape: " + v["model_type"].replace("-", " ")) if v.get("model_type") else ""))
-    if sh.get("founder_edge"):
-        W("Founder's edge: " + sh["founder_edge"])
-    if v.get("biggest_risk"):
-        W("Biggest risk: " + v["biggest_risk"])
-    W("")
-    if files:
-        W("=== THE PLAN SO FAR (already written — build on these, don't repeat) ===")
-        for sec in planner.SECTIONS:
-            if sec["file"] in files:
-                W(""); W("## " + sec["title"]); W((files[sec["file"]] or "").strip())
-        W("")
-    if prop.get("draft") and not s.get("done"):
-        W("=== THE PART THEY'RE ON NOW (a draft, not yet locked) ===")
-        W("## " + (prop.get("title") or ""))
-        W((prop.get("draft") or "").strip())
-        W("")
-    rows = R.get("rows") or []
-    if rows:
-        W("=== GRADED RESEARCH (with source links) ===")
-        for r in rows:
-            mark = "CITED" if r.get("mark") == "ok" else "VENDOR/UNVERIFIED"
-            url = ("  <" + r["url"] + ">") if r.get("url") else ""
-            W("- [" + mark + "] " + (r.get("text") or "") + url)
-        W("")
-    board = s.get("board") or []
-    if board:
-        W("=== THE BOARD'S NOTES (composite advisors) ===")
-        for rev in board:
-            sk = rev.get("skeptic") or {}
-            tail = ("  | skeptic (" + str(sk.get("verdict", "")) + "): " + sk["rationale"]) if sk.get("rationale") else ""
-            W("- on “" + (rev.get("title") or "") + "”: " + (rev.get("verdict") or "") + tail)
-        W("")
-    W("=== YOUR TASK ===")
-    if s.get("done"):
-        W("The plan is complete. Pressure-test it, then help them sharpen the weakest part and plan the "
-          "first 30 days of execution.")
-    else:
-        nxt = ""
-        st = s.get("step")
-        if isinstance(st, int) and 0 <= st + 1 < len(planner.SECTIONS):
-            nxt = " The next part to write is “" + planner.SECTIONS[st + 1]["title"] + "”."
-        W("Continue the plan from the part they're on now, keeping it tight and consistent with "
-          "everything above." + nxt)
-    return "\n".join(out)
-
-
 @app.get("/api/plan/{sid}/handoff.txt")
 async def api_plan_handoff(sid: str, request: Request):
     """The LLM-handoff prompt (copy-paste into any model to continue). Free, owner only, any point."""
@@ -2127,7 +1791,7 @@ async def api_plan_handoff(sid: str, request: Request):
         return JSONResponse({"error": "unknown session"}, status_code=404)
     if not (s.get("research") or s.get("files") or s.get("shaped") or s.get("vetting")):
         return JSONResponse({"error": "Nothing to hand off yet."}, status_code=400)
-    return Response(_handoff_prompt(s), media_type="text/plain; charset=utf-8")
+    return Response(exports.handoff_prompt(s), media_type="text/plain; charset=utf-8")
 
 
 @app.get("/api/plan/{sid}/export.txt")
@@ -2140,14 +1804,9 @@ async def api_plan_export_txt(sid: str, request: Request):
         return JSONResponse({"error": "unknown session"}, status_code=404)
     if not (s.get("research") or s.get("files") or s.get("shaped") or s.get("vetting")):
         return JSONResponse({"error": "Nothing to export yet."}, status_code=400)
-    fn = f"{_slug(s.get('idea'))}-filg-export.txt"
-    return Response(_export_text(s), media_type="text/plain; charset=utf-8",
+    fn = f"{exports.slug(s.get('idea'))}-filg-export.txt"
+    return Response(exports.export_text(s), media_type="text/plain; charset=utf-8",
                     headers={"Content-Disposition": f'attachment; filename="{fn}"'})
-
-
-def _slug(text: str) -> str:
-    s = re.sub(r"[^a-z0-9]+", "-", (text or "business-plan").lower()).strip("-")
-    return (s or "business-plan")[:50]
 
 
 @app.get("/api/plan/{sid}/plan.pdf")
@@ -2195,7 +1854,7 @@ async def api_plan_pdf(sid: str, request: Request):
     # synth against their monthly fair-use cap. The per-session meter reflects it either way.
     _meter(s.get("user"), cost)
     nc, nt = ops.fold_usage(sid, s, cost, toks)   # binary response → echo usage via headers for the meter
-    fn = f"{_slug(s.get('idea'))}-business-plan.pdf"
+    fn = f"{exports.slug(s.get('idea'))}-business-plan.pdf"
     return Response(data, media_type="application/pdf",
                     headers={"Content-Disposition": f'attachment; filename="{fn}"',
                              "X-FILG-Cost": str(nc), "X-FILG-Tokens": str(nt),

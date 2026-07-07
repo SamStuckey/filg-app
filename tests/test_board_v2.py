@@ -83,8 +83,9 @@ def test_help_pricing_facts_track_the_live_ladder():
     live prices and none of the dead models (the 2026-07-06 QA caught help quoting a stale price
     from a hardcoded prompt). Live model since the gating wave: $13 per-plan clean PDF, Pro $29 /
     Ultimate $99; the $7/3-credit bundle and the Starter/Studio tiers are dead copy."""
-    from app import main, tiers
-    block = main._help_system()
+    from app import tiers
+    from app.domain import help as domain_help
+    block = domain_help.system()
     for t in tiers.catalog():                      # every live tier, by label and price
         assert t["label"] in block and f"${t['price']:g}/mo" in block
     assert "$13" in block and "watermark" in block  # the PDF story ($13/plan + free watermarked copy)
