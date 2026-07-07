@@ -371,6 +371,7 @@ ul.qs li{margin:4px 0}
 .gclabel{display:none}       /* labels (Search / Center) only surface inside the mobile dropdown */
 #gctrls #gmenu{display:none} /* the ⋯ dropdown toggle is mobile-only (id-specific: beats #gctrls button) */
 .gsn{font-size:11.5px;color:var(--muted);white-space:nowrap}
+#gctrls:not(.searchopen) .gsn{display:none}   /* the hit count belongs to the open search box */
 #minimap{position:absolute;right:14px;bottom:14px;width:156px;height:104px;z-index:5;cursor:pointer;
   background:color-mix(in srgb,var(--card) 82%,transparent);border:1px solid var(--line);
   border-radius:9px;overflow:hidden;backdrop-filter:blur(3px)}
