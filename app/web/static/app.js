@@ -679,42 +679,96 @@ async function refineIdea(note){
 // on the node they're about, render under that doc, and FOLD INTO the next build verb that touches
 // the node (keep going / steer / pivot) — v1's #7 contract, restated in v2's verbs. Client-held;
 // they're consumed by the build that uses them.
-let DOCCMTS={}, CMT_NODE=null, CMT_QUOTE='';
+let DOCCMTS={}, CMT_NODE=null, CMT_QUOTE='', CMT_EDIT=null;   // CMT_EDIT={id,i} while editing
 function cmtsFor(id){return (id&&DOCCMTS[id])||[];}
 function cmtSteer(id){ const cs=cmtsFor(id); if(!cs.length)return '';
   return '\n\nInline comments on this document (address each, anchored to the quoted text):\n'+
     cs.map(c=>`- On “${c.quote}”: ${c.note}`).join('\n'); }
+// The bottom summary: per comment, the quote on one truncated line and the note nested beneath it
+// (also one line). The row is clickable — same view/edit/delete editor as the inline balloons.
 function cmtsHtml(id){ const cs=cmtsFor(id); if(!cs.length)return '';
   return `<div class=cmts><p class=eyebrow>Your comments (they ride the next build of this part)</p>`+
-    cs.map((c,i)=>`<div class=cmtrow>💬 <span class=cmtq>“${esc(c.quote.length>90?c.quote.slice(0,90)+'…':c.quote)}”</span> `+
-      `<span class=cmtn>${esc(c.note)}</span><button type=button class=cmtx aria-label="Remove comment" onclick="rmCmt('${id}',${i})">×</button></div>`).join('')+`</div>`; }
-function rmCmt(id,i){ cmtsFor(id).splice(i,1); renderView(); }
+    cs.map((c,i)=>`<div class=cmtrow role=button tabindex=0 title="View / edit / delete" `+
+      `onclick="openCmtEditor('${id}',${i},event.clientX,event.clientY)" `+
+      `onkeydown="if(event.key==='Enter')openCmtEditor('${id}',${i},event.clientX||300,event.clientY||300)">`+
+      `<div class=cmtq>💬 “${esc(c.quote)}”</div>`+
+      `<div class=cmtn>${esc(c.note)}</div></div>`).join('')+`</div>`; }
+function rmCmt(id,i){ cmtsFor(id).splice(i,1); if(!cmtsFor(id).length)delete DOCCMTS[id]; renderView(); }
 function cmtPop(){ let p=$('cmtpop'); if(p)return p;
   p=document.createElement('div'); p.id='cmtpop';
   p.innerHTML=`<div class=cmtq id=cmtpop-q></div>`+
     `<textarea id=cmtpop-note rows=2 placeholder="Your note on that…"></textarea>`+
-    `<div class=cmtacts><button type=button onclick="hideCmtPop()">Cancel</button>`+
-    `<button type=button class=primary onclick="saveCmt()">Comment</button></div>`;
+    `<div class=cmtacts><button type=button class=cmtdel onclick="delCmt()">Delete</button>`+
+    `<span class=sp></span><button type=button onclick="hideCmtPop()">Cancel</button>`+
+    `<button type=button class=primary id=cmtpop-save onclick="saveCmt()">Comment</button></div>`;
   document.body.appendChild(p); return p; }
 function hideCmtPop(){ const p=$('cmtpop'); if(p)p.classList.remove('show');
+  CMT_EDIT=null;
   const s=window.getSelection&&window.getSelection(); if(s&&s.removeAllRanges)s.removeAllRanges(); }
-function saveCmt(){ const note=(($('cmtpop-note')||{}).value||'').trim(); hideCmtPop();
+function delCmt(){ const e=CMT_EDIT; hideCmtPop(); if(e)rmCmt(e.id,e.i); }
+function saveCmt(){ const note=(($('cmtpop-note')||{}).value||'').trim(); const e=CMT_EDIT; hideCmtPop();
+  if(e){ if(!note)return rmCmt(e.id,e.i);            // note cleared = delete
+    const c=cmtsFor(e.id)[e.i]; if(c)c.note=note; renderView(); return; }
   if(!note||!CMT_NODE)return;
   (DOCCMTS[CMT_NODE]=DOCCMTS[CMT_NODE]||[]).push({quote:CMT_QUOTE,note});
   renderView(); }
-// Open the comment popover for a quote at a screen position — shared by highlight + click-a-line.
-function openCmtPop(quote,x,y){
-  const id=(VIEWMODE==='docs')?DOCTAB:FOCUS;                   // whichever node's doc is on screen
-  CMT_NODE=(id&&id!=='_wip')?id:(nodesOf(S).t||{}).active; if(!CMT_NODE)return;
-  CMT_QUOTE=(quote||'').slice(0,180); if(!CMT_QUOTE)return;
-  const p=cmtPop();
-  $('cmtpop-q').textContent='“'+(CMT_QUOTE.length>90?CMT_QUOTE.slice(0,90)+'…':CMT_QUOTE)+'”';
-  $('cmtpop-note').value='';
+function _placeCmtPop(x,y){ const p=cmtPop();
   p.classList.add('show');                                     // show first so it can be measured
   const pw=p.offsetWidth||280, ph=p.offsetHeight||130;
   p.style.left=Math.max(8,Math.min(x-40,window.innerWidth-pw-8))+'px';
   p.style.top=Math.max(8,Math.min(y+14,window.innerHeight-ph-8))+'px';
   setTimeout(()=>{const n=$('cmtpop-note');if(n)n.focus();},30);
+}
+// Open the comment popover for a NEW quote at a screen position — highlight + click-a-line.
+function openCmtPop(quote,x,y){
+  const id=(VIEWMODE==='docs')?DOCTAB:FOCUS;                   // whichever node's doc is on screen
+  CMT_NODE=(id&&id!=='_wip')?id:(nodesOf(S).t||{}).active; if(!CMT_NODE)return;
+  CMT_QUOTE=(quote||'').slice(0,180); if(!CMT_QUOTE)return;
+  CMT_EDIT=null;
+  const p=cmtPop(); p.classList.remove('editing');
+  $('cmtpop-q').textContent='“'+CMT_QUOTE+'”';
+  $('cmtpop-note').value=''; $('cmtpop-save').textContent='Comment';
+  _placeCmtPop(x,y);
+}
+// Open an EXISTING comment for view / edit / delete — from an inline balloon or a summary row.
+function openCmtEditor(id,i,x,y){
+  const c=cmtsFor(id)[i]; if(!c)return;
+  CMT_EDIT={id,i}; CMT_NODE=id; CMT_QUOTE=c.quote;
+  const p=cmtPop(); p.classList.add('editing');
+  $('cmtpop-q').textContent='“'+c.quote+'”';
+  $('cmtpop-note').value=c.note; $('cmtpop-save').textContent='Save';
+  _placeCmtPop(x,y);
+}
+// Inline balloons: a 💬 pinned at the END of each commented section, click = the same editor.
+// Re-applied after every render (innerHTML rebuilds wipe them); drafts carry data-node so each
+// balloon knows whose comments it marks.
+function decorateCmts(){
+  document.querySelectorAll('.draft[data-node]').forEach(d=>{
+    const id=d.getAttribute('data-node'), cs=cmtsFor(id); if(!cs.length)return;
+    if(d.querySelector('.cmtdot'))return;                      // this render already decorated
+    cs.forEach((c,i)=>{
+      const blk=cmtAnchorBlock(d,c.quote)||d.lastElementChild||d;
+      const b=document.createElement('button');
+      b.type='button'; b.className='cmtdot'; b.textContent='💬';
+      b.title=c.note.length>120?c.note.slice(0,120)+'…':c.note;
+      b.setAttribute('aria-label','View or edit your comment');
+      b.onclick=e=>{e.stopPropagation(); openCmtEditor(id,i,e.clientX,e.clientY);};
+      blk.appendChild(b);
+    });
+  });
+}
+// The block where a quote's highlighted section ENDS: the last block the quote covers (a drag
+// selection spans several), else the block containing it, else a head-of-quote partial match.
+function cmtAnchorBlock(root,quote){
+  const norm=t=>String(t||'').replace(/\s+/g,' ').trim().toLowerCase();
+  const q=norm(quote); if(!q)return null;
+  const blocks=root.querySelectorAll('p,li,h1,h2,h3,h4,blockquote,td,th');
+  let last=null;
+  for(const b of blocks){ const t=norm(b.textContent);
+    if(t&&(t.includes(q)||q.includes(t)))last=b; }
+  if(last)return last;
+  for(const b of blocks){ if(norm(b.textContent).includes(q.slice(0,60)))return b; }
+  return null;
 }
 // v1 parity (restored 2026-07-07): HIGHLIGHT text OR just CLICK a line/section to comment on it.
 // A drag-selection uses the selected text; a plain click (no selection) grabs the clicked block —
@@ -1291,6 +1345,7 @@ function renderGraph(){
     else if(wip&&pos[wip])centerOn(pos[wip],250,0.9,0.30);
   }
   pill(!wip && stageSurface(S) && FOCUS!==active);
+  decorateCmts();   // inline 💬 balloons on commented sections (innerHTML rebuild wiped them)
   renderMinimap();
 }
 // ── Graph chrome: minimap · fit view · zoom · keyboard nav · search-glow · hover trail ─────────
@@ -1639,7 +1694,7 @@ function transitionalBody(){
 function pastBody(n){
   const d=NODECACHE[n.id];
   if(!d)return '<p class=thinking>opening…</p>';
-  if(d.kind==='section')return `<div class=draft>${mdToHtml(d.content||d.draft||'')}</div>`;
+  if(d.kind==='section')return `<div class=draft data-node="${esc(n.id)}">${mdToHtml(d.content||d.draft||'')}</div>`;
   if(d.kind==='option'){ const x=d.direction||{}; return `<p>${esc(x.one_liner||'')}</p>${x.mold?`<span class=mold>${esc(x.mold)}</span>`:''}`; }
   if(d.kind==='refined')return `<p class=react>${esc(d.thesis||'')}</p>`+(d.mold?`<span class=mold>${esc(d.mold)}</span>`:'');
   if(d.kind==='brainstorm'){
@@ -1792,8 +1847,9 @@ function firstPageHtml(s){
 // itself. The .draft class is load-bearing — it is what the inline-comment handler listens on.
 function draftDoc(p){
   if(!p||!p.draft)return '';
+  const id=(nodesOf(S).t||{}).active||'';   // the active node owns the live proposal draft
   const chg=p.change?`<div class=chgnote>✎ ${esc(p.change)}</div>`:'';
-  return chg+`<div class=draft>${mdToHtml(p.draft)}</div>`;
+  return chg+`<div class=draft data-node="${esc(id)}">${mdToHtml(p.draft)}</div>`;
 }
 function partEyebrow(s){
   const c=chapterOf(s.step||0);
@@ -1948,6 +2004,7 @@ function renderDocs(){
     api('GET',`/api/plan/${SID}/node/${n.id}`).then(({ok,d})=>{ if(ok){NODECACHE[n.id]=d; hydrateLog(n.id,d.log);
       if(VIEWMODE==='docs'&&DOCTAB===n.id)renderDocs();} });
   pane.innerHTML=`<div class=docsheet>${body}</div>`;
+  decorateCmts();   // inline 💬 balloons in the reader too
 }
 
 // ── Render choreography ──────────────────────────────────────────────────────

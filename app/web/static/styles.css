@@ -349,18 +349,25 @@ ul.concernlist .concern .cdetail{color:var(--muted);font-size:13px;line-height:1
   border-radius:10px;box-shadow:0 8px 28px rgba(0,0,0,.18);padding:10px;display:none}
 #cmtpop.show{display:block}
 #cmtpop .cmtq{font-size:12px;color:var(--muted);font-style:italic;margin-bottom:6px;
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  max-height:76px;overflow:auto}
 #cmtpop textarea{font-size:13px}
-#cmtpop .cmtacts{display:flex;gap:8px;justify-content:flex-end;margin-top:8px}
+#cmtpop .cmtacts{display:flex;gap:8px;align-items:center;margin-top:8px}
+#cmtpop .cmtacts .sp{flex:1}
 #cmtpop .cmtacts button{border:1px solid var(--line);background:var(--card);color:var(--fg);
   border-radius:7px;padding:5px 12px;font-size:13px}
 #cmtpop .cmtacts .primary{background:var(--accent);color:#fff;border:none;font-weight:600}
+#cmtpop .cmtdel{display:none;color:var(--red);border-color:var(--red)}
+#cmtpop.editing .cmtdel{display:inline-block}
+/* the inline balloon: pinned at the end of a commented section, click to view/edit/delete */
+.cmtdot{border:none;background:none;cursor:pointer;font-size:14px;line-height:1;
+  padding:0 2px;margin-left:4px;vertical-align:baseline;opacity:.72}
+.cmtdot:hover{opacity:1}
+/* the bottom summary: per comment, ONE truncated quote line + the note nested ONE line beneath */
 .cmts{margin-top:12px;border-top:1px dashed var(--line);padding-top:8px}
-.cmts .cmtrow{font-size:13px;margin:4px 0;display:flex;gap:6px;align-items:baseline}
-.cmts .cmtq{color:var(--muted);font-style:italic}
-.cmts .cmtn{flex:1}
-.cmts .cmtx{border:none;background:none;color:var(--muted);font-size:15px;cursor:pointer;padding:0 4px}
-.cmts .cmtx:hover{color:var(--red)}
+.cmts .cmtrow{display:block;font-size:13px;margin:6px 0;cursor:pointer;border-radius:6px;padding:2px 4px}
+.cmts .cmtrow:hover{background:var(--bg)}
+.cmts .cmtq{color:var(--muted);font-style:italic;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cmts .cmtn{padding-left:22px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* click-a-line / highlight-to-comment affordance: a rendered doc block lifts on hover (v1 parity) */
 .draft p,.draft li,.draft h1,.draft h2,.draft h3,.draft h4,.draft blockquote{border-radius:4px;transition:background .12s}
 .draft p:hover,.draft li:hover,.draft h1:hover,.draft h2:hover,.draft h3:hover,.draft h4:hover,.draft blockquote:hover{
