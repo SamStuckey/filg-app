@@ -50,6 +50,7 @@ from app import router     # noqa: E402 — the single prompt box (intent routin
 from app import plan_pdf   # noqa: E402 — styled PDF generation (synthesis + fpdf2 render)
 from app import advisor    # noqa: E402 — "chat with your plan" (grounded advisory layer)
 from app import context    # noqa: E402 — THE CONTEXT ENGINE: every model-facing view of session state
+from app import decisions as decisions_mod  # noqa: E402 — standing decisions: axioms/non-negotiables (Summary tab)
 from app import skeptic    # noqa: E402 — adversarial assumption-checking on the live research path
 from engine import provider   # noqa: E402 — BYOK: per-run LLM provider (FILG's key vs a user's OpenRouter key)
 from engine import pipeline   # noqa: E402 — engine: per-run cost ledger (run_ledger) for safe concurrency
@@ -508,9 +509,11 @@ def _run_merge(sid: str, option_ids: list, user: str, tok: str | None = None,
             idea_in = (f"{s0['idea']}\n\nTHE MERGED THESIS SO FAR (refine THIS, do not start over):\n"
                        f"{prev}\n\nTHE OPERATOR'S CLARIFICATION — it outweighs everything above; fold "
                        f"it in and do not re-ask what it answers:\n{note}")
+        _decisions_receipt(s0, progress)          # the axioms this merge honors, in the receipts
         with ops.bind_session_run(user, s0.get("stack")) as prov:
             m, cost = brainstorm.merge(idea_in, directions, mock=ops.MOCK,
-                                       on_progress=ops.bg_progress(sid, base_cost, base_tokens, progress))
+                                       on_progress=ops.bg_progress(sid, base_cost, base_tokens, progress),
+                                       decisions=_decisions_block(s0))
             toks = pipeline.LEDGER.tokens()
         ops.meter_bg(user, prov, cost, toks)
         fresh = _fresh_tree_or_abandon(sid, tok)
@@ -523,6 +526,7 @@ def _run_merge(sid: str, option_ids: list, user: str, tok: str | None = None,
         parent = (refine_of if refine_of and nodes.get(refine_of) else tree.get("active"))
         refined = _refined_node(m, [] if refine_of else option_ids, parent, feedback=note)
         refined["log"] = _op_log(progress, len(s0.get("progress") or []))
+        _stamp_decisions(s0, refined)
         dtree.attach(tree, refined, inherit=True)
         store.plan_save(sid, status="building", stage="refined", tree=tree, progress=progress,
                         cost=round(base_cost + cost, 4), tokens=base_tokens + toks)
@@ -544,9 +548,11 @@ def _deep_build(sid: str, thesis: str, user: str, tok: str | None = None,
         s0 = store.plan_get(sid) or {}
         base_cost, base_tokens = s0.get("cost") or 0, s0.get("tokens") or 0
         progress = list(s0.get("progress") or [])
+        _decisions_receipt(s0, progress)          # the axioms this build honors, in the receipts
         with ops.bind_session_run(user, s0.get("stack")) as prov:
             prep = planner.prepare(thesis, mock=ops.MOCK, prior=prior,
-                                   on_progress=ops.bg_progress(sid, base_cost, base_tokens, progress))
+                                   on_progress=ops.bg_progress(sid, base_cost, base_tokens, progress),
+                                   decisions=_decisions_block(s0))
             toks = pipeline.LEDGER.tokens()
         ops.meter_bg(user, prov, prep["cost"], toks, is_run=True, research_cost=prep["research_cost"])
         fresh = _fresh_tree_or_abandon(sid, tok)
@@ -558,6 +564,7 @@ def _deep_build(sid: str, thesis: str, user: str, tok: str | None = None,
         if picks:
             root["selected"] = [i for i in picks if i in nodes]   # the join the graph rides through
         root["log"] = _op_log(progress, len(s0.get("progress") or []))
+        _stamp_decisions(s0, root)
         dtree.attach(tree, root, inherit=True)
         store.plan_save(sid, status="building", stage="building", research=prep["research"], step=0,
                         proposal=prep["proposal"], shaped=prep["shaped"], vetting=prep["vetting"],
@@ -578,6 +585,33 @@ _route_context = context.screen
 
 def _path_snippets(nodes: dict, at_id: str | None) -> list[str]:   # legacy signature shim
     return context.path({"tree": {"nodes": nodes}}, at_id)
+
+
+# ── Standing decisions (app/decisions.py) — the operator's pinned axioms ──────
+# One renderer (the context engine's view) feeds every injection site; `None` when nothing is pinned
+# so downstream prompts stay byte-identical for sessions without decisions.
+def _decisions_block(s: dict) -> str | None:
+    return context.decisions_block(s) or None
+
+
+def _stamp_decisions(s: dict, *nodes) -> None:
+    """Record on each freshly built node which standing decisions were in force (ids only) — the
+    reference trail decisions_mod.impact() walks when a decision is later edited/removed, and the
+    frontend's 🧭 note. No decisions pinned → no field (wire compat)."""
+    dids = [d["id"] for d in (s.get("decisions") or []) if d.get("id")]
+    if not dids:
+        return
+    for n in nodes:
+        if n is not None:
+            n["decisions"] = dtree.clip("decisions", dids)
+
+
+def _decisions_receipt(s: dict, progress: list) -> None:
+    """One readable receipt line for a background op's node log: which axioms this build honored."""
+    dd = decisions_mod.ordered(s.get("decisions"))
+    if dd:
+        names = "; ".join(d["text"][:48] for d in dd[:3]) + (" …" if len(dd) > 3 else "")
+        progress.append(f"🧭 honoring {len(dd)} standing decision{'s' if len(dd) != 1 else ''}: {names}")
 
 
 @app.post("/api/brainstorm")
@@ -655,7 +689,7 @@ async def api_plan_rebrainstorm(sid: str, request: Request):
                      f"chosen context):\n{path_block}")
     def _work():
         with ops.run_slot(ops.slot_user(s), s.get("stack")):
-            d, cost = brainstorm.diverge(div_input, mock=ops.MOCK)
+            d, cost = brainstorm.diverge(div_input, mock=ops.MOCK, decisions=_decisions_block(s))
             return d, cost, pipeline.LEDGER.tokens()
     try:
         d, cost, toks = await run_in_threadpool(_work)
@@ -672,6 +706,7 @@ async def api_plan_rebrainstorm(sid: str, request: Request):
     tree["nodes"] = nodes
     bid = _attach_spread(tree, d, parent, board=(at or {}).get("board"))
     nodes[bid]["feedback"] = feedback or idea[:120]   # the pivot ask, visible on the fork forever
+    _stamp_decisions(s, nodes[bid])                   # the axioms this spread was constrained by
     dtree.begin_run(tree)                    # pivoting abandons any run still in flight — you moved on
     ops.fold_usage(sid, s, cost, toks, tree=tree, stage="brainstorm", **views.mirror(tree))
     return views.plan_state(store.plan_get(sid))
@@ -846,11 +881,18 @@ async def api_plan_route(sid: str, request: Request):
         return JSONResponse({"error": "Type something."}, status_code=400)
     mode = body.get("mode") or "build"
     node_id = (body.get("node") or "").strip() or None   # the node the user has open (browse context)
+    # the Summary tab: a declarative statement typed there is probably a standing decision, not a
+    # steer — detect it and OFFER the pin (the operator confirms in the chat; nothing saves itself)
+    from_summary = bool(body.get("summary"))
     stage = s.get("stage") or ("building" if s.get("proposal") else "plan")
     rstage = {"brainstorm": "brainstorm", "merging": "merge", "refined": "refined",
               "building": "plan", "done": "plan"}.get(stage, "plan")
     def _work():
         with ops.run_slot(ops.slot_user(s), s.get("stack")):
+            if from_summary:
+                offer, d_cost = decisions_mod.detect(prompt, mock=ops.MOCK)
+                if offer:
+                    return None, None, offer, round(d_cost, 4), pipeline.LEDGER.tokens()
             decision, cost = router.route(prompt, stage=rstage, mode=mode,
                                           context=_route_context(s, node_id), mock=ops.MOCK)
             fork = None
@@ -862,14 +904,16 @@ async def api_plan_route(sid: str, request: Request):
                 if not ic["integrable"]:
                     fork = {"clash": ic["clash"], "skeptic_say": ic["skeptic_say"],
                             "steer": decision["steer"]}
-            return decision, fork, cost, pipeline.LEDGER.tokens()
+            return decision, fork, None, cost, pipeline.LEDGER.tokens()
     try:
-        decision, fork, cost, toks = await run_in_threadpool(_work)
+        decision, fork, offer, cost, toks = await run_in_threadpool(_work)
     except ops.BusyError as be:
         return ops.busy_response(be)
     except Exception as e:  # noqa: BLE001
         return ops.engine_error(e)
     ops.fold_usage(sid, s, cost, toks)
+    if offer:
+        return {"offer": offer, "cost": cost, "tokens": toks}
     out = {"decision": decision, "cost": cost, "tokens": toks}
     if fork:
         out["fork"] = fork
@@ -933,6 +977,72 @@ def _save_lookups(sid: str, s: dict, claims: list) -> None:
     seen = {f"{c.get('text')}|{c.get('url')}" for c in have}
     have += [c for c in claims if f"{c.get('text')}|{c.get('url')}" not in seen]
     store.plan_save(sid, lookups=have[-60:])
+
+
+# ── Standing decisions — the Summary tab's editable index (no AI, no spend, owner only) ──────────
+@app.post("/api/plan/{sid}/decisions")
+async def api_decisions_add(sid: str, request: Request):
+    """Pin a standing decision (axiom / non-negotiable / preference). From the Summary tab's + Add,
+    or the chat's 'pin it?' offer after a declarative message. Pure state — no model call."""
+    s = store.plan_get(sid)
+    if not s or not _owns(request, s):
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    body = await request.json()
+    have = list(s.get("decisions") or [])
+    if len(have) >= decisions_mod.MAX_DECISIONS:
+        return JSONResponse({"error": "That's a full slate of decisions — retire one before "
+                                      "pinning another."}, status_code=409)
+    d = decisions_mod.new(body.get("text") or "", why=body.get("why") or "",
+                          weight=body.get("weight") or "firm")
+    if d is None:
+        return JSONResponse({"error": "Give the decision a few real words."}, status_code=400)
+    have.append(d)
+    store.plan_save(sid, decisions=have)
+    return {"decisions": have, "added": d}
+
+
+@app.patch("/api/plan/{sid}/decisions/{did}")
+async def api_decisions_edit(sid: str, did: str, request: Request):
+    """Edit a decision's text / context / weight. Returns `impact` — the nodes built while it was
+    in force — so the frontend can ask 'want to revisit any of these steps?' and pivot from them."""
+    s = store.plan_get(sid)
+    if not s or not _owns(request, s):
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    have = list(s.get("decisions") or [])
+    cur = next((d for d in have if d.get("id") == did), None)
+    if cur is None:
+        return JSONResponse({"error": "unknown decision"}, status_code=404)
+    body = await request.json()
+    before = dict(cur)
+    upd = decisions_mod.clean({"text": body.get("text", cur["text"]),
+                               "why": body.get("why", cur.get("why") or ""),
+                               "weight": body.get("weight", cur.get("weight"))})
+    if upd is None:
+        return JSONResponse({"error": "Give the decision a few real words."}, status_code=400)
+    cur.update(upd)
+    store.plan_save(sid, decisions=have)
+    changed = any(before.get(k) != cur.get(k) for k in ("text", "why", "weight"))
+    return {"decisions": have,
+            "changed": {"before": {k: before.get(k) for k in ("text", "why", "weight")},
+                        "after": {k: cur.get(k) for k in ("text", "why", "weight")}},
+            # impact only when something material moved — a no-op save shouldn't open the modal
+            "impact": (decisions_mod.impact(s, did) if changed else [])}
+
+
+@app.delete("/api/plan/{sid}/decisions/{did}")
+async def api_decisions_remove(sid: str, did: str, request: Request):
+    """Remove a decision. The nodes it shaped keep their stamp (the record is history, not a live
+    pointer); `impact` names them so the frontend can offer the revisit-and-pivot pass."""
+    s = store.plan_get(sid)
+    if not s or not _owns(request, s):
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    have = list(s.get("decisions") or [])
+    cur = next((d for d in have if d.get("id") == did), None)
+    if cur is None:
+        return JSONResponse({"error": "unknown decision"}, status_code=404)
+    have = [d for d in have if d.get("id") != did]
+    store.plan_save(sid, decisions=have)
+    return {"decisions": have, "removed": cur, "impact": decisions_mod.impact(s, did)}
 
 
 @app.post("/api/plan/{sid}/chatlog")
@@ -1113,7 +1223,8 @@ async def api_plan_next(sid: str, request: Request):
                 child, cost = planner.forward(planner._working_idea(s), s["research"], active, feedback,
                                               directors=s.get("directors") or None,
                                               founder=planner._founder(s), mock=ops.MOCK,
-                                              extra_personas=s.get("custom_directors"))
+                                              extra_personas=s.get("custom_directors"),
+                                              decisions=_decisions_block(s))
             return child, cost, pipeline.LEDGER.tokens()
     try:
         child, cost, toks = await run_in_threadpool(_work)
@@ -1121,7 +1232,9 @@ async def api_plan_next(sid: str, request: Request):
         return ops.busy_response(be)
     except Exception as e:  # noqa: BLE001
         return ops.engine_error(e)
-    dtree.attach(tree, _new_node(child, active["id"]))
+    node = _new_node(child, active["id"])
+    _stamp_decisions(s, node)
+    dtree.attach(tree, node)
     _meter(s.get("user"), cost)
     ops.fold_usage(sid, s, cost, toks, tree=tree, **views.mirror(tree))
     return views.plan_state(store.plan_get(sid))
@@ -1148,7 +1261,8 @@ async def api_plan_revet(sid: str, request: Request):
             proposal = None
             if vetting["verdict"] != "kill":   # cleared → redraft part 1 from the now-substantive thesis
                 proposal, c2 = planner.first_proposal(
-                    shaped["thesis"], s["research"], founder=shaped.get("founder_edge"), mock=ops.MOCK)
+                    shaped["thesis"], s["research"], founder=shaped.get("founder_edge"), mock=ops.MOCK,
+                    decisions=_decisions_block(s))
                 cost = round(cost + c2, 4)
             toks = pipeline.LEDGER.tokens()
     except ops.BusyError as be:
@@ -1158,6 +1272,7 @@ async def api_plan_revet(sid: str, request: Request):
     updates = {"shaped": shaped, "vetting": vetting}
     if proposal is not None:
         root = _new_node(planner.root_node(proposal), None)   # no branches exist yet on a kill, so reseed
+        _stamp_decisions(s, root)
         tree = dtree.seed(root)
         updates.update({"proposal": proposal, "step": 0, "tree": tree, **views.mirror(tree)})
     _meter(s.get("user"), cost)
@@ -1229,7 +1344,8 @@ async def api_plan_redraft(sid: str, request: Request):
     def _work():
         with ops.run_slot(s.get("user"), s.get("stack")):
             sib, cost = planner.rebranch(planner._working_idea(s), s["research"], active, feedback,
-                                         founder=planner._founder(s), mock=ops.MOCK)
+                                         founder=planner._founder(s), mock=ops.MOCK,
+                                         decisions=_decisions_block(s))
             regrade, cost2 = _regrade_setup(s, sib, cost)   # setup reframed → re-grade the verdict on the new angle
             return sib, regrade, cost2, pipeline.LEDGER.tokens()
     try:
@@ -1238,7 +1354,9 @@ async def api_plan_redraft(sid: str, request: Request):
         return ops.busy_response(be)
     except Exception as e:  # noqa: BLE001
         return ops.engine_error(e)
-    dtree.attach(tree, _new_node(sib, active.get("parent")))   # sibling of the active node → same step, new branch
+    sib_node = _new_node(sib, active.get("parent"))   # sibling of the active node → same step, new branch
+    _stamp_decisions(s, sib_node)
+    dtree.attach(tree, sib_node)
     _meter(s.get("user"), cost)
     updates = dict(tree=tree, **views.mirror(tree))
     if regrade:
@@ -1327,7 +1445,7 @@ async def api_plan_board(sid: str, request: Request):
     def _work():
         with ops.run_slot(s.get("user"), s.get("stack")):
             res, cost = board.convene(work_idea, plan_text, question, directors, mock=ops.MOCK,
-                                      extra_personas=customs)
+                                      extra_personas=customs, decisions=_decisions_block(s))
             return res, cost, pipeline.LEDGER.tokens()
     try:
         res, cost, toks = await run_in_threadpool(_work)

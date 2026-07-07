@@ -62,6 +62,7 @@ def chat_reply(session: dict, message: str, history: list | None = None,
 
     if mock:
         picked = journey.count("✓ PICKED")
+        n_dec = len((session.get("decisions") or []))
         calm = "READING" in situation or "MID-FLIGHT" in situation   # rule 5: no forward coaching here
         aware = (" (I can see you're reading an earlier node — answering in place.)" if "READING" in situation
                  else " (A build is running — answering without adding work.)" if "MID-FLIGHT" in situation
@@ -69,6 +70,7 @@ def chat_reply(session: dict, message: str, history: list | None = None,
         base = (f"On “{message.strip()[:80]}”: grounded in your plan for {idea}"
                 + (f" (journey: {picked} picked direction{'s' if picked != 1 else ''} in view)" if journey else "")
                 + (f" (you are on: {situation.splitlines()[0][12:80]})" if situation.startswith("They are ON") else "")
+                + (f" (honoring your {n_dec} standing decision{'s' if n_dec != 1 else ''})" if n_dec else "")
                 + f", the straight read is to lead with your edge ({edge}) and pressure-test the "
                 f"riskiest assumption ({vet.get('biggest_risk') or 'your main assumption'}) before scaling.")
         nxt = ("" if calm else
@@ -82,9 +84,11 @@ def chat_reply(session: dict, message: str, history: list | None = None,
                      f"directions offered and which they PICKED):\n{journey}\n\n") if journey else ""
     situation_block = (f"WHERE THEY ARE RIGHT NOW (this decides whether you may coach forward at "
                        f"all — see rule 5):\n{situation}\n\n") if situation else ""
+    dec = context.decisions_block(session)
+    dec_block = f"{dec}\n\n" if dec else ""
     prompt = (
         f"THE PLAN (the operator's finished business plan for: {idea}):\n{plan_text}\n\n"
-        f"{journey_block}{situation_block}"
+        f"{journey_block}{situation_block}{dec_block}"
         f"GRADED RESEARCH — CITED:\n{cited}\n\nFLAGGED (vendor) CLAIMS:\n{flagged}\n\n"
         f"KILL-GATE: verdict={vet.get('verdict', 'n/a')} · biggest_risk={vet.get('biggest_risk', 'n/a')} "
         f"· cheapest_first_test={vet.get('first_test', 'n/a')}\n\n"

@@ -113,7 +113,8 @@ def _own_lanes(lanes: list[str]) -> list[dict]:
     return owned
 
 
-def prepare(idea: str, mock: bool = False, on_progress=None, prior: dict | None = None) -> dict:
+def prepare(idea: str, mock: bool = False, on_progress=None, prior: dict | None = None,
+            decisions: str | None = None) -> dict:
     """Full pre-build pass for a new session: intake (shape the grab-bag into one thesis) → research
     the thesis → vet it (kill-gate) → draft section 0. Returns everything the session needs to start
     building, plus a `cost` total. The raw `idea` is kept by the caller for display; everything
@@ -174,7 +175,8 @@ def prepare(idea: str, mock: bool = False, on_progress=None, prior: dict | None 
         f_vet = ex.submit(bound(lambda: intake.vet(idea, shaped, research_data, mock=mock)))
         f_pm = ex.submit(bound(lambda: intake.premortem(idea, shaped, research_data, mock=mock)))
         f_prop = ex.submit(bound(lambda: first_proposal(
-            thesis, research_data, founder=shaped.get("founder_edge"), mock=mock)))
+            thesis, research_data, founder=shaped.get("founder_edge"), mock=mock,
+            decisions=decisions)))
         vetting, c_vet = f_vet.result()
         pm, c_pm = f_pm.result()
         proposal, c_prop = f_prop.result()
@@ -198,19 +200,23 @@ def _cited_flagged(rows: list) -> tuple[str, str]:
 def propose(idea: str, section_key: str, research_data: dict, history: list,
             steer: str | None = None, board_notes: str | None = None,
             founder: str | None = None, mock: bool = False,
-            plan_so_far: str | None = None) -> tuple[str, float]:
+            plan_so_far: str | None = None, decisions: str | None = None) -> tuple[str, float]:
     """Draft one section. `steer` is a branch instruction (set when re-drafting after a branch with
     a note). `board_notes` are the board's net takeaways on earlier sections — injected so the
     directors actually shape what gets written next, not just comment after the fact. `founder` is the
-    operator's unfair advantage (so positioning leads with it). Per-section `guide` (from SECTIONS)
-    forces the section to answer what it must. All go into the prompt so the operator's choices, edge,
-    and board genuinely steer the output. Returns (draft, cost)."""
+    operator's unfair advantage (so positioning leads with it). `decisions` is the standing-decisions
+    block (context.decisions_block) — the operator's declared non-negotiables, honored by every
+    section. Per-section `guide` (from SECTIONS) forces the section to answer what it must. All go
+    into the prompt so the operator's choices, edge, and board genuinely steer the output. Returns
+    (draft, cost)."""
     if mock:
         draft = _MOCK_DRAFT[section_key]
         if steer:
             draft += f"\n\n*(revised, {steer})*"
         if board_notes:
             draft += "\n\n*(board-guided)*"
+        if decisions:
+            draft += "\n\n*(decision-guided)*"
         return draft, 0.0
 
     from engine.pipeline import LEDGER, call, SONNET  # heavy; only in real mode
@@ -233,6 +239,7 @@ def propose(idea: str, section_key: str, research_data: dict, history: list,
     founder_block = (f"\n\nOPERATOR'S UNFAIR ADVANTAGE (lead positioning with this): {founder}"
                      if founder else "")
     steer_block = f"\n\nOPERATOR DIRECTION (honor this): {steer}" if steer else ""
+    decisions_block = f"\n\n{decisions}" if decisions else ""   # the standing axioms, pre-labeled
     board_block = (f"\n\nBOARD GUIDANCE (your directors' net takeaways on earlier sections — honor "
                    f"them):\n{board_notes}") if board_notes else ""
     # The sections already written — so this one BUILDS ON them (connect, stay consistent, don't repeat)
@@ -243,8 +250,8 @@ def propose(idea: str, section_key: str, research_data: dict, history: list,
     # runtime data (which section, the idea, decisions, graded research, board) goes in the user message.
     base_prompt = (
         f"SECTION TO WRITE: **{section['title']}** ({section['sub']}).{guide_block}\n\n"
-        f"IDEA:\n{idea}\n\nDECISIONS SO FAR:\n{prior}{plan_block}{founder_block}{steer_block}{board_block}"
-        f"{method_block}\n\n"
+        f"IDEA:\n{idea}\n\nDECISIONS SO FAR:\n{prior}{decisions_block}{plan_block}{founder_block}"
+        f"{steer_block}{board_block}{method_block}\n\n"
         f"CITED RESEARCH:\n{cited}\n\nFLAGGED (vendor) CLAIMS:\n{flagged}")
     # VOICE author seam (spine): generate → voice-lint → reprompt until clean (bounded, accumulating).
     # The system block stays cached (the IP); only the appended lint feedback varies per attempt.
@@ -415,10 +422,13 @@ def root_node(proposal: dict) -> dict:
 
 def forward(idea: str, research_data: dict, node: dict, feedback: str | None,
             directors: list | None = None, founder: str | None = None,
-            mock: bool = False, extra_personas=None) -> tuple[dict, float]:
+            mock: bool = False, extra_personas=None,
+            decisions: str | None = None) -> tuple[dict, float]:
     """Finalize `node`'s section (re-synthesizing if `feedback` steers it), optionally let the board
-    review it, then draft the next section. Returns (child_node_content, cost). When the section just
-    finalized is the last one, the child is a terminal 'done' node (no draft)."""
+    review it, then draft the next section. `decisions` (the standing-decisions block) rides both the
+    re-synthesis and the next draft — and the board's review — so a pinned axiom shapes every hop.
+    Returns (child_node_content, cost). When the section just finalized is the last one, the child is
+    a terminal 'done' node (no draft)."""
     step = node["step"]
     section = SECTIONS[step]
     files = dict(node["files"])
@@ -429,7 +439,8 @@ def forward(idea: str, research_data: dict, node: dict, feedback: str | None,
     if fb:  # a forward note adds/extends — re-synthesize this section honoring it, then finalize
         final, c = propose(idea, section["key"], research_data, history,
                            steer=_steer("yes_and", fb), board_notes=_board_notes(node["board"]),
-                           founder=founder, mock=mock, plan_so_far=_plan_so_far(files))
+                           founder=founder, mock=mock, plan_so_far=_plan_so_far(files),
+                           decisions=decisions)
         cost += c
     else:
         final = node["draft"]
@@ -437,14 +448,14 @@ def forward(idea: str, research_data: dict, node: dict, feedback: str | None,
     if directors:
         review, bc = board.review_section(idea, section["title"], final,
                                           bundle_markdown(idea, files), directors, mock=mock,
-                                          extra_personas=extra_personas)
+                                          extra_personas=extra_personas, decisions=decisions)
         reviews = reviews + [{"section": section["file"], "title": section["title"], **review}]
         cost += bc
     if step + 1 < N:
         nxt = SECTIONS[step + 1]
         draft, c = propose(idea, nxt["key"], research_data, history,
                            board_notes=_board_notes(reviews), founder=founder, mock=mock,
-                           plan_so_far=_plan_so_far(files))
+                           plan_so_far=_plan_so_far(files), decisions=decisions)
         cost += c
         change, cc = _change_note(idea, fb, nxt, mock=mock)   # flag how the note shaped the next part
         cost += cc
@@ -460,7 +471,8 @@ def forward(idea: str, research_data: dict, node: dict, feedback: str | None,
 
 
 def rebranch(idea: str, research_data: dict, node: dict, feedback: str,
-             founder: str | None = None, mock: bool = False) -> tuple[dict, float]:
+             founder: str | None = None, mock: bool = False,
+             decisions: str | None = None) -> tuple[dict, float]:
     """Re-draft `node`'s section taking `feedback` as a redirect — a fresh sibling branch of `node`.
     Used by Back: the operator revises a previous step, spawning a new branch from that point. The
     section isn't finalized (it becomes the live proposal again), so no board review runs here."""
@@ -468,7 +480,7 @@ def rebranch(idea: str, research_data: dict, node: dict, feedback: str,
     draft, c = propose(idea, section["key"], research_data, node["history"],
                        steer=_steer("not_quite", feedback), board_notes=_board_notes(node["board"]),
                        plan_so_far=_plan_so_far(node.get("files") or {}),
-                       founder=founder, mock=mock)
+                       founder=founder, mock=mock, decisions=decisions)
     change, cc = _change_note(idea, feedback, section, mock=mock)
     sib = {"step": node["step"], "section": section["key"], "title": section["title"],
            "sub": section["sub"], "draft": draft, "files": dict(node["files"]),
@@ -501,10 +513,11 @@ def nudges(idea: str, section_key: str, draft: str, mock: bool = False) -> tuple
 
 
 def first_proposal(idea: str, research_data: dict, founder: str | None = None,
-                   mock: bool = False) -> tuple[dict, float]:
+                   mock: bool = False, decisions: str | None = None) -> tuple[dict, float]:
     """Draft section 0's proposal right after research completes."""
     s0 = SECTIONS[0]
-    draft, cost = propose(idea, s0["key"], research_data, [], founder=founder, mock=mock)
+    draft, cost = propose(idea, s0["key"], research_data, [], founder=founder, mock=mock,
+                          decisions=decisions)
     return {"section": s0["key"], "title": s0["title"], "draft": draft}, cost
 
 
@@ -560,6 +573,9 @@ if __name__ == "__main__":  # self-test (mock, no API)
     assert child["step"] == 1 and len(child["files"]) == 1            # section 0 finalized
     assert "revised" in child["files"]["1-the-setup.md"]             # forward note steered it
     assert child["change"] and "go bolder" in child["change"]        # the fold-in is flagged
+    dchild, _ = forward("guitar coaching", r, root, None, mock=True,
+                        decisions="- [NON-NEGOTIABLE] no cold calls")
+    assert "decision-guided" in dchild["draft"]          # standing decisions steer the next draft
     sib, _ = rebranch("guitar coaching", r, root, "narrower niche", mock=True)
     assert sib["step"] == 0 and "revised" in sib["draft"] and sib["files"] == {}  # re-draft, no finalize
     assert sib["change"] and "narrower niche" in sib["change"]

@@ -30,15 +30,19 @@ from app import personas  # noqa: E402
 from app import skill_registry as skills  # noqa: E402
 
 
-def _director_take(idea: str, plan_text: str, focus: str, persona: dict) -> tuple[dict, float]:
+def _director_take(idea: str, plan_text: str, focus: str, persona: dict,
+                   decisions: str | None = None) -> tuple[dict, float]:
     """One director's take. Real mode: one Sonnet call under that persona's system block. `persona` is
-    a full persona dict (a built-in or a custom-forged one), so customs need no special casing."""
+    a full persona dict (a built-in or a custom-forged one), so customs need no special casing.
+    `decisions` (the standing-decisions block) keeps a director from recommending against a pinned
+    axiom — and lets them name it when it shapes their take."""
     from engine.pipeline import LEDGER, call, SONNET
     start = len(LEDGER.rows)
+    dec_block = f"\n\n{decisions}" if decisions else ""
     ans = call(f"board_{persona['key']}", SONNET, max_tokens=450,
                system=personas.system_for_persona(persona), cache=True,
-               prompt=(f"IDEA:\n{idea}\n\nPLAN SO FAR:\n{plan_text or '(early — little built yet)'}\n\n"
-                       f"WHAT TO WEIGH IN ON:\n{focus}\n\n"
+               prompt=(f"IDEA:\n{idea}\n\nPLAN SO FAR:\n{plan_text or '(early — little built yet)'}"
+                       f"{dec_block}\n\nWHAT TO WEIGH IN ON:\n{focus}\n\n"
                        "Give your take in 2-4 punchy sentences from your persona's focus. Lead with the "
                        "one thing you'd change. If this is outside your lane, say so in one line."))
     return {"key": persona["key"], "name": persona["name"], "first": persona.get("first"),
@@ -48,16 +52,18 @@ def _director_take(idea: str, plan_text: str, focus: str, persona: dict) -> tupl
 _VERDICTS = ("agree", "concern", "dissent", "non-starter")
 
 
-def _skeptic_take(idea: str, plan_text: str, focus: str) -> tuple[dict, float]:
+def _skeptic_take(idea: str, plan_text: str, focus: str,
+                  decisions: str | None = None) -> tuple[dict, float]:
     """The standing adversary's structured verdict. Ported from biz-skeptic + business-manager G3/G4:
     a counterfactual-CoT prompt (premortem / inversion / strongest objection) that forces a committed
     verdict, NOT an agreeable take. Its rationale is preserved verbatim downstream (G7)."""
     from engine.pipeline import LEDGER, call, extract_json, SONNET
     start = len(LEDGER.rows)
     p = personas.get(personas.SKEPTIC_KEY)
+    dec_block = f"\n\n{decisions}" if decisions else ""
     out = call("board_skeptic", SONNET, max_tokens=400, system=personas.system_for(personas.SKEPTIC_KEY),
                cache=True, prompt=(
-        f"IDEA:\n{idea}\n\nPLAN SO FAR:\n{plan_text or '(early — little built yet)'}\n\n"
+        f"IDEA:\n{idea}\n\nPLAN SO FAR:\n{plan_text or '(early — little built yet)'}{dec_block}\n\n"
         f"WHAT TO PRESSURE-TEST:\n{focus}\n\n"
         "Run your three checks silently, then COMMIT to a verdict. Imagine you strongly disagree with "
         "this plan — what is your single strongest objection? Output STRICTLY this JSON, no preamble:\n"
@@ -133,12 +139,14 @@ _MOCK_SKEPTIC = {
 
 
 def convene(idea: str, plan_text: str, focus: str, director_keys: list[str] | None = None,
-            mock: bool = False, skeptic: bool = True, extra_personas=None) -> tuple[dict, float]:
+            mock: bool = False, skeptic: bool = True, extra_personas=None,
+            decisions: str | None = None) -> tuple[dict, float]:
     """Run the board on `focus`. `director_keys` defaults to the starter board. The Skeptic is a
     STANDING seat — always present unless `skeptic=False` — so every board has an adversary in the
     room. `extra_personas` (a list of persona dicts, or a {key: persona} map) seats custom-forged
-    directors (director_forge) alongside the built-ins. Returns ({directors, skeptic, consensus,
-    conflicts, verdict, disclaimer}, total_cost)."""
+    directors (director_forge) alongside the built-ins. `decisions` (the standing-decisions block)
+    rides every seat so no director recommends against a pinned axiom. Returns ({directors, skeptic,
+    consensus, conflicts, verdict, disclaimer}, total_cost)."""
     extra = ({p["key"]: p for p in extra_personas} if isinstance(extra_personas, list)
              else dict(extra_personas or {}))
 
@@ -168,8 +176,9 @@ def convene(idea: str, plan_text: str, focus: str, director_keys: list[str] | No
     # bound() is load-bearing — without it these workers don't inherit the run's provider contextvar
     # and the calls would have no key bound (there is no FILG fallback key).
     with ThreadPoolExecutor(max_workers=min(5, len(keys) + 1)) as ex:
-        dfut = [ex.submit(bound(_director_take), idea, plan_text, focus, resolve(k)) for k in keys]
-        sfut = ex.submit(bound(_skeptic_take), idea, plan_text, focus) if skeptic else None
+        dfut = [ex.submit(bound(_director_take), idea, plan_text, focus, resolve(k), decisions)
+                for k in keys]
+        sfut = ex.submit(bound(_skeptic_take), idea, plan_text, focus, decisions) if skeptic else None
         results = [f.result() for f in dfut]
         sk, sc = sfut.result() if sfut else (None, 0.0)
     directors = [r for r, _ in results]
@@ -182,11 +191,12 @@ def convene(idea: str, plan_text: str, focus: str, director_keys: list[str] | No
 
 def review_section(idea: str, section_title: str, section_draft: str, plan_text: str,
                    director_keys: list[str] | None = None, mock: bool = False,
-                   extra_personas=None) -> tuple[dict, float]:
+                   extra_personas=None, decisions: str | None = None) -> tuple[dict, float]:
     """Board reviews ONE finalized plan section — the 'each step gets vetted by your board' behavior."""
     focus = (f"Review this section of the plan — '{section_title}'. Is it right? What would you change?"
              f"\n\nSECTION DRAFT:\n{section_draft}")
-    return convene(idea, plan_text, focus, director_keys, mock=mock, extra_personas=extra_personas)
+    return convene(idea, plan_text, focus, director_keys, mock=mock, extra_personas=extra_personas,
+                   decisions=decisions)
 
 
 if __name__ == "__main__":  # self-test (mock, no API)

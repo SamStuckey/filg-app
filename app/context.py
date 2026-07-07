@@ -183,6 +183,25 @@ def situation(s: dict, node_id: str | None = None, working: str | None = None) -
     return "\n".join(parts)
 
 
+def decisions_block(s: dict) -> str:
+    """The operator's STANDING DECISIONS (axioms / non-negotiables / settled preferences) as one
+    prompt block — hardest first, each labeled with its weight so a model can't quietly demote a
+    hard constraint into a suggestion. Every model-facing surface (section drafts, spreads, merges,
+    the board, the advisor) injects THIS block; empty when none are pinned. One renderer, one
+    wording — a consumer must never hand-roll its own decisions string."""
+    from app import decisions as _dec  # noqa: PLC0415 — avoid a module-load cycle
+    rows = _dec.ordered((s or {}).get("decisions"))
+    if not rows:
+        return ""
+    lines = "\n".join(
+        f"- [{_dec.LABELS.get(d.get('weight'), 'FIRM')}] {d['text']}"
+        + (f" (context: {d['why']})" if d.get("why") else "") for d in rows)
+    return ("THE OPERATOR'S STANDING DECISIONS (declared settled — these constrain everything: "
+            "honor every NON-NEGOTIABLE absolutely, treat FIRM ones as strong defaults you bend "
+            "only with an explicit reason, lean toward NICE-TO-HAVEs when it's free to. When one "
+            "of these shapes your output, say which):\n" + lines)
+
+
 def evidence(s: dict) -> tuple[str, str]:
     """The gate-graded research as two prompt blocks: (cited, flagged). The labels ARE the product —
     a consumer must never re-merge these into one unlabeled list."""
@@ -228,4 +247,10 @@ if __name__ == "__main__":  # self-test: the four 2026-07-04 drops, each pinned 
     c, f = evidence({"research": {"rows": [{"mark": "ok", "text": "a", "url": "u"},
                                            {"mark": "warn", "text": "b", "url": "v"}]}})
     assert "a" in c and "b" in f
+    # standing decisions render hardest-first with their weight labels; empty stays empty
+    db = decisions_block({"decisions": [
+        {"id": "d1", "text": "Prefer local clients", "weight": "nice_to_have", "why": ""},
+        {"id": "d2", "text": "No cold-call marketing", "weight": "non_negotiable", "why": "hates phones"}]})
+    assert db.index("[NON-NEGOTIABLE] No cold-call marketing") < db.index("[NICE-TO-HAVE]")
+    assert "hates phones" in db and decisions_block({}) == ""
     print("context.py self-test OK — the four known drops are pinned")
