@@ -59,6 +59,7 @@ from app import skill_registry as skills  # noqa: E402 — the skill bodies (hel
 from engine import provider   # noqa: E402 — BYOK: per-run LLM provider (FILG's key vs a user's OpenRouter key)
 from engine import pipeline   # noqa: E402 — engine: per-run cost ledger (run_ledger) for safe concurrency
 from engine import model_catalog  # noqa: E402 — model ids/prices/slugs + cached Models API availability
+from engine import tree as dtree  # noqa: E402 — the decision tree: node wiring, kinds, attachments, run epochs
 
 from . import auth, billing, keys, planner, render, store, tiers  # noqa: E402 — persistence, auth, billing, keys, tiers, share-page HTML
 # Entitlement/provider/metering decisions live in access.py (the pure service layer). Re-exported here
@@ -638,18 +639,10 @@ def _share_path(s: dict) -> list[dict]:
     Reads the STORED tree (nodes = dict keyed by id; kind derived via _kind), not the frontend view."""
     tree = s.get("tree") or {}
     nodes = tree.get("nodes") or {}
-    chain, cur = [], tree.get("active")
-    while cur is not None and cur in nodes:
-        chain.append(nodes[cur])
-        cur = nodes[cur].get("parent")
-    chain.reverse()
     out = []
-    for n in chain:
-        kind = _kind(n)
-        label = (n.get("title")
-                 or {"idea": "The idea", "brainstorm": "Directions explored", "refined": "Refined idea",
-                     "fork": "Fork"}.get(kind, f"Part {int(n.get('step') or 0) + 1}"))
-        out.append({"kind": kind or "section", "label": label,
+    for n in dtree.chain(nodes, tree.get("active")):
+        out.append({"kind": _kind(n),
+                    "label": dtree.label(n, f"Part {int(n.get('step') or 0) + 1}"),
                     "note": (n.get("feedback") or "").strip()})
     return out
 
@@ -714,13 +707,9 @@ def _plan_state(s: dict) -> dict:
     }
 
 
-# ── Branching decision tree — node wiring around planner's pure tree functions ─
-def _new_node(content: dict, parent: str | None) -> dict:
-    """Wrap pure node content (from planner) with the tree bookkeeping main.py owns."""
-    return {"id": uuid.uuid4().hex[:8], "parent": parent, "children": [], **content}
-
-
-_kind = context.kind   # one owner for "what kind is this node" — the context engine
+# ── Branching decision tree — engine/tree.py owns the wiring; planner supplies pure content ──
+_new_node = dtree.new_node   # node bookkeeping (id / parent / children) has one owner: the engine
+_kind = context.kind         # one owner for "what kind is this node" — the context engine
 
 
 def _tree_view(tree: dict) -> dict:
@@ -817,7 +806,7 @@ def _ensure_tree(s: dict) -> dict:
                       "sub": (sec or {}).get("sub", ""), "draft": p.get("draft"),
                       "files": s.get("files") or {}, "history": s.get("history") or [],
                       "board": s.get("board") or [], "feedback": None}, None)
-    return {"nodes": {node["id"]: node}, "active": node["id"]}
+    return dtree.seed(node)
 
 
 def _plan_research(session_id: str, idea: str, user: str) -> None:
@@ -843,7 +832,7 @@ def _plan_research(session_id: str, idea: str, user: str) -> None:
                 usage.record_spend(prep["cost"] - prep["research_cost"])  # intake + vet + first draft → daily
         root = _new_node(planner.root_node(prep["proposal"]), None)  # seed the decision tree's root
         root["log"] = _op_log(progress, 0)
-        tree = {"nodes": {root["id"]: root}, "active": root["id"]}
+        tree = dtree.seed(root)
         store.plan_save(session_id, status="building", research=prep["research"], step=0,
                         proposal=prep["proposal"], shaped=prep["shaped"], vetting=prep["vetting"],
                         cost=prep["cost"], tokens=toks, tree=tree, progress=progress)
@@ -853,45 +842,30 @@ def _plan_research(session_id: str, idea: str, user: str) -> None:
 
 
 # ── The diverge/converge funnel (brainstorm → merge → commit), layered on the same node tree ──
-_MAX_BOARD_HISTORY = 12   # per-node board entries (section reviews + chat convenes) stay bounded
-_MAX_NODE_LOG = 40        # per-node build-log lines (receipts + 🔎 lane details) stay bounded
+# Per-node history bounds (board=12, log=40) live in the attachment registry (app/domain/nodes.py).
+_op_log = dtree.op_log   # one op's progress slice, sentinel-free + bounded, persisted on its node
 
 
-def _op_log(progress: list, start: int) -> list:
-    """This op's slice of the progress stream, persisted on the node it built — the durable
-    'how this was built' record (backlog §v2 #10; the client stash alone died on reload). The
-    §LANES§/§LANEDONE§ sentinels only drive the live leaflet animation, so they're dropped;
-    the readable receipts and the 🔎 per-lane details stay."""
-    return [ln for ln in progress[start:] if not str(ln).startswith("§")][-_MAX_NODE_LOG:]
-
-
-def _inherit_board(nodes: dict, node: dict) -> None:
-    """A freshly created node carries its parent's accumulated board history forward (per-section
-    reviews + chat convenes), so a convene during the funnel still steers + exports after commit."""
-    p = nodes.get(node.get("parent") or "")
-    if p and p.get("board"):
-        node["board"] = list(p["board"])[-_MAX_BOARD_HISTORY:]
-
-
-def _diverge_tree(diverge: dict, parent: str | None = None,
-                  board: list | None = None) -> tuple[dict, str]:
-    """A `brainstorm` fork node with one `option` child per direction. Returns (nodes_by_id,
-    brainstorm_node_id). The active pointer sits on the brainstorm node (the fork being decided).
-    `board` seeds the fork (and its options) with the pivot point's board history."""
-    b = _new_node({"kind": "brainstorm", "step": 0, "title": "A few directions",
-                   "spread": diverge.get("spread"), "draft": None, "files": {}, "history": [],
-                   # a declared set-aside (part of the ask the engine declined, with its reason) is
-                   # SURFACED, never silent — it rides the node so every view can show it
-                   "set_aside": diverge.get("set_aside"),
-                   "board": list(board or [])}, parent)
-    nodes = {b["id"]: b}
+def _attach_spread(tree: dict, diverge: dict, parent: str | None,
+                   board: list | None = None) -> str:
+    """Attach a `brainstorm` fork node + one `option` child per direction into `tree`, and land
+    the active pointer on the fork (the node being decided). Returns the fork's id. `board` seeds
+    the fork and its options with the pivot point's board history (a spread's options branch from
+    the FORK, so they inherit through it)."""
+    b = dtree.attach(tree, _new_node(
+        {"kind": "brainstorm", "step": 0, "title": "A few directions",
+         "spread": diverge.get("spread"), "draft": None, "files": {}, "history": [],
+         # a declared set-aside (part of the ask the engine declined, with its reason) is
+         # SURFACED, never silent — it rides the node so every view can show it
+         "set_aside": diverge.get("set_aside"),
+         "board": dtree.clip("board", board or [])}, parent))
     for d in (diverge.get("directions") or []):
-        o = _new_node({"kind": "option", "step": 0, "title": d.get("title") or "Direction",
-                       "direction": d, "draft": d.get("one_liner"), "files": {}, "history": [],
-                       "board": list(board or [])}, b["id"])
-        b["children"].append(o["id"])
-        nodes[o["id"]] = o
-    return nodes, b["id"]
+        dtree.attach(tree, _new_node(
+            {"kind": "option", "step": 0, "title": d.get("title") or "Direction",
+             "direction": d, "draft": d.get("one_liner"), "files": {}, "history": []},
+            b["id"]), activate=False, inherit=True)
+    tree["active"] = b["id"]
+    return b["id"]
 
 
 def _refined_node(m: dict, selected: list, parent: str | None, feedback: str | None = None) -> dict:
@@ -942,7 +916,7 @@ def _fresh_tree_or_abandon(sid: str, tok: str | None):
     metered; only the RESULT is discarded — the user's newer state always wins."""
     s1 = store.plan_get(sid) or {}
     tree = s1.get("tree") or {}
-    if tok and tree.get("_run") != tok:
+    if not dtree.run_is_current(tree, tok):
         prog = list(s1.get("progress") or []) + ["✂ run abandoned — you moved on before it finished"]
         store.plan_save(sid, progress=prog)
         return None
@@ -986,11 +960,7 @@ def _run_merge(sid: str, option_ids: list, user: str, tok: str | None = None,
         parent = (refine_of if refine_of and nodes.get(refine_of) else tree.get("active"))
         refined = _refined_node(m, [] if refine_of else option_ids, parent, feedback=note)
         refined["log"] = _op_log(progress, len(s0.get("progress") or []))
-        _inherit_board(nodes, refined)
-        nodes[refined["id"]] = refined
-        if parent and nodes.get(parent):
-            nodes[parent].setdefault("children", []).append(refined["id"])
-        tree["active"] = refined["id"]
+        dtree.attach(tree, refined, inherit=True)
         store.plan_save(sid, status="building", stage="refined", tree=tree, progress=progress,
                         cost=round(base_cost + cost, 4), tokens=base_tokens + toks)
     except Exception as e:  # noqa: BLE001
@@ -1023,16 +993,11 @@ def _deep_build(sid: str, thesis: str, user: str, tok: str | None = None,
             return                                # the user pivoted mid-run — their newer state wins
         _s1, tree = fresh
         nodes = tree.get("nodes") or {}
-        parent = tree.get("active")
-        root = _new_node(planner.root_node(prep["proposal"]), parent)   # a plain section node (kind absent)
+        root = _new_node(planner.root_node(prep["proposal"]), tree.get("active"))  # a plain section node (kind absent)
         if picks:
             root["selected"] = [i for i in picks if i in nodes]   # the join the graph rides through
         root["log"] = _op_log(progress, len(s0.get("progress") or []))
-        _inherit_board(nodes, root)
-        nodes[root["id"]] = root
-        if parent and nodes.get(parent):
-            nodes[parent].setdefault("children", []).append(root["id"])
-        tree["active"] = root["id"]
+        dtree.attach(tree, root, inherit=True)
         store.plan_save(sid, status="building", stage="building", research=prep["research"], step=0,
                         proposal=prep["proposal"], shaped=prep["shaped"], vetting=prep["vetting"],
                         tree=tree, progress=progress, cost=round(base_cost + prep["cost"], 4),
@@ -1151,10 +1116,9 @@ async def api_brainstorm(request: Request):
     # no branch is ever orphaned.
     base = _new_node({"kind": "idea", "step": 0, "title": "Your idea", "draft": idea,
                       "files": {}, "history": [], "board": []}, None)
-    nodes, bid = _diverge_tree(d, base["id"])
-    base["children"].append(bid)
-    nodes[base["id"]] = base
-    store.plan_save(sid, status="building", stage="brainstorm", tree={"nodes": nodes, "active": bid},
+    tree = dtree.seed(base)
+    _attach_spread(tree, d, base["id"])
+    store.plan_save(sid, status="building", stage="brainstorm", tree=tree,
                     cost=round(cost, 4), tokens=toks)
     return _plan_state(store.plan_get(sid))
 
@@ -1209,14 +1173,10 @@ async def api_plan_rebrainstorm(sid: str, request: Request):
     # permanent evidence line — pivots are core IP, every hop must be verifiable in the server log
     print(f"[pivot] sid={sid} node_in={(body.get('node') or None)!r} resolved={at.get('id')}/"
           f"{_kind(at) if at else None} parent={parent} feedback={feedback[:80]!r}")
-    new_nodes, bid = _diverge_tree(d, parent, board=(at or {}).get("board"))
-    new_nodes[bid]["feedback"] = feedback or idea[:120]   # the pivot ask, visible on the fork forever
-    nodes.update(new_nodes)
-    if parent and nodes.get(parent):
-        nodes[parent].setdefault("children", []).append(bid)
     tree["nodes"] = nodes
-    tree["active"] = bid
-    tree["_run"] = uuid.uuid4().hex[:8]      # pivoting abandons any run still in flight — you moved on
+    bid = _attach_spread(tree, d, parent, board=(at or {}).get("board"))
+    nodes[bid]["feedback"] = feedback or idea[:120]   # the pivot ask, visible on the fork forever
+    dtree.begin_run(tree)                    # pivoting abandons any run still in flight — you moved on
     _fold_usage(sid, s, cost, toks, tree=tree, stage="brainstorm", **_mirror(tree))
     return _plan_state(store.plan_get(sid))
 
@@ -1241,9 +1201,8 @@ async def api_plan_merge(sid: str, request: Request):
     if (prov is not None and getattr(prov, "bills_filg", False) and not MOCK
             and not _is_subscriber(s.get("user")) and usage.kill_switch_tripped()):
         return _engine_error(DailyCapError(), 402)
-    tok = uuid.uuid4().hex[:8]
     tree = s.get("tree") or {"nodes": {}, "active": None}
-    tree["_run"] = tok                       # this run's epoch — a pivot mid-run invalidates it
+    tok = dtree.begin_run(tree)              # this run's epoch — a pivot mid-run invalidates it
     store.plan_save(sid, status="researching", stage="merging", tree=tree)
     threading.Thread(target=_run_merge, args=(sid, valid, s.get("user"), tok), daemon=True).start()
     return {"id": sid}
@@ -1280,8 +1239,7 @@ async def api_plan_refine(sid: str, request: Request):
     if (prov is not None and getattr(prov, "bills_filg", False) and not MOCK
             and not _is_subscriber(s.get("user")) and usage.kill_switch_tripped()):
         return _engine_error(DailyCapError(), 402)
-    tok = uuid.uuid4().hex[:8]
-    tree["_run"] = tok                       # this run's epoch — a pivot mid-run invalidates it
+    tok = dtree.begin_run(tree)              # this run's epoch — a pivot mid-run invalidates it
     store.plan_save(sid, status="researching", stage="merging", tree=tree)
     threading.Thread(target=_run_merge, args=(sid, sel, s.get("user"), tok),
                      kwargs={"refine_of": at.get("id"), "note": note}, daemon=True).start()
@@ -1374,8 +1332,7 @@ async def api_plan_commit(sid: str, request: Request):
         if skim.get("claims") and (build_from.get("thesis") or "").strip() == thesis.strip():
             prior = {"thesis": build_from.get("thesis"), "founder_edge": build_from.get("founder_edge"),
                      "claims": skim["claims"]}
-    tok = uuid.uuid4().hex[:8]
-    tree["_run"] = tok                       # this run's epoch — a pivot mid-run invalidates it
+    tok = dtree.begin_run(tree)              # this run's epoch — a pivot mid-run invalidates it
     store.plan_save(sid, status="researching", stage="researching", tree=tree)
     threading.Thread(target=_deep_build, args=(sid, thesis, s.get("user"), tok, picks, prior),
                      daemon=True).start()
@@ -1742,10 +1699,7 @@ async def api_plan_next(sid: str, request: Request):
         return _busy_response(be)
     except Exception as e:  # noqa: BLE001
         return _engine_error(e)
-    node = _new_node(child, active["id"])
-    tree["nodes"][node["id"]] = node
-    active.setdefault("children", []).append(node["id"])
-    tree["active"] = node["id"]
+    dtree.attach(tree, _new_node(child, active["id"]))
     _meter(s.get("user"), cost)
     _fold_usage(sid, s, cost, toks, tree=tree, **_mirror(tree))
     return _plan_state(store.plan_get(sid))
@@ -1782,7 +1736,7 @@ async def api_plan_revet(sid: str, request: Request):
     updates = {"shaped": shaped, "vetting": vetting}
     if proposal is not None:
         root = _new_node(planner.root_node(proposal), None)   # no branches exist yet on a kill, so reseed
-        tree = {"nodes": {root["id"]: root}, "active": root["id"]}
+        tree = dtree.seed(root)
         updates.update({"proposal": proposal, "step": 0, "tree": tree, **_mirror(tree)})
     _meter(s.get("user"), cost)
     _fold_usage(sid, s, cost, toks, **updates)
@@ -1821,11 +1775,7 @@ async def api_plan_back(sid: str, request: Request):
         return _busy_response(be)
     except Exception as e:  # noqa: BLE001
         return _engine_error(e)
-    node = _new_node(sib, prev.get("parent"))   # sibling of `prev` → branches from prev's parent
-    tree["nodes"][node["id"]] = node
-    if prev.get("parent"):
-        tree["nodes"][prev["parent"]].setdefault("children", []).append(node["id"])
-    tree["active"] = node["id"]
+    dtree.attach(tree, _new_node(sib, prev.get("parent")))   # sibling of `prev` → branches from prev's parent
     _meter(s.get("user"), cost)
     updates = dict(tree=tree, **_mirror(tree))
     if regrade:
@@ -1866,11 +1816,7 @@ async def api_plan_redraft(sid: str, request: Request):
         return _busy_response(be)
     except Exception as e:  # noqa: BLE001
         return _engine_error(e)
-    node = _new_node(sib, active.get("parent"))   # sibling of the active node → same step, new branch
-    tree["nodes"][node["id"]] = node
-    if active.get("parent"):
-        tree["nodes"][active["parent"]].setdefault("children", []).append(node["id"])
-    tree["active"] = node["id"]
+    dtree.attach(tree, _new_node(sib, active.get("parent")))   # sibling of the active node → same step, new branch
     _meter(s.get("user"), cost)
     updates = dict(tree=tree, **_mirror(tree))
     if regrade:
@@ -1978,7 +1924,7 @@ async def api_plan_board(sid: str, request: Request):
         entry = {"section": "convene", "title": f"Board convened: “{question[:90]}”", **res}
         # the legacy /respond flow advances the flat mirror without the tree — trust whichever is ahead
         base = max((a.get("board") or []), (s.get("board") or []), key=len)
-        reviews = (list(base) + [entry])[-_MAX_BOARD_HISTORY:]
+        reviews = dtree.clip("board", list(base) + [entry])
         a["board"] = reviews
         extra.update(tree=tree, board=reviews)
     nc, nt = _fold_usage(sid, s, cost, toks, **extra)
