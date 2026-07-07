@@ -1122,14 +1122,22 @@ function graphBounds(){   // the laid-out tree's extent in graph coords
     x0=Math.min(x0,p.x);y0=Math.min(y0,p.y);x1=Math.max(x1,p.x+NW);y1=Math.max(y1,p.y+NH);});
   return {x:x0,y:y0,w:Math.max(1,x1-x0),h:Math.max(1,y1-y0)};
 }
-function fitView(){   // frame the whole tree (F) — zoom-by-pixels; stubs are the zoom-by-meaning lever
-  const b=graphBounds(); if(!b)return;
-  const r=$('right').getBoundingClientRect();
-  const k=Math.min(1,Math.max(0.25,Math.min((r.width-90)/b.w,(r.height-140)/b.h)));
+function frameBounds(b,pad){   // center + zoom-to-fit a bounds rect in the panel (shared: fit-all + search)
+  if(!b)return;
+  const r=$('right').getBoundingClientRect(); pad=(pad==null?90:pad);
+  const k=Math.min(1,Math.max(0.25,Math.min((r.width-pad)/b.w,(r.height-140)/b.h)));
   BROWSING=true; VIEW.k=k;
   VIEW.x=(r.width-b.w*k)/2-b.x*k;
   VIEW.y=(r.height-b.h*k)/2-b.y*k+16;
   applyView(true); renderMinimap();
+}
+function fitView(){ frameBounds(graphBounds()); }   // frame the whole tree (F) — stubs are the zoom-by-meaning lever
+function _matchBounds(ids){   // extent over a subset of laid-out nodes (for framing search hits)
+  if(!LAYOUT||!LAYOUT.pos)return null;
+  let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9,n=0;
+  ids.forEach(id=>{const p=LAYOUT.pos[id]; if(!p)return; n++;
+    x0=Math.min(x0,p.x);y0=Math.min(y0,p.y);x1=Math.max(x1,p.x+NW);y1=Math.max(y1,p.y+NH);});
+  return n?{x:x0,y:y0,w:Math.max(1,x1-x0),h:Math.max(1,y1-y0)}:null;
 }
 function zoomStep(f){   // +/− buttons and keys zoom on the panel center
   const r=$('right').getBoundingClientRect(), cx=r.width/2, cy=r.height/2;
@@ -1191,6 +1199,25 @@ function nodeMatches(n,q){
   return hay.indexOf(q.toLowerCase())>=0;
 }
 function gSearch(q){ GQUERY=(q||'').trim(); if(VIEWMODE==='graph')renderGraph(); }
+// The search glow is a TRANSIENT overlay: Enter frames the hits, Esc drops it, and any node/canvas
+// click clears it before doing its normal action. Only zoom + drag (browse) keep the glow up.
+function _dropSearchQuery(){ GQUERY=''; const gs=$('gsearch'); if(gs)gs.value='';
+  const c=$('gctrls'); if(c)c.classList.remove('searchopen'); }   // state only — the CALLER re-renders
+function gClearSearch(){ const had=!!GQUERY; _dropSearchQuery(); if(had&&VIEWMODE==='graph')renderGraph(); }
+function searchEnter(){   // Enter: close the box, then frame the hits — fit them all, or open the lone match
+  const c=$('gctrls'); if(c){c.classList.remove('searchopen');c.classList.remove('gmenu-open');}
+  const gs=$('gsearch'); if(gs)gs.blur();
+  if(!S||!GQUERY)return gClearSearch();
+  const {m}=nodesOf(S);
+  const ids=Object.keys(m).filter(id=>m[id]&&nodeMatches(m[id],GQUERY));
+  if(ids.length===1){ _dropSearchQuery(); return focusNode(ids[0]); }   // lone hit → open it (glow clears)
+  if(ids.length>1){ return frameBounds(_matchBounds(ids),130); }        // several → zoom to see them all, glow stays
+  gClearSearch();                                                       // no hits → just close + clear
+}
+function searchKey(e){
+  if(e.key==='Enter'){ e.preventDefault(); searchEnter(); }
+  else if(e.key==='Escape'){ e.preventDefault(); const gs=$('gsearch'); if(gs)gs.blur(); gClearSearch(); }
+}
 // ── Header hamburger (mobile) + graph-control dropdown (mobile) + expanding search (all sizes) ──
 function toggleHMenu(){ const l=$('lefttop'); if(l)l.classList.toggle('menu-open'); }
 function closeHMenu(){ const l=$('lefttop'); if(l)l.classList.remove('menu-open'); }
@@ -1323,8 +1350,9 @@ function initGraphInput(){
     if(Math.abs(dx)+Math.abs(dy)>6){ moved=true; BROWSING=true; g.classList.add('dragging'); g.setPointerCapture(e.pointerId); }
     if(moved){ VIEW.x=drag.vx+dx; VIEW.y=drag.vy+dy; applyView(false); } });
   const stop=e=>{ if(drag&&!moved){
+      const hadQ=!!GQUERY;   // a click (not a drag) clears the search glow; drag/zoom keep it up
       if(LEAF_OPEN.size&&!e.target.closest('.gleaf')){ LEAF_OPEN=new Set(); renderView(); }   // click out of an open leaf → fold it
-      if(!e.target.closest('.gnode')&&!e.target.closest('.gleaf')){ unfocus(); } }            // click outside → the doc collapses into its node
+      if(!e.target.closest('.gnode')&&!e.target.closest('.gleaf')){ if(hadQ)_dropSearchQuery(); unfocus(); if(hadQ)renderGraph(); } }   // click outside → collapse the doc + clear the glow
     drag=null; g.classList.remove('dragging'); };
   g.addEventListener('pointerup',stop); g.addEventListener('pointercancel',stop);
   // Trackpad semantics: pinch (ctrlKey wheel) zooms · two-finger swipe PANS · over an open node's
@@ -1347,8 +1375,9 @@ function gNodeClick(id){
   if(id==='_ghost'){ const b=$('ws-box'); if(b)b.focus(); return; }   // the ghost wants your words
   if(id==='_wip')return;                          // the node being born isn't readable yet
   if(id.indexOf('_stub:')===0)return stubExpand(id.slice(6));   // a folded branch: click unfolds it
-  if(FOCUS===id)return;                           // already reading it
-  focusNode(id);                                  // browsing rendered nodes works even while it builds
+  const hadQ=!!GQUERY; if(hadQ)_dropSearchQuery();   // a click clears the search glow, then the normal focus runs
+  if(FOCUS===id){ if(hadQ)renderGraph(); return; }   // already open — just drop the glow
+  focusNode(id);                                  // re-renders with the query cleared; browsing works mid-build
 }
 function focusActive(force){ const {t}=nodesOf(S); BROWSING=false; if(force)FOCUS=null; focusNode(t.active); }
 function focusNode(id){

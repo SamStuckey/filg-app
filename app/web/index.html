@@ -119,7 +119,7 @@ __FILG_HEAD__
         <div id=gsearchwrap>
           <button type=button id=gsearchbtn onclick="toggleSearch()" aria-label="Search the tree" title="Search the tree (/)">🔍<span class=gclabel>Search</span></button>
           <input id=gsearch type=search placeholder="Search the tree…" autocomplete=off
-                 oninput="gSearch(this.value)" onblur="searchBlur()">
+                 oninput="gSearch(this.value)" onblur="searchBlur()" onkeydown="searchKey(event)">
           <span id=gsearch-n class=gsn hidden></span>
         </div>
         <!-- fit/center + zoom; on mobile these live inside the ⋯ dropdown, +/− on one row -->
