@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from engine import pipeline
-from app import main
+from app import main, ops
 
 
 def _usage(tin=10, tout=5):
@@ -38,23 +38,23 @@ def test_bound_carries_ledger_into_worker_threads():
 
 # ── per-user concurrency cap ──────────────────────────────────────────────────
 def test_run_slot_caps_at_flat_limit():
-    user = "conc@x.com"                     # flat cap = main.CONCURRENCY_CAP (3)
-    cap = main.CONCURRENCY_CAP
-    assert main._concurrency_cap(user) == cap
-    held = [main._run_slot(user) for _ in range(cap)]
+    user = "conc@x.com"                     # flat cap = ops.CONCURRENCY_CAP (3)
+    cap = ops.CONCURRENCY_CAP
+    assert ops.concurrency_cap(user) == cap
+    held = [ops.run_slot(user) for _ in range(cap)]
     for cm in held:
         cm.__enter__()
-    with pytest.raises(main.BusyError):
-        with main._run_slot(user):
+    with pytest.raises(ops.BusyError):
+        with ops.run_slot(user):
             pass
     for cm in reversed(held):   # exit LIFO — context managers (the bound provider/ledger) must unwind in reverse
         cm.__exit__(None, None, None)
-    with main._run_slot(user):             # slots freed → works again
+    with ops.run_slot(user):             # slots freed → works again
         pass
 
 
 def test_route_returns_429_when_busy(client, monkeypatch):
-    monkeypatch.setattr(main, "_concurrency_cap", lambda u: 0)   # force "always busy"
+    monkeypatch.setattr(ops, "concurrency_cap", lambda u: 0)   # force "always busy"
     sid = client.post("/api/plan/start",
                       json={"idea": "a real idea about mobile dog grooming vans",
                             "email": "z@x.com"}).json()["id"]

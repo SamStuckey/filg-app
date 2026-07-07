@@ -8,7 +8,7 @@ upgrade prompt, and that a subscriber is not key-walled.
 
 from engine import provider
 from engine import usage
-from app import access, billing, keys, main, store, tiers
+from app import access, billing, keys, main, ops, store, tiers
 
 
 def _sub(email, tier, period_end="2099-01-01T00:00:00Z"):
@@ -51,7 +51,7 @@ def test_budget_math_over_cap_and_upgrade_prompt():
     assert main._budget("noone@x.com") is None   # non-subscriber has no budget
     # Ultimate is HIDDEN for launch: the allowance-exhausted response pitches only the BYOK fallback
     # (no upgrade rung on the public ladder), and checkout refuses the hidden tier.
-    resp = main._budget_response(main.BudgetError(b))
+    resp = ops.budget_response(ops.BudgetError(b))
     body = resp.body.decode()
     assert resp.status_code == 402 and "upgradeTier" not in body
     assert "fallback" in body
@@ -119,18 +119,18 @@ def test_key_precedence_paid_allowance_first(monkeypatch):
     email = "prec@x.com"
     # free user: no key → hosted taste; with a key → their key
     monkeypatch.setattr(access, "_is_byok", lambda u: False)
-    assert main._on_filg_key(email) is True
+    assert access._on_filg_key(email) is True
     monkeypatch.setattr(access, "_is_byok", lambda u: True)
-    assert main._on_filg_key(email) is False
+    assert access._on_filg_key(email) is False
     # subscriber UNDER allowance → OUR key even though they have a key (spend paid credits first)
     _sub(email, "pro")
-    assert main._on_filg_key(email) is True
+    assert access._on_filg_key(email) is True
     # exhaust the allowance → fall back to their own key (the BYOK fallback)
     usage.record_monthly(main._acct(email), main._period(email), 100.0, 0)
-    assert main._on_filg_key(email) is False
+    assert access._on_filg_key(email) is False
     # over allowance but NO key → still ours (the fair-use gate then prompts upgrade/add-key/wait)
     monkeypatch.setattr(access, "_is_byok", lambda u: False)
-    assert main._on_filg_key(email) is True
+    assert access._on_filg_key(email) is True
 
 
 def test_meter_follows_actual_key(monkeypatch):

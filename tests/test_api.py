@@ -510,24 +510,24 @@ def test_clean_plan_url_serves_spa(client):
 
 
 def test_humanize_error_translates_openrouter_401():
-    from app import main
-    msg, need_key = main._humanize_error(
+    from app import ops
+    msg, need_key = ops.humanize_error(
         Exception("Error code: 401 - {'error': {'message': 'User not found.', 'code': 401}}"))
     assert need_key is True
     assert "key" in msg.lower() and "401" not in msg and "User not found" not in msg
 
 
 def test_humanize_error_credits_and_generic():
-    from app import main
-    msg_c, nk_c = main._humanize_error(Exception("Error code: 402 - insufficient credits openrouter"))
+    from app import ops
+    msg_c, nk_c = ops.humanize_error(Exception("Error code: 402 - insufficient credits openrouter"))
     assert nk_c is False and "credit" in msg_c.lower()
-    msg_g, nk_g = main._humanize_error(ValueError("could not parse JSON from model"))
+    msg_g, nk_g = ops.humanize_error(ValueError("could not parse JSON from model"))
     assert nk_g is False and "went wrong" in msg_g.lower() and "JSON" not in msg_g
 
 
 def test_engine_error_sets_needkey_flag():
-    from app import main
-    r = main._engine_error(Exception("Error code: 401 - User not found."))
+    from app import ops
+    r = ops.engine_error(Exception("Error code: 401 - User not found."))
     import json
     body = json.loads(bytes(r.body))
     assert body.get("needKey") is True and "key" in body["error"].lower()

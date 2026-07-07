@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 from conftest import wait_status
 
 from app import auth as app_auth
-from app import main, store
+from app import access, main, ops, store
 
 IDEA = "I like basketball, Magic the Gathering, and food, and I'm good at sales"
 
@@ -147,8 +147,8 @@ def test_merge_reads_the_kill_switch(client, monkeypatch):
     from engine import usage
     d = client.post("/api/brainstorm", json={"idea": IDEA}).json()
     sid, opts = d["id"], d["activeNode"]["options"]
-    monkeypatch.setattr(main, "MOCK", False)                       # the gate skips mock runs
-    monkeypatch.setattr(main, "_provider_for",
+    monkeypatch.setattr(ops, "MOCK", False)                       # the gate skips mock runs
+    monkeypatch.setattr(access, "_provider_for",
                         lambda u: type("P", (), {"bills_filg": True})())
     monkeypatch.setattr(usage, "kill_switch_tripped", lambda: True)
     r = client.post(f"/api/plan/{sid}/merge", json={"options": [opts[0]["id"]]})

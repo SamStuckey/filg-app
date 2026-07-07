@@ -70,10 +70,10 @@ def test_pdf_clean_when_billing_off(client):
 def test_pdf_watermarked_free_copy_on_own_key(client, monkeypatch):
     # Billing on, not a subscriber, no credits — but the account has its own key: the PDF still
     # renders, watermarked (free copy), instead of 402ing. The Gamma loop.
-    from app import billing, keys, main
+    from app import access, billing, keys, main
     sid = _finish(client, "wm1@x.com")
     monkeypatch.setattr(billing, "PDF_BILLING_ENABLED", True)
-    monkeypatch.setattr(main, "_is_subscriber", lambda e: False)
+    monkeypatch.setattr(access, "_is_subscriber", lambda e: False)
     monkeypatch.setattr(billing, "claim_pdf", lambda e, k: False)
     monkeypatch.setattr(keys, "enabled", lambda: True)
     monkeypatch.setattr(keys, "has_key", lambda e: True)
@@ -83,10 +83,10 @@ def test_pdf_watermarked_free_copy_on_own_key(client, monkeypatch):
 
 
 def test_pdf_paywalled_without_key_or_credits(client, monkeypatch):
-    from app import billing, keys, main
+    from app import access, billing, keys, main
     sid = _finish(client, "wm2@x.com")
     monkeypatch.setattr(billing, "PDF_BILLING_ENABLED", True)
-    monkeypatch.setattr(main, "_is_subscriber", lambda e: False)
+    monkeypatch.setattr(access, "_is_subscriber", lambda e: False)
     monkeypatch.setattr(billing, "claim_pdf", lambda e, k: False)
     monkeypatch.setattr(keys, "enabled", lambda: True)
     monkeypatch.setattr(keys, "has_key", lambda e: False)

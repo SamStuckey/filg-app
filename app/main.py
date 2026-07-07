@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import io
 import json
-import contextlib
 import os
 import re
 import threading
@@ -61,50 +60,19 @@ from engine import pipeline   # noqa: E402 — engine: per-run cost ledger (run_
 from engine import model_catalog  # noqa: E402 — model ids/prices/slugs + cached Models API availability
 from engine import tree as dtree  # noqa: E402 — the decision tree: node wiring, kinds, attachments, run epochs
 
-from . import auth, billing, keys, planner, render, store, tiers  # noqa: E402 — persistence, auth, billing, keys, tiers, share-page HTML
+from . import auth, billing, keys, ops, planner, render, store, tiers  # noqa: E402 — persistence, auth, billing, keys, tiers, share-page HTML
 # Entitlement/provider/metering decisions live in access.py (the pure service layer). Re-exported here
 # so the route bodies call them as bare names and `main._budget` etc. stay importable by tests.
-from .access import (  # noqa: E402,F401
+from .access import (  # noqa: E402,F401 — entitlement/provider/metering (the pure service layer)
     _is_byok, _acct, _tier, _is_subscriber, _period, _budget, _feature_ok, _has_pdf_access,
-    _key_provider_kind, _build_provider, _on_filg_key, _provider_for,
-    _meter, _meter_tokens, _needs_key)
+    _key_provider_kind, _build_provider, _provider_for, _meter, _needs_key)
 
-MOCK = os.environ.get("FILG_MOCK") == "1"
-# "First query on us" + subscriptions: when FILG has its own hosted Anthropic key, a keyless user gets a
-# free welcome run (metered by usage.py) and subscribers run on it. The key is FILG_ANTHROPIC_API_KEY
-# (preferred, so it doesn't collide with a dev's own ANTHROPIC_API_KEY / Claude Code login), else
-# ANTHROPIC_API_KEY. No hosted key → fully BYOK (the user must bring their own key from the first submit).
-HOSTED_FREE = bool(provider.hosted_key())
 # One startup line so a local run never has to guess its wiring (the #1 source of confusing 500s is a
 # hosted key that didn't reach the process env).
-print(f"[filg] mock={'ON (canned, no spend)' if MOCK else 'off (REAL runs)'}"
-      f" · hosted key={'wired' if HOSTED_FREE else 'MISSING (free/anon runs will fail in real mode)'}"
+print(f"[filg] mock={'ON (canned, no spend)' if ops.MOCK else 'off (REAL runs)'}"
+      f" · hosted key={'wired' if ops.HOSTED_FREE else 'MISSING (free/anon runs will fail in real mode)'}"
       f" · BYOK store={'on' if keys.enabled() else 'off (no FILG_KEY_SECRET)'}"
       f" · auth={'on' if auth.AUTH_ENABLED else ('dev as ' + os.environ.get('FILG_DEV_EMAIL', '(anonymous)'))}")
-
-
-def _plan_key(s: dict) -> str | None:
-    """The per-branch unlock key for a plan: "{sid}:{active-leaf-node-id}". A new branch built from an
-    earlier decision-tree node finishes on a NEW leaf id → a new key → its own $7 unlock. Legacy
-    (pre-tree) plans collapse to "{sid}:flat"."""
-    sid = s.get("id")
-    if not sid:
-        return None
-    tree = s.get("tree") if isinstance(s.get("tree"), dict) else None
-    leaf = (tree or {}).get("active")
-    return f"{sid}:{leaf or 'flat'}"
-
-
-def _fold_usage(sid: str, s: dict, cost: float, toks: int, **extra) -> tuple[float, int]:
-    """Fold one AI op's cost + token count into the session's running totals (persisting any `extra`
-    columns in the same write). The client reads the cumulative `cost`/`tokens` off the session and
-    ticks an in-memory, per-session usage meter (resets on reload; never tracked on the account).
-    Returns the new cumulative (cost, tokens) so side ops that don't return plan-state can echo them."""
-    new_cost = round((s.get("cost") or 0) + cost, 4)
-    new_tokens = (s.get("tokens") or 0) + int(toks or 0)
-    store.plan_save(sid, cost=new_cost, tokens=new_tokens, **extra)
-    _meter_tokens(s.get("user"), toks)   # subscriber fair-use meter tracks tokens too (cost via _meter)
-    return new_cost, new_tokens
 
 
 def _key_wall(session: dict):
@@ -183,166 +151,15 @@ def _orphan_sweep_loop() -> None:
 
 threading.Thread(target=_orphan_sweep_loop, daemon=True).start()
 
-# Per-user concurrency: a flat cap on simultaneous AI operations per user (cost is isolated per run
-# via pipeline.run_ledger, so concurrent runs don't mis-bill each other). Not a monetization tier —
-# just a correctness/cost guard so one user can't fan out unbounded work.
-CONCURRENCY_CAP = 3
-_inflight: dict[str, int] = {}
-_inflight_lock = threading.Lock()
-
-
-class BusyError(Exception):
-    """Raised when a user is already at the concurrent-operation limit."""
-    def __init__(self, cap: int):
-        self.cap = cap
-        super().__init__(f"at concurrency limit ({cap})")
-
-
-class BudgetError(Exception):
-    """Raised when a subscriber has spent their monthly fair-use allowance on FILG's key. Carries the
-    budget snapshot so the response can name the reset date. Caught centrally in `_engine_error`."""
-    def __init__(self, budget: dict):
-        self.budget = budget or {}
-        super().__init__("monthly fair-use allowance reached")
-
-
-class DailyCapError(Exception):
-    """Raised when the daily free-pool kill switch is tripped and a non-subscriber op would run on
-    FILG's hosted key. Invariant #3: the funnel FEEDS the meter so it must also READ it — degrade to
-    the key prompt, never spend past the pool. Caught centrally in `_engine_error` (402 + needKey)."""
-    def __init__(self):
-        super().__init__("Today's free pool is tapped. Add your own API key to keep going.")
-
-
-def _concurrency_cap(user: str) -> int:
-    return CONCURRENCY_CAP
-
-
-def _slot_user(s: dict) -> str:
-    """The concurrency-bucket identity for a session's op: the owner, or a per-plan anonymous key.
-    The anonymous taste has no email — keying its slot on the bare "" made EVERY anonymous visitor
-    share one 3-slot bucket (three strangers brainstorming → the fourth 429s). Per-plan keys keep the
-    cap per visitor-ish; total anonymous spend stays bounded by the daily kill switch."""
-    return (s.get("user") or "").strip() or f"anon:{s.get('id')}"
-
-
-@contextlib.contextmanager
-def _run_slot(user: str, stack: str | None = None):
-    """Reserve a concurrency slot for `user`, bind their provider + model stack + a fresh per-run cost
-    ledger, then release the slot on exit. Raises BusyError if they're already at their plan's limit.
-    The premium stack is clamped off FILG's free key so a free run can't spend Opus on FILG's dime.
-    `user` may be a `_slot_user` anonymous key — it resolves like a keyless free identity."""
-    cap = _concurrency_cap(user)
-    tier = _tier(user)
-    if tier and not _is_byok(user):   # allowance spent AND no own key to fall back to → block (fair-use)
-        b = _budget(user, tier)
-        if b and b["over"]:
-            raise BudgetError(b)
-    with _inflight_lock:
-        if _inflight.get(user, 0) >= cap:
-            raise BusyError(cap)
-        _inflight[user] = _inflight.get(user, 0) + 1
-    try:
-        prov = _provider_for(user)
-        # The daily kill switch guards every free op on FILG's key — the v2 funnel feeds the meter, so
-        # it must also read it (metered-but-uncapped is an invariant-#3 breach). Degrade, don't block:
-        # 402 + needKey routes the user to their own key, same as the v1 taste path.
-        if (prov is not None and getattr(prov, "bills_filg", False) and not MOCK
-                and not _is_subscriber(user) and usage.kill_switch_tripped()):
-            raise DailyCapError()   # the finally below releases the slot
-        # Stack ceiling: BYOK (own key) → any stack; a subscriber → up to their tier's ceiling (Opus for
-        # Pro/Studio, ON FILG's key); free taste on FILG's key → the Opus-free default (invariant #3).
-        is_byok = bool(prov and not prov.bills_filg)
-        stk = tiers.clamp_stack(stack, tier=tier, byok=is_byok)
-        with provider.use(prov), provider.use_stack(stk), pipeline.run_ledger():
-            yield
-    finally:
-        with _inflight_lock:
-            n = _inflight.get(user, 0) - 1
-            if n > 0:
-                _inflight[user] = n
-            else:
-                _inflight.pop(user, None)
-
-
-def _busy_response(e: BusyError) -> JSONResponse:
-    plural = "s" if e.cap != 1 else ""
-    return JSONResponse(
-        {"error": f"You already have {e.cap} operation{plural} running. Let one finish, then try again.",
-         "busy": True}, status_code=429)
-
-
-def _budget_response(e: BudgetError) -> JSONResponse:
-    """402 when a subscriber has used their monthly allowance. The off-ramps, in the order we pitch
-    them: upgrade to the next tier for more monthly credits, add your own key as a BYOK fallback
-    (overflow runs on it, free), or wait for the renewal reset. `upgradeTier` names the next rung
-    (absent at the top of the ladder)."""
-    b = e.budget or {}
-    nxt = tiers.next_tier(b.get("tier"))
-    up = f"Upgrade to {tiers.label(nxt)} for more monthly credits, or add" if nxt else "Add"
-    return JSONResponse(
-        {"error": f"You've used this month's allowance on our key. {up} your own API key as a "
-                  "fallback — or your allowance resets when your subscription renews.",
-         "fairUse": True, "needKey": True, "resetAt": b.get("reset_at"), "tier": b.get("tier"),
-         **({"upgradeTier": nxt} if nxt else {})},
-        status_code=402)
-
-
-def _humanize_error(e: Exception) -> tuple[str, bool]:
-    """Turn a raw provider exception into a message the user can act on. Returns (message, needKey).
-    The most common live failure is a bad/expired BYOK key — OpenRouter answers 401 'User not found',
-    which is meaningless to a user; we translate it into 'update your key'. Full traces still go to the
-    Render logs (the callers print them); only this friendly string reaches the browser."""
-    s = str(e)
-    low = s.lower()
-    name = type(e).__name__.lower()
-    is_key = ("authentication" in name or "permissiondenied" in name
-              or "code: 401" in low or "'code': 401" in low or " 401 " in f" {low} "
-              or "user not found" in low or "invalid api key" in low or "incorrect api key" in low
-              or "no auth credentials" in low or ("expired" in low and "key" in low))
-    if is_key:
-        return ("Your API key was rejected — it looks expired or invalid. Update your key "
-                "with the 🔑 button up top, then try again."), True
-    if ("credit balance" in low or "insufficient" in low or "billing" in low or "quota" in low
-            or "402" in low):
-        return ("That key works, but the account is out of credits or has no billing set up. Add "
-                "credits/billing with your provider (Anthropic: console.anthropic.com · OpenRouter: "
-                "openrouter.ai), then try again."), False
-    if "not_found" in low or "model" in low and "404" in low:
-        return ("That model isn't available on this key/account. Pick a different model crew, or "
-                "check your provider account's model access."), False
-    if "429" in low or "rate limit" in low or "overloaded" in low:
-        return "The model is busy right now. Give it a few seconds and try again.", False
-    return "Something went wrong on our side. Try again in a moment.", False
-
-
-def _engine_error(e: Exception, status_code: int = 500):
-    """Standard JSON error for an engine route — humanized message + a needKey flag the frontend uses
-    to reopen the key modal. A subscriber's fair-use BudgetError is surfaced as a 402 (every route
-    already routes unexpected exceptions here, so no per-route wiring is needed). The full trace goes
-    to stdout (Render logs / local terminal); the client only sees the friendly string."""
-    if not isinstance(e, BudgetError):
-        traceback.print_exc()
-    if isinstance(e, BudgetError):
-        return _budget_response(e)
-    if isinstance(e, DailyCapError):
-        return JSONResponse({"error": str(e), "needKey": True}, status_code=402)
-    msg, need_key = _humanize_error(e)
-    body = {"error": msg}
-    if need_key:
-        body["needKey"] = True
-    return JSONResponse(body, status_code=status_code)
-
-
 def _run_job(job_id: str, idea: str, user: str, mode: str) -> None:
     try:
         with pipeline.run_ledger():
-            res = (teardown.generate_full if mode == "full" else teardown.generate)(idea, mock=MOCK)
+            res = (teardown.generate_full if mode == "full" else teardown.generate)(idea, mock=ops.MOCK)
         usage.record_run(user, res["cost"])
         store.finish(job_id, res, mode)
     except Exception as e:  # noqa: BLE001 — surface failures to the client, don't crash the worker
         traceback.print_exc()  # full trace → Render stdout logs (client only sees str(e))
-        store.fail(job_id, _humanize_error(e)[0])
+        store.fail(job_id, ops.humanize_error(e)[0])
 
 
 @app.post("/api/run")
@@ -417,12 +234,12 @@ async def api_buy_pdf(sid: str, request: Request):
     if not s or not _owns(request, s):
         return JSONResponse({"error": "unknown session"}, status_code=404)
     # Already accessible (comped or already unlocked), or there are credits left → no payment needed.
-    if _has_pdf_access(authed["email"], _plan_key(s)) or billing.credits_left(authed["email"]) > 0:
+    if _has_pdf_access(authed["email"], ops.plan_key(s)) or billing.credits_left(authed["email"]) > 0:
         return JSONResponse({"error": "You can download this plan already.", "unlocked": True},
                             status_code=409)
     try:
         url = billing.create_pdf_checkout_url(authed["email"], user_id=authed["id"], plan_id=sid,
-                                              plan_key=_plan_key(s))
+                                              plan_key=ops.plan_key(s))
     except billing.StripeError as e:
         return JSONResponse({"error": str(e)}, status_code=502)
     return {"url": url}
@@ -486,15 +303,15 @@ async def api_plan_nudges(sid: str, request: Request):
         return {"chips": []}
     idea = planner._working_idea(s)
     try:
-        with _run_slot(_slot_user(s), s.get("stack")):
-            chips, cost = planner.nudges(idea, section, draft, mock=MOCK)
+        with ops.run_slot(ops.slot_user(s), s.get("stack")):
+            chips, cost = planner.nudges(idea, section, draft, mock=ops.MOCK)
             toks = pipeline.LEDGER.tokens()
-    except BusyError as be:
-        return _busy_response(be)
-    except Exception as e:  # noqa: BLE001
+    except ops.BusyError as be:
+        return ops.busy_response(be)
+    except Exception:  # noqa: BLE001
         traceback.print_exc()
         return {"chips": []}   # nudges are a nicety — never block the modal on them
-    nc, nt = _fold_usage(sid, s, cost, toks)
+    nc, nt = ops.fold_usage(sid, s, cost, toks)
     return {"chips": chips, "cost": nc, "tokens": nt}
 
 
@@ -504,7 +321,7 @@ def _validate_key(provider_name: str, api_key: str) -> tuple[bool, str]:
         return False, "Unsupported provider."
     if len(api_key) < 8:
         return False, "That doesn't look like an API key."
-    if MOCK:
+    if ops.MOCK:
         return True, "ok (mock)"
     try:
         from engine import provider as prov_mod
@@ -513,7 +330,7 @@ def _validate_key(provider_name: str, api_key: str) -> tuple[bool, str]:
             out = pipeline.call("key_validate", pipeline.HAIKU, "Reply with: OK", max_tokens=5)
         return (True, "ok") if out else (False, "The key didn't return a response.")
     except Exception as e:  # noqa: BLE001
-        msg, _ = _humanize_error(e)
+        msg, _ = ops.humanize_error(e)
         if msg.startswith("Something went wrong"):
             # validation is the user debugging their OWN key — surface a trimmed real reason
             raw = " ".join(str(e).split())[:180]
@@ -594,7 +411,7 @@ async def api_stripe_webhook(request: Request):
 
 @app.get("/healthz")
 async def healthz():
-    return {"ok": True, "mock": MOCK, "auth_enabled": auth.AUTH_ENABLED,
+    return {"ok": True, "mock": ops.MOCK, "auth_enabled": auth.AUTH_ENABLED,
             "pdf_billing": billing.PDF_BILLING_ENABLED, "sub_enabled": billing.PDF_BILLING_ENABLED,
             "models": model_catalog.snapshot()["slots"], **usage.snapshot()}
 
@@ -702,7 +519,7 @@ def _plan_state(s: dict) -> dict:
         # PDF access for THIS active branch + the account's remaining credits. The button shows
         # Download when this plan is already unlocked OR there are credits to spend; else Unlock ($7=3).
         # A new branch built from an earlier node is a fresh plan_key → locked until claimed.
-        "pdfUnlocked": _has_pdf_access((s.get("user") or "").strip(), _plan_key(s), verified=True),
+        "pdfUnlocked": _has_pdf_access((s.get("user") or "").strip(), ops.plan_key(s), verified=True),
         "pdfCredits": store.credits_left((s.get("user") or "").strip()),
     }
 
@@ -786,7 +603,7 @@ def _regrade_setup(s: dict, node: dict, cost: float) -> tuple[dict | None, float
         return None, cost
     try:
         vetting, vc = intake.vet(planner._working_idea(s), s.get("shaped") or {}, s.get("research"),
-                                 mock=MOCK, angle=(node.get("draft") or ""))
+                                 mock=ops.MOCK, angle=(node.get("draft") or ""))
     except Exception:  # noqa: BLE001
         return None, cost
     return vetting, round(cost + vc, 4)
@@ -816,13 +633,9 @@ def _plan_research(session_id: str, idea: str, user: str) -> None:
             progress.append(line)            # the UI spews it live AND the session meter ticks during research
             store.plan_save(session_id, progress=list(progress),
                             tokens=pipeline.LEDGER.tokens(), cost=round(pipeline.LEDGER.cost(), 4))
-        prov = _provider_for(user)   # user's own key if they have one, else FILG's hosted key
         sess0 = store.plan_get(session_id) or {}
-        # Stack ceiling: BYOK → any; subscriber → up to their tier; free taste on FILG's key → Opus-free default.
-        stk = tiers.clamp_stack(sess0.get("stack"), tier=_tier(user),
-                                byok=bool(prov and not prov.bills_filg))
-        with provider.use(prov), provider.use_stack(stk), pipeline.run_ledger():
-            prep = planner.prepare(idea, mock=MOCK, on_progress=on_progress)  # intake → research → vet → draft
+        with ops.bind_session_run(user, sess0.get("stack")) as prov:
+            prep = planner.prepare(idea, mock=ops.MOCK, on_progress=on_progress)  # intake → research → vet → draft
             toks = pipeline.LEDGER.tokens()   # the welcome run's token usage → seeds the session meter
         if prov is not None and prov.bills_filg:   # runs on FILG's hosted key → meter it (invariant #3)
             if _is_subscriber(user):               # subscriber → count against their monthly fair-use cap
@@ -838,7 +651,7 @@ def _plan_research(session_id: str, idea: str, user: str) -> None:
                         cost=prep["cost"], tokens=toks, tree=tree, progress=progress)
     except Exception as e:  # noqa: BLE001
         traceback.print_exc()  # full trace → Render stdout logs (client only sees str(e))
-        store.plan_save(session_id, status="error", error=_humanize_error(e)[0])
+        store.plan_save(session_id, status="error", error=ops.humanize_error(e)[0])
 
 
 # ── The diverge/converge funnel (brainstorm → merge → commit), layered on the same node tree ──
@@ -881,33 +694,6 @@ def _refined_node(m: dict, selected: list, parent: str | None, feedback: str | N
                       "board": []}, parent)
 
 
-def _meter_bg(user: str, prov, cost: float, toks: int, *, is_run: bool = False,
-              research_cost: float = 0.0) -> None:
-    """Meter a background funnel op that ran on FILG's hosted key. A subscriber's usage counts against
-    their monthly cap; a free user's daily kill-switch is always fed (record_spend); only a COMMIT (the
-    deep research run) counts as a metered free 'run'. Ops on a user's own key aren't FILG's spend."""
-    if prov is None or not getattr(prov, "bills_filg", False):
-        return
-    if _is_subscriber(user):
-        usage.record_monthly(_acct(user), _period(user), cost, toks)
-        return
-    if is_run:
-        usage.record_run(auth.normalize_email(user), research_cost)
-        usage.record_spend(round(cost - research_cost, 4))
-    else:
-        usage.record_spend(cost)
-
-
-def _bg_progress(sid: str, base_cost: float, base_tokens: int, progress: list):
-    """A progress sink for a background funnel op: append the line + persist the running (base + this
-    run's) cost/tokens so the session meter ticks live during the op."""
-    def on_progress(line: str) -> None:
-        progress.append(line)
-        store.plan_save(sid, progress=list(progress), tokens=base_tokens + pipeline.LEDGER.tokens(),
-                        cost=round(base_cost + pipeline.LEDGER.cost(), 4))
-    return on_progress
-
-
 def _fresh_tree_or_abandon(sid: str, tok: str | None):
     """Run-epoch check for a finishing background run: re-read the session and return
     (session, tree) to attach into — the FRESH tree, so nothing written mid-run is clobbered.
@@ -943,13 +729,11 @@ def _run_merge(sid: str, option_ids: list, user: str, tok: str | None = None,
             idea_in = (f"{s0['idea']}\n\nTHE MERGED THESIS SO FAR (refine THIS, do not start over):\n"
                        f"{prev}\n\nTHE OPERATOR'S CLARIFICATION — it outweighs everything above; fold "
                        f"it in and do not re-ask what it answers:\n{note}")
-        prov = _provider_for(user)
-        stk = tiers.clamp_stack(s0.get("stack"), tier=_tier(user), byok=bool(prov and not prov.bills_filg))
-        with provider.use(prov), provider.use_stack(stk), pipeline.run_ledger():
-            m, cost = brainstorm.merge(idea_in, directions, mock=MOCK,
-                                       on_progress=_bg_progress(sid, base_cost, base_tokens, progress))
+        with ops.bind_session_run(user, s0.get("stack")) as prov:
+            m, cost = brainstorm.merge(idea_in, directions, mock=ops.MOCK,
+                                       on_progress=ops.bg_progress(sid, base_cost, base_tokens, progress))
             toks = pipeline.LEDGER.tokens()
-        _meter_bg(user, prov, cost, toks)
+        ops.meter_bg(user, prov, cost, toks)
         fresh = _fresh_tree_or_abandon(sid, tok)
         if fresh is None:
             return                                # the user pivoted mid-run — their newer state wins
@@ -965,7 +749,7 @@ def _run_merge(sid: str, option_ids: list, user: str, tok: str | None = None,
                         cost=round(base_cost + cost, 4), tokens=base_tokens + toks)
     except Exception as e:  # noqa: BLE001
         traceback.print_exc()
-        store.plan_save(sid, status="error", error=_humanize_error(e)[0])
+        store.plan_save(sid, status="error", error=ops.humanize_error(e)[0])
 
 
 def _deep_build(sid: str, thesis: str, user: str, tok: str | None = None,
@@ -981,13 +765,11 @@ def _deep_build(sid: str, thesis: str, user: str, tok: str | None = None,
         s0 = store.plan_get(sid) or {}
         base_cost, base_tokens = s0.get("cost") or 0, s0.get("tokens") or 0
         progress = list(s0.get("progress") or [])
-        prov = _provider_for(user)
-        stk = tiers.clamp_stack(s0.get("stack"), tier=_tier(user), byok=bool(prov and not prov.bills_filg))
-        with provider.use(prov), provider.use_stack(stk), pipeline.run_ledger():
-            prep = planner.prepare(thesis, mock=MOCK, prior=prior,
-                                   on_progress=_bg_progress(sid, base_cost, base_tokens, progress))
+        with ops.bind_session_run(user, s0.get("stack")) as prov:
+            prep = planner.prepare(thesis, mock=ops.MOCK, prior=prior,
+                                   on_progress=ops.bg_progress(sid, base_cost, base_tokens, progress))
             toks = pipeline.LEDGER.tokens()
-        _meter_bg(user, prov, prep["cost"], toks, is_run=True, research_cost=prep["research_cost"])
+        ops.meter_bg(user, prov, prep["cost"], toks, is_run=True, research_cost=prep["research_cost"])
         fresh = _fresh_tree_or_abandon(sid, tok)
         if fresh is None:
             return                                # the user pivoted mid-run — their newer state wins
@@ -1004,7 +786,7 @@ def _deep_build(sid: str, thesis: str, user: str, tok: str | None = None,
                         tokens=base_tokens + toks)
     except Exception as e:  # noqa: BLE001
         traceback.print_exc()
-        store.plan_save(sid, status="error", error=_humanize_error(e)[0])
+        store.plan_save(sid, status="error", error=ops.humanize_error(e)[0])
 
 
 # ── The context engine (app/context.py) owns every model-facing view of session state. These
@@ -1059,7 +841,7 @@ async def api_plan_start(request: Request):
     elif keys.enabled():
         # BYOK on, no key: the FIRST query is on us when FILG has a hosted key (metered + kill-switch).
         # Once the free taste is used (or the daily budget is hit), degrade to a key prompt, not a wall.
-        if not HOSTED_FREE:
+        if not ops.HOSTED_FREE:
             return JSONResponse(
                 {"error": "Add your API key to build your plan — an OpenRouter key (any model) or your "
                           "own Anthropic key (Claude direct), usually pennies a plan.",
@@ -1101,16 +883,16 @@ async def api_brainstorm(request: Request):
     store.plan_create(sid, user, idea, directors=directors)
     store.plan_save(sid, stack=provider.stack_name(body.get("stack")))
     def _work():   # off the event loop: other requests (node reads, polls) stay live while this thinks
-        with _run_slot(user or f"anon:{sid}", body.get("stack")):
-            d, cost = brainstorm.diverge(idea, mock=MOCK)
+        with ops.run_slot(user or f"anon:{sid}", body.get("stack")):
+            d, cost = brainstorm.diverge(idea, mock=ops.MOCK)
             return d, cost, pipeline.LEDGER.tokens()
     try:
         d, cost, toks = await run_in_threadpool(_work)
-    except BusyError as be:
-        return _busy_response(be)
+    except ops.BusyError as be:
+        return ops.busy_response(be)
     except Exception as e:  # noqa: BLE001
-        return _engine_error(e)
-    _meter_bg(user, _provider_for(user), cost, toks)
+        return ops.engine_error(e)
+    ops.meter_bg(user, _provider_for(user), cost, toks)
     # The tree roots at a BASE `idea` node (the raw prompt). Every spread — including later pivots and
     # step-one rebuilds — branches beneath it, so alternate takes always share a common ancestor and
     # no branch is ever orphaned.
@@ -1158,16 +940,16 @@ async def api_plan_rebrainstorm(sid: str, request: Request):
         div_input = (f"{idea}\n\nCOMMITTED PATH (root \u2192 the pivot point; treat each item as "
                      f"chosen context):\n{path_block}")
     def _work():
-        with _run_slot(_slot_user(s), s.get("stack")):
-            d, cost = brainstorm.diverge(div_input, mock=MOCK)
+        with ops.run_slot(ops.slot_user(s), s.get("stack")):
+            d, cost = brainstorm.diverge(div_input, mock=ops.MOCK)
             return d, cost, pipeline.LEDGER.tokens()
     try:
         d, cost, toks = await run_in_threadpool(_work)
-    except BusyError as be:
-        return _busy_response(be)
+    except ops.BusyError as be:
+        return ops.busy_response(be)
     except Exception as e:  # noqa: BLE001
-        return _engine_error(e)
-    _meter_bg(s.get("user"), _provider_for(s.get("user")), cost, toks)
+        return ops.engine_error(e)
+    ops.meter_bg(s.get("user"), _provider_for(s.get("user")), cost, toks)
     # every node is branchable: the new spread is a CHILD of the pivot node itself, always
     parent = at.get("id")
     # permanent evidence line — pivots are core IP, every hop must be verifiable in the server log
@@ -1177,7 +959,7 @@ async def api_plan_rebrainstorm(sid: str, request: Request):
     bid = _attach_spread(tree, d, parent, board=(at or {}).get("board"))
     nodes[bid]["feedback"] = feedback or idea[:120]   # the pivot ask, visible on the fork forever
     dtree.begin_run(tree)                    # pivoting abandons any run still in flight — you moved on
-    _fold_usage(sid, s, cost, toks, tree=tree, stage="brainstorm", **_mirror(tree))
+    ops.fold_usage(sid, s, cost, toks, tree=tree, stage="brainstorm", **_mirror(tree))
     return _plan_state(store.plan_get(sid))
 
 
@@ -1197,10 +979,8 @@ async def api_plan_merge(sid: str, request: Request):
     # The merge is the free taste's one web-touching step and runs in a background thread WITHOUT
     # _run_slot — so the daily kill switch must be read here, before the spawn (invariant #3: the
     # funnel feeds the meter, it must also read it). Subscribers are bounded by their monthly cap.
-    prov = _provider_for(s.get("user"))
-    if (prov is not None and getattr(prov, "bills_filg", False) and not MOCK
-            and not _is_subscriber(s.get("user")) and usage.kill_switch_tripped()):
-        return _engine_error(DailyCapError(), 402)
+    if ops.free_pool_tapped(s.get("user")):
+        return ops.engine_error(ops.DailyCapError(), 402)
     tree = s.get("tree") or {"nodes": {}, "active": None}
     tok = dtree.begin_run(tree)              # this run's epoch — a pivot mid-run invalidates it
     store.plan_save(sid, status="researching", stage="merging", tree=tree)
@@ -1235,10 +1015,8 @@ async def api_plan_refine(sid: str, request: Request):
     while cur and not sel:
         sel = [i for i in (cur.get("selected") or []) if _kind(nodes.get(i) or {}) == "option"]
         cur = nodes.get(cur.get("parent")) if cur.get("parent") else None
-    prov = _provider_for(s.get("user"))
-    if (prov is not None and getattr(prov, "bills_filg", False) and not MOCK
-            and not _is_subscriber(s.get("user")) and usage.kill_switch_tripped()):
-        return _engine_error(DailyCapError(), 402)
+    if ops.free_pool_tapped(s.get("user")):
+        return ops.engine_error(ops.DailyCapError(), 402)
     tok = dtree.begin_run(tree)              # this run's epoch — a pivot mid-run invalidates it
     store.plan_save(sid, status="researching", stage="merging", tree=tree)
     threading.Thread(target=_run_merge, args=(sid, sel, s.get("user"), tok),
@@ -1358,14 +1136,14 @@ async def api_plan_route(sid: str, request: Request):
     rstage = {"brainstorm": "brainstorm", "merging": "merge", "refined": "refined",
               "building": "plan", "done": "plan"}.get(stage, "plan")
     def _work():
-        with _run_slot(_slot_user(s), s.get("stack")):
+        with ops.run_slot(ops.slot_user(s), s.get("stack")):
             decision, cost = router.route(prompt, stage=rstage, mode=mode,
-                                          context=_route_context(s, node_id), mock=MOCK)
+                                          context=_route_context(s, node_id), mock=ops.MOCK)
             fork = None
             if decision["intent"] == "steer" and rstage == "plan" and decision.get("steer"):
                 idea = planner._working_idea(s)
                 ic, ic_cost = router.check_integration(
-                    decision["steer"], idea, planner.bundle_markdown(idea, s.get("files") or {}), mock=MOCK)
+                    decision["steer"], idea, planner.bundle_markdown(idea, s.get("files") or {}), mock=ops.MOCK)
                 cost = round(cost + ic_cost, 4)
                 if not ic["integrable"]:
                     fork = {"clash": ic["clash"], "skeptic_say": ic["skeptic_say"],
@@ -1373,11 +1151,11 @@ async def api_plan_route(sid: str, request: Request):
             return decision, fork, cost, pipeline.LEDGER.tokens()
     try:
         decision, fork, cost, toks = await run_in_threadpool(_work)
-    except BusyError as be:
-        return _busy_response(be)
+    except ops.BusyError as be:
+        return ops.busy_response(be)
     except Exception as e:  # noqa: BLE001
-        return _engine_error(e)
-    _fold_usage(sid, s, cost, toks)
+        return ops.engine_error(e)
+    ops.fold_usage(sid, s, cost, toks)
     out = {"decision": decision, "cost": cost, "tokens": toks}
     if fork:
         out["fork"] = fork
@@ -1408,24 +1186,24 @@ async def api_plan_lookup(sid: str, request: Request):
         return JSONResponse({"error": "Ask a research question."}, status_code=400)
     if len(question) > 500:
         return JSONResponse({"error": "Keep it under 500 characters."}, status_code=400)
-    if MOCK:
+    if ops.MOCK:
         claims = [dict(c) for c in _MOCK_LOOKUP]
         _save_lookups(sid, s, claims)
         return {"claims": claims, "cost": 0, "tokens": 0}
 
     def _work():
-        with _run_slot(s.get("user"), s.get("stack")):
+        with ops.run_slot(s.get("user"), s.get("stack")):
             claims = pipeline.research_lane(planner._working_idea(s), question)
             verdicts = pipeline.gate_claims(claims)
             return verdicts, round(pipeline.LEDGER.cost(), 4), pipeline.LEDGER.tokens()
     try:
         verdicts, cost, toks = await run_in_threadpool(_work)
-    except BusyError as be:
-        return _busy_response(be)
+    except ops.BusyError as be:
+        return ops.busy_response(be)
     except Exception as e:  # noqa: BLE001
-        return _engine_error(e)
+        return ops.engine_error(e)
     _meter(s.get("user"), cost)
-    nc, nt = _fold_usage(sid, s, cost, toks)
+    nc, nt = ops.fold_usage(sid, s, cost, toks)
     claims = [{"text": v.claim.text, "url": v.claim.source_url, "tier": v.tier,
                "flagged": bool(v.flagged), "reason": v.reason or ""} for v in verdicts]
     _save_lookups(sid, s, claims)
@@ -1521,7 +1299,7 @@ async def api_plans(request: Request):
         unlocked = False
         if done:
             full = store.plan_get(p["id"]) or {}
-            unlocked = _has_pdf_access(authed["email"], _plan_key(full), verified=True)
+            unlocked = _has_pdf_access(authed["email"], ops.plan_key(full), verified=True)
         plans.append({"id": p["id"], "idea": p["idea"], "status": p["status"], "step": p["step"],
                       "created_at": p["created_at"], "updated_at": p.get("updated_at") or p["created_at"],
                       "done": done, "shared": bool(p.get("shared")), "pdf_unlocked": unlocked})
@@ -1579,7 +1357,7 @@ _HELP_MOCK = ("This is mock help (no key bound). In the real app: type your idea
 async def api_help(request: Request):
     """A standard website-style help chat for using the product. Runs on the user's own key (BYOK),
     same as every other engine call; no plan/session required."""
-    if MOCK:
+    if ops.MOCK:
         return {"reply": _HELP_MOCK}
     authed = auth.user_from_request(request)
     user = authed["email"] if authed else None
@@ -1607,7 +1385,7 @@ async def api_help(request: Request):
                                          "Reply as the FILG help assistant.")
             _meter(user, round(pipeline.LEDGER.cost(), 4))   # FILG-key help → daily + a subscriber's monthly cap
     except Exception as e:  # noqa: BLE001
-        return _engine_error(e)
+        return ops.engine_error(e)
     return {"reply": (reply or "").strip() or "Sorry, I couldn't generate a reply, try rephrasing."}
 
 
@@ -1650,15 +1428,15 @@ async def api_plan_respond(sid: str, request: Request):
     if choice not in planner.CHOICES:
         return JSONResponse({"error": "pick yes_and / not_quite / okay_but"}, status_code=400)
     try:
-        with _run_slot(s.get("user"), s.get("stack")):
+        with ops.run_slot(s.get("user"), s.get("stack")):
             # If a board is set it vets each finalized section and its takeaway steers the next draft
             # (planner.advance runs the board inline). cost includes any board review.
-            upd = planner.advance(s, choice, body.get("note"), mock=MOCK,
+            upd = planner.advance(s, choice, body.get("note"), mock=ops.MOCK,
                                   directors=s.get("directors") or None)
-    except BusyError as be:
-        return _busy_response(be)
+    except ops.BusyError as be:
+        return ops.busy_response(be)
     except Exception as e:  # noqa: BLE001
-        return _engine_error(e)
+        return ops.engine_error(e)
     _meter(s.get("user"), round((upd.get("cost", 0) or 0) - (s.get("cost") or 0), 4))  # draft + board review
     store.plan_save(sid, **upd)
     return _plan_state(store.plan_get(sid))
@@ -1684,24 +1462,24 @@ async def api_plan_next(sid: str, request: Request):
     if active["step"] >= planner.N:
         return JSONResponse({"error": "This plan is already complete."}, status_code=409)
     def _work():
-        with _run_slot(s.get("user"), s.get("stack")):
+        with ops.run_slot(s.get("user"), s.get("stack")):
             if killed:   # forced past the gate with no substance → waste-of-time mode (comedic, skips research → ~$0)
                 child, cost = planner.wod_forward(active)
             else:
                 child, cost = planner.forward(planner._working_idea(s), s["research"], active, feedback,
                                               directors=s.get("directors") or None,
-                                              founder=planner._founder(s), mock=MOCK,
+                                              founder=planner._founder(s), mock=ops.MOCK,
                                               extra_personas=s.get("custom_directors"))
             return child, cost, pipeline.LEDGER.tokens()
     try:
         child, cost, toks = await run_in_threadpool(_work)
-    except BusyError as be:
-        return _busy_response(be)
+    except ops.BusyError as be:
+        return ops.busy_response(be)
     except Exception as e:  # noqa: BLE001
-        return _engine_error(e)
+        return ops.engine_error(e)
     dtree.attach(tree, _new_node(child, active["id"]))
     _meter(s.get("user"), cost)
-    _fold_usage(sid, s, cost, toks, tree=tree, **_mirror(tree))
+    ops.fold_usage(sid, s, cost, toks, tree=tree, **_mirror(tree))
     return _plan_state(store.plan_get(sid))
 
 
@@ -1721,25 +1499,25 @@ async def api_plan_revet(sid: str, request: Request):
         return JSONResponse(
             {"error": "Give me a bit more — a real skill or asset, and who'd pay for it."}, status_code=400)
     try:
-        with _run_slot(s.get("user"), s.get("stack")):
-            shaped, vetting, cost = intake.revet(s["idea"], more, s.get("research"), mock=MOCK)
+        with ops.run_slot(s.get("user"), s.get("stack")):
+            shaped, vetting, cost = intake.revet(s["idea"], more, s.get("research"), mock=ops.MOCK)
             proposal = None
             if vetting["verdict"] != "kill":   # cleared → redraft part 1 from the now-substantive thesis
                 proposal, c2 = planner.first_proposal(
-                    shaped["thesis"], s["research"], founder=shaped.get("founder_edge"), mock=MOCK)
+                    shaped["thesis"], s["research"], founder=shaped.get("founder_edge"), mock=ops.MOCK)
                 cost = round(cost + c2, 4)
             toks = pipeline.LEDGER.tokens()
-    except BusyError as be:
-        return _busy_response(be)
+    except ops.BusyError as be:
+        return ops.busy_response(be)
     except Exception as e:  # noqa: BLE001
-        return _engine_error(e)
+        return ops.engine_error(e)
     updates = {"shaped": shaped, "vetting": vetting}
     if proposal is not None:
         root = _new_node(planner.root_node(proposal), None)   # no branches exist yet on a kill, so reseed
         tree = dtree.seed(root)
         updates.update({"proposal": proposal, "step": 0, "tree": tree, **_mirror(tree)})
     _meter(s.get("user"), cost)
-    _fold_usage(sid, s, cost, toks, **updates)
+    ops.fold_usage(sid, s, cost, toks, **updates)
     return _plan_state(store.plan_get(sid))
 
 
@@ -1766,21 +1544,21 @@ async def api_plan_back(sid: str, request: Request):
                             status_code=400)
     prev = tree["nodes"][active["parent"]]   # the previous step's node — the one we re-draft
     try:
-        with _run_slot(s.get("user"), s.get("stack")):
+        with ops.run_slot(s.get("user"), s.get("stack")):
             sib, cost = planner.rebranch(planner._working_idea(s), s["research"], prev, feedback,
-                                         founder=planner._founder(s), mock=MOCK)
+                                         founder=planner._founder(s), mock=ops.MOCK)
             regrade, cost = _regrade_setup(s, sib, cost)   # back onto the setup → re-grade the verdict
             toks = pipeline.LEDGER.tokens()
-    except BusyError as be:
-        return _busy_response(be)
+    except ops.BusyError as be:
+        return ops.busy_response(be)
     except Exception as e:  # noqa: BLE001
-        return _engine_error(e)
+        return ops.engine_error(e)
     dtree.attach(tree, _new_node(sib, prev.get("parent")))   # sibling of `prev` → branches from prev's parent
     _meter(s.get("user"), cost)
     updates = dict(tree=tree, **_mirror(tree))
     if regrade:
         updates["vetting"] = regrade
-    _fold_usage(sid, s, cost, toks, **updates)
+    ops.fold_usage(sid, s, cost, toks, **updates)
     return _plan_state(store.plan_get(sid))
 
 
@@ -1805,23 +1583,23 @@ async def api_plan_redraft(sid: str, request: Request):
     if active["step"] >= planner.N:
         return JSONResponse({"error": "This plan is already complete."}, status_code=409)
     def _work():
-        with _run_slot(s.get("user"), s.get("stack")):
+        with ops.run_slot(s.get("user"), s.get("stack")):
             sib, cost = planner.rebranch(planner._working_idea(s), s["research"], active, feedback,
-                                         founder=planner._founder(s), mock=MOCK)
+                                         founder=planner._founder(s), mock=ops.MOCK)
             regrade, cost2 = _regrade_setup(s, sib, cost)   # setup reframed → re-grade the verdict on the new angle
             return sib, regrade, cost2, pipeline.LEDGER.tokens()
     try:
         sib, regrade, cost, toks = await run_in_threadpool(_work)
-    except BusyError as be:
-        return _busy_response(be)
+    except ops.BusyError as be:
+        return ops.busy_response(be)
     except Exception as e:  # noqa: BLE001
-        return _engine_error(e)
+        return ops.engine_error(e)
     dtree.attach(tree, _new_node(sib, active.get("parent")))   # sibling of the active node → same step, new branch
     _meter(s.get("user"), cost)
     updates = dict(tree=tree, **_mirror(tree))
     if regrade:
         updates["vetting"] = regrade
-    _fold_usage(sid, s, cost, toks, **updates)
+    ops.fold_usage(sid, s, cost, toks, **updates)
     return _plan_state(store.plan_get(sid))
 
 
@@ -1868,16 +1646,16 @@ async def api_plan_ask(sid: str, request: Request):
     if archetype not in planner.ARCHETYPE_KEYS:
         return JSONResponse({"error": "pick an advisor"}, status_code=400)
     try:
-        with _run_slot(s.get("user"), s.get("stack")):
+        with ops.run_slot(s.get("user"), s.get("stack")):
             res, cost = planner.ask_expert(s["idea"], s.get("files") or {}, archetype,
-                                           body.get("question") or "", mock=MOCK)
+                                           body.get("question") or "", mock=ops.MOCK)
             toks = pipeline.LEDGER.tokens()
-    except BusyError as be:
-        return _busy_response(be)
+    except ops.BusyError as be:
+        return ops.busy_response(be)
     except Exception as e:  # noqa: BLE001
-        return _engine_error(e)
+        return ops.engine_error(e)
     _meter(s.get("user"), cost)
-    nc, nt = _fold_usage(sid, s, cost, toks)
+    nc, nt = ops.fold_usage(sid, s, cost, toks)
     return {**res, "cost": nc, "tokens": nt}
 
 
@@ -1903,16 +1681,16 @@ async def api_plan_board(sid: str, request: Request):
     work_idea = planner._working_idea(s)
     plan_text = planner.bundle_markdown(work_idea, s.get("files") or {})
     def _work():
-        with _run_slot(s.get("user"), s.get("stack")):
-            res, cost = board.convene(work_idea, plan_text, question, directors, mock=MOCK,
+        with ops.run_slot(s.get("user"), s.get("stack")):
+            res, cost = board.convene(work_idea, plan_text, question, directors, mock=ops.MOCK,
                                       extra_personas=customs)
             return res, cost, pipeline.LEDGER.tokens()
     try:
         res, cost, toks = await run_in_threadpool(_work)
-    except BusyError as be:
-        return _busy_response(be)
+    except ops.BusyError as be:
+        return ops.busy_response(be)
     except Exception as e:  # noqa: BLE001
-        return _engine_error(e)
+        return ops.engine_error(e)
     _meter(s.get("user"), cost)
     extra = {"directors": directors} if picked else {}   # persist a freshly chosen board for later steps
     # Persist the convene on the ACTIVE NODE's board history (bounded), so it survives tree navigation
@@ -1927,7 +1705,7 @@ async def api_plan_board(sid: str, request: Request):
         reviews = dtree.clip("board", list(base) + [entry])
         a["board"] = reviews
         extra.update(tree=tree, board=reviews)
-    nc, nt = _fold_usage(sid, s, cost, toks, **extra)
+    nc, nt = ops.fold_usage(sid, s, cost, toks, **extra)
     return {**res, "cost": nc, "tokens": nt}
 
 
@@ -1960,15 +1738,15 @@ async def api_director_forge(sid: str, request: Request):
                             status_code=409)
     existing = list(personas.KEYS) + [p["key"] for p in (s.get("custom_directors") or [])]
     try:
-        with _run_slot(s.get("user"), s.get("stack")):
-            persona, cost = director_forge.forge(desc, existing_keys=existing, mock=MOCK)
+        with ops.run_slot(s.get("user"), s.get("stack")):
+            persona, cost = director_forge.forge(desc, existing_keys=existing, mock=ops.MOCK)
             toks = pipeline.LEDGER.tokens()
-    except BusyError as be:
-        return _busy_response(be)
+    except ops.BusyError as be:
+        return ops.busy_response(be)
     except Exception as e:  # noqa: BLE001
-        return _engine_error(e)
+        return ops.engine_error(e)
     _meter(s.get("user"), cost)
-    nc, nt = _fold_usage(sid, s, cost, toks)
+    nc, nt = ops.fold_usage(sid, s, cost, toks)
     return {"persona": persona, "cost": nc, "tokens": nt}
 
 
@@ -2014,16 +1792,16 @@ async def api_research_query(sid: str, request: Request):
         return JSONResponse({"error": "Keep it under 1000 characters."}, status_code=400)
     mode = "deep" if body.get("mode") == "deep" else "quick"
     try:
-        with _run_slot(s.get("user"), s.get("stack")):
-            res, cost = advisor.research_answer(s, q, mode=mode, mock=MOCK)
+        with ops.run_slot(s.get("user"), s.get("stack")):
+            res, cost = advisor.research_answer(s, q, mode=mode, mock=ops.MOCK)
             toks = pipeline.LEDGER.tokens()
-    except BusyError as be:
-        return _busy_response(be)
+    except ops.BusyError as be:
+        return ops.busy_response(be)
     except Exception as e:  # noqa: BLE001
         traceback.print_exc()
         return JSONResponse({"error": str(e)}, status_code=500)
     _meter(s.get("user"), cost)
-    nc, nt = _fold_usage(sid, s, cost, toks)
+    nc, nt = ops.fold_usage(sid, s, cost, toks)
     return {**res, "cost": nc, "tokens": nt}
 
 
@@ -2040,19 +1818,17 @@ def _stress_worker(sid: str, idea: str, shaped: dict, research: dict | None,
             store.plan_save(sid, skeptic={"status": "running", "progress": list(progress),
                                           "result": None})
 
-        prov = _provider_for(user)
-        stk = tiers.clamp_stack(stack, tier=_tier(user), byok=bool(prov and not prov.bills_filg))
-        with provider.use(prov), provider.use_stack(stk), pipeline.run_ledger():
-            res, cost = skeptic.stress_test(idea, shaped, research, mock=MOCK, on_progress=on_progress)
+        with ops.bind_session_run(user, stack):
+            res, cost = skeptic.stress_test(idea, shaped, research, mock=ops.MOCK, on_progress=on_progress)
             toks = pipeline.LEDGER.tokens()
         _meter(user, cost)
         s = store.plan_get(sid) or {}
-        _fold_usage(sid, s, cost, toks,
+        ops.fold_usage(sid, s, cost, toks,
                     skeptic={"status": "done", "progress": progress, "result": res, "cost": cost})
     except Exception as e:  # noqa: BLE001
         traceback.print_exc()
         store.plan_save(sid, skeptic={"status": "error", "progress": progress, "result": None,
-                                      "error": _humanize_error(e)[0]})
+                                      "error": ops.humanize_error(e)[0]})
 
 
 @app.post("/api/plan/{sid}/stress-test")
@@ -2121,14 +1897,14 @@ async def api_plan_chat(sid: str, request: Request):
                                   (str(body.get("working") or "").strip() or None))
 
     def _work():
-        with _run_slot(s.get("user"), s.get("stack")):
-            reply, cost = advisor.chat_reply(s, message, history=hist_model, mock=MOCK,
+        with ops.run_slot(s.get("user"), s.get("stack")):
+            reply, cost = advisor.chat_reply(s, message, history=hist_model, mock=ops.MOCK,
                                              journey=journey, situation=situation)
             return reply, cost, pipeline.LEDGER.tokens()
     try:
         reply, cost, toks = await run_in_threadpool(_work)
-    except BusyError as be:
-        return _busy_response(be)
+    except ops.BusyError as be:
+        return ops.busy_response(be)
     except Exception as e:  # noqa: BLE001
         traceback.print_exc()
         return JSONResponse({"error": str(e)}, status_code=500)
@@ -2136,7 +1912,7 @@ async def api_plan_chat(sid: str, request: Request):
     history += (([{"role": "user", "content": message}] if echo_user else [])
                 + [{"role": "assistant", "content": reply}])
     _meter(s.get("user"), cost)  # FILG-key chat counts toward the daily kill switch; BYOK is the user's spend
-    nc, nt = _fold_usage(sid, s, cost, toks, chat=history)
+    nc, nt = ops.fold_usage(sid, s, cost, toks, chat=history)
     return {"reply": reply, "messages": history, "cost": nc, "tokens": nt}
 
 
@@ -2394,7 +2170,7 @@ async def api_plan_pdf(sid: str, request: Request):
     # artifact that circulates; the $13 unlock removes the line). No access and no key → payment.
     watermark = False
     if (billing.PDF_BILLING_ENABLED and not _is_subscriber(email)
-            and not billing.claim_pdf(email, _plan_key(s))):
+            and not billing.claim_pdf(email, ops.plan_key(s))):
         owner = (s.get("user") or email or "").strip().lower()
         if keys.enabled() and owner and keys.has_key(owner):
             watermark = True
@@ -2405,20 +2181,20 @@ async def api_plan_pdf(sid: str, request: Request):
                           "own API key for a free watermarked copy. Your raw export is always free.",
                  "needPurchase": True, "price": billing.PDF_PRICE_CENTS}, status_code=402)
     try:
-        with _run_slot(s.get("user"), s.get("stack")):
-            plan, cost = plan_pdf.synthesize(s, mock=MOCK)
+        with ops.run_slot(s.get("user"), s.get("stack")):
+            plan, cost = plan_pdf.synthesize(s, mock=ops.MOCK)
             data = plan_pdf.render(plan, style=(request.query_params.get("style") or "filg"),
                                    watermark=watermark)
             toks = pipeline.LEDGER.tokens()
-    except BusyError as be:
-        return _busy_response(be)
+    except ops.BusyError as be:
+        return ops.busy_response(be)
     except Exception as e:  # noqa: BLE001
         traceback.print_exc()
         return JSONResponse({"error": f"Could not build the PDF: {e}"}, status_code=500)
     # BYOK → the owner's own key (never touches FILG's budget). A subscriber → FILG's key, so meter the
     # synth against their monthly fair-use cap. The per-session meter reflects it either way.
     _meter(s.get("user"), cost)
-    nc, nt = _fold_usage(sid, s, cost, toks)   # binary response → echo usage via headers for the meter
+    nc, nt = ops.fold_usage(sid, s, cost, toks)   # binary response → echo usage via headers for the meter
     fn = f"{_slug(s.get('idea'))}-business-plan.pdf"
     return Response(data, media_type="application/pdf",
                     headers={"Content-Disposition": f'attachment; filename="{fn}"',
@@ -2431,7 +2207,7 @@ def _page_head() -> str:
     cfg = json.dumps({"authEnabled": auth.AUTH_ENABLED,
                       "pdfBilling": billing.PDF_BILLING_ENABLED, "pdfPrice": billing.PDF_PRICE_CENTS,
                       "byokEnabled": keys.enabled(),
-                      "freeTaste": bool(HOSTED_FREE and keys.enabled()),   # first query on FILG's key
+                      "freeTaste": bool(ops.HOSTED_FREE and keys.enabled()),   # first query on FILG's key
                       "subEnabled": billing.PDF_BILLING_ENABLED,           # monthly tiers available (Stripe on)
                       "tiers": tiers.catalog(),                            # pricing table / fork UI
                       # dev-only: with auth off, act as this account so the subscriber UX reflects locally
