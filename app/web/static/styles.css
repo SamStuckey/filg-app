@@ -340,6 +340,10 @@ ul.concernlist .concern .cdetail{color:var(--muted);font-size:13px;line-height:1
 .modal .err{min-height:16px}
 .modal a{color:var(--accent)}
 
+/* The fold-in receipt: one line on HOW the last note/comments changed this part (visible, not silent) */
+.chgnote{font-size:13px;color:var(--muted);background:var(--bg);border-left:3px solid var(--accent);
+  border-radius:0 6px 6px 0;padding:6px 10px;margin:0 0 10px}
+
 /* ── Inline doc comments (backlog #8): select text in a rendered doc → note popover + comment rows ── */
 #cmtpop{position:fixed;z-index:60;width:280px;background:var(--card);border:1px solid var(--line);
   border-radius:10px;box-shadow:0 8px 28px rgba(0,0,0,.18);padding:10px;display:none}

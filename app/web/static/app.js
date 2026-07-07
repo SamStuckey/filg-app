@@ -1777,9 +1777,27 @@ function firstPageHtml(s){
   const mt=v.model_type&&MT[v.model_type]?`<span class=mold>${esc(MT[v.model_type])}</span>`:'';
   const points=[["What you'd sell",R.offer],["How you'd win it",R.gtm],['Biggest risk',v.biggest_risk||v.first_test]]
     .filter(p=>p[1]).map(p=>`<li><b>${esc(p[0])}</b>${esc(p[1])}</li>`).join('');
+  if(v.verdict==='kill')
+    return `<p class=eyebrow>Is this serious?</p>`+verdict+mt+
+      `<p class=react>${esc(v.reaction||R.title||"Here's your idea, graded.")}</p>`+
+      `<ul class=keypoints>${points}</ul>`+killCtas(s);
+  // v1 parity: the drafted first page renders ON the card (a commentable .draft), graded read above
   return `<p class=eyebrow>Is this serious?</p>`+verdict+mt+
     `<p class=react>${esc(v.reaction||R.title||"Here's your idea, graded.")}</p>`+
-    `<ul class=keypoints>${points}</ul>`+(v.verdict==='kill'?killCtas(s):stepCtas());
+    `<ul class=keypoints>${points}</ul>`+
+    `<p class=eyebrow style="margin-top:14px">${esc(partEyebrow(s))}</p>`+draftDoc(s.proposal)+
+    stepCtas();
+}
+// The current part's rendered doc: the fold-in receipt (how your last note changed it) + the draft
+// itself. The .draft class is load-bearing — it is what the inline-comment handler listens on.
+function draftDoc(p){
+  if(!p||!p.draft)return '';
+  const chg=p.change?`<div class=chgnote>✎ ${esc(p.change)}</div>`:'';
+  return chg+`<div class=draft>${mdToHtml(p.draft)}</div>`;
+}
+function partEyebrow(s){
+  const c=chapterOf(s.step||0);
+  return (c?`Chapter ${c.i+1}: ${c.name} · `:'')+`Part ${(s.step||0)+1} of ${s.total}`;
 }
 // A kill-graded first page: the diagnostic question IS the step (backlog #13). Rolling forward
 // unforced won't draft; the CTAs are the three real ways out.
@@ -1805,11 +1823,7 @@ function chapterOf(step){
   return null;
 }
 function chapterHtml(s){
-  const p=s.proposal||{};
-  const c=chapterOf(s.step||0);
-  const eyebrow=(c?`Chapter ${c.i+1}: ${c.name} · `:'')+`Part ${(s.step||0)+1} of ${s.total}`;
-  return `<p class=eyebrow>${esc(eyebrow)}</p><div class=draft>${mdToHtml(p.draft||'')}</div>`+
-    stepCtas();
+  return `<p class=eyebrow>${esc(partEyebrow(s))}</p>`+draftDoc(s.proposal)+stepCtas();
 }
 function doneHtml(s){
   const files=(s.files||[]).map(f=>`<li>${esc(f.path)}</li>`).join('');
