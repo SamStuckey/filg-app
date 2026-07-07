@@ -844,6 +844,7 @@ function resetGraph(){ GSEEN=new Set(); FOCUS=null; BROWSING=false; LAST_ACTIVE=
   PIVOT_FROM=null; REVET_ARMED=false;
   GEXPANDED=new Set(); GQUERY=''; NAVCUR=null; LAYOUT=null;
   const gs=$('gsearch'); if(gs)gs.value=''; const gn2=$('gsearch-n'); if(gn2)gn2.hidden=true;
+  const gc=$('gctrls'); if(gc){gc.classList.remove('searchopen');gc.classList.remove('gmenu-open');}
   const mm=$('minimap'); if(mm){mm.hidden=true;mm.innerHTML='';}
   LOOKUPS=[]; RQUERY=''; if(RMODE)exitResearch(true);   // research display is per-plan state
   BQUERY=''; B_OFFERED=false; BOARD_PICK=null; STRESS_ON=false; FORGED=null;   // board display too
@@ -1190,6 +1191,24 @@ function nodeMatches(n,q){
   return hay.indexOf(q.toLowerCase())>=0;
 }
 function gSearch(q){ GQUERY=(q||'').trim(); if(VIEWMODE==='graph')renderGraph(); }
+// ── Header hamburger (mobile) + graph-control dropdown (mobile) + expanding search (all sizes) ──
+function toggleHMenu(){ const l=$('lefttop'); if(l)l.classList.toggle('menu-open'); }
+function closeHMenu(){ const l=$('lefttop'); if(l)l.classList.remove('menu-open'); }
+function toggleGMenu(){ const g=$('gctrls'); if(g)g.classList.toggle('gmenu-open'); }
+function closeGMenu(){ const g=$('gctrls'); if(g)g.classList.remove('gmenu-open'); }
+function openSearch(){ const c=$('gctrls'); if(!c)return; c.classList.add('searchopen');
+  const i=$('gsearch'); if(i)setTimeout(()=>i.focus(),20); }
+function toggleSearch(){ const c=$('gctrls'); if(!c)return;
+  if(c.classList.contains('searchopen')){ c.classList.remove('searchopen'); gSearch(''); const i=$('gsearch'); if(i)i.value=''; }
+  else openSearch(); }
+function searchBlur(){ const i=$('gsearch'); const c=$('gctrls');   // an empty search collapses back to the magnifier
+  if(c&&i&&!i.value.trim())c.classList.remove('searchopen'); }
+// close either menu on an outside click (the toggles live inside their own container, so a click
+// on them is never "outside" and won't fight the toggle)
+document.addEventListener('click',e=>{
+  if(!e.target.closest('#lefttop'))closeHMenu();
+  if(!e.target.closest('#gctrls'))closeGMenu();
+});
 // Keyboard nav: arrows walk the laid-out tree (↑ parent · ↓ child, spine first · ←/→ siblings),
 // Enter opens the cursor node (or unfolds a stub), F fits, +/− zoom, / jumps to search.
 function navSibs(id){
@@ -1222,7 +1241,7 @@ function graphKeys(e){
   if(tgt.tagName==='INPUT'||tgt.tagName==='TEXTAREA'||tgt.isContentEditable)return;
   if(!$('v2modal')||!$('v2modal').hidden)return;
   if(VIEWMODE!=='graph'||!S)return;
-  if(e.key==='/'){ e.preventDefault(); const g=$('gsearch'); if(g)g.focus(); return; }
+  if(e.key==='/'){ e.preventDefault(); openSearch(); return; }
   if(e.key==='f'||e.key==='F'){ e.preventDefault(); return fitView(); }
   if(e.key==='+'||e.key==='='){ e.preventDefault(); return zoomStep(1.25); }
   if(e.key==='-'){ e.preventDefault(); return zoomStep(0.8); }
