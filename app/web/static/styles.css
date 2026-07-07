@@ -269,6 +269,11 @@ ul.qs li{margin:4px 0}
     overflow-y:auto;border-right:none;box-shadow:none}
   .workspace.full .mrail-in{display:none}
   .toasts{z-index:40}
+  #minimap{display:none}   /* the screen IS touch-panned — a jump pip is dead weight on a phone */
+  /* stage CTAs share the row at phone size instead of stacking full-width */
+  .ctarow{gap:8px}
+  .ctarow .stage-cta{flex:1 1 40%;min-width:0;padding:8px 10px;font-size:13.5px}
+  .stage-cta .ctasub{font-size:10.5px}
 }
 .jokecard{border:1px solid var(--line);border-radius:12px;padding:16px;margin-top:16px;text-align:left}
 
