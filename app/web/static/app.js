@@ -245,8 +245,25 @@ function keyIndicator(){
 function openModal(title,wide){ $('modal-title').textContent=title;
   $('v2modal').classList.toggle('wide',!!wide);
   $('v2modal').hidden=false; $('modalback').classList.add('show'); }
+let MODAL_ONCLOSE=null;   // a promise-based modal (modalConfirm) resolves to CANCEL when dismissed
 function closeModal(){ $('v2modal').hidden=true; $('v2modal').classList.remove('wide');
-  $('modalback').classList.remove('show'); }
+  $('modalback').classList.remove('show');
+  if(MODAL_ONCLOSE){ const f=MODAL_ONCLOSE; MODAL_ONCLOSE=null; f(); } }
+// A blocking confirm rendered as a REAL modal (heavier than the in-chat confirm) — for the moments
+// the user must deliberately choose, e.g. rolling past the gate questions. Dismissing (backdrop/✕)
+// resolves to false, so an awaited caller never hangs. bodyHtml is trusted, static copy.
+function modalConfirm(title,bodyHtml,goLabel,cancelLabel){return new Promise(res=>{
+  let done=false;
+  const finish=v=>{ if(done)return; done=true; MODAL_ONCLOSE=null; closeModal(); res(v); };
+  $('modal-body').innerHTML=`<div class=mcbody>${bodyHtml}</div>`;   // a div (not <p>) so lists nest legally
+  $('modal-acts').innerHTML=
+    `<button type=button class=mc-cancel>${esc(cancelLabel||'Cancel')}</button>`+
+    `<button type=button class="primary mc-go">${esc(goLabel||'OK')}</button>`;
+  openModal(title);
+  MODAL_ONCLOSE=()=>{ if(!done){ done=true; res(false); } };
+  $('modal-acts').querySelector('.mc-go').onclick=()=>finish(true);
+  $('modal-acts').querySelector('.mc-cancel').onclick=()=>finish(false);
+});}
 async function keyModal(){
   if(CFG.authEnabled&&!signedIn()){ authModal('Your key is stored on your account — sign in first.'); return; }
   await loadKey();
@@ -336,6 +353,31 @@ function toggleLandingHelp(){
     ? "'how does this work?', 'what does this cost?'…"
     : "e.g. 'I want to make my dog internet famous', 'I have a truck, some tools, and free time', 'I'm a book worm with a bad back who likes turtles'…";
 }
+// Help mode on the LANDING is a help CHAT, not a build (Sam, 2026-07-07): a query used to fall through
+// to startFromLanding and launch the whole builder. Now it expands the landing into a conversation —
+// each answer carries a "Get started →" button that drops help mode and hands the box back for a real
+// idea. The Q&A lives in #chatlog (DOM-only, no SID yet) and rides along into the plan once one starts.
+async function landingHelpSend(){
+  const box=$('ws-box'), q=box.value.trim(); if(!q)return;
+  $('landing-err').textContent=''; $('landing-joke').innerHTML='';
+  $('workspace').classList.add('helpchat');   // reveal the chat + shrink the hero — still the landing
+  box.value='';
+  chatSay('user',esc(q));   // DOM-only (no session yet); preserved into the plan when the build starts
+  const btn=$('ws-send'); btn.disabled=true;
+  btn.innerHTML='<span class="spin sendspin" aria-hidden=true></span> …';
+  const th=chatSay('status','thinking…');
+  const {ok,d}=await api('POST','/api/help',{message:q});
+  if(th)th.remove(); btn.disabled=false; sendLabel();
+  if(!ok){ if(gateV2(d))return; chatErr((d&&d.error)||'Could not answer that.'); return; }
+  const m=chatSay('bot',mdToHtml((d&&d.reply)||'')+
+    `<div class=cbtns><button type=button class=go>Get started →</button></div>`);
+  const go=m&&m.querySelector('.go'); if(go)go.onclick=landingHelpExit;
+}
+function landingHelpExit(){
+  if(LANDING_HELP)toggleLandingHelp();          // help off → the idea placeholder is back
+  chatStatus("Whenever you're ready — tell me your idea and we'll build it.");
+  const b=$('ws-box'); if(b){ b.value=''; b.focus(); }
+}
 function sendLabel(){ const b=$('ws-send'); if(b)b.textContent=isFull()?'Start →':'Send →';
   const x=$('ws-box'); if(x&&!LANDING_HELP)x.placeholder=isFull()
     ? "e.g. 'I want to make my dog internet famous', 'I have a truck, some tools, and free time', 'I'm a book worm with a bad back who likes turtles'…"
@@ -348,7 +390,7 @@ async function startFromLanding(){
   // ONE surface: the expanded drawer collapses into the sidebar, the box drops to the bottom, and
   // the canvas fades in with a seed node already working — no swap, no fly-away.
   box.value='';
-  $('workspace').classList.remove('full'); sendLabel();
+  $('workspace').classList.remove('full','helpchat'); sendLabel();   // a build leaves the landing (+ any help chat)
   // the operator's words appear in the chat IMMEDIATELY — an empty drawer while the first spread
   // thinks reads as a swallowed input (Sam's QA, 2026-07-06). Display-only for now (no SID yet to
   // persist against); persisted below once the session exists, removed if the submit is rejected.
@@ -429,18 +471,31 @@ function _rDrop(){ if(RMODE){ RMODE=null; RQUERY=''; applyRmode(); } }
 function _bDrop(){ if(BMODE){ BMODE=null; BQUERY=''; applyBmode(); } }
 function _hDrop(){ if(HMODE){ HMODE=false; applyHmode(); } }
 function _sDrop(){ if(SMODE){ SMODE=false; applySmode(); } }
+// While a chat send is in flight, the focused-node CTAs are DEBOUNCED (dimmed + a spinner) so a user
+// can't send feedback then race-click "next step" before the reply lands — the click would fire on
+// stale state (a steer that's about to pivot/re-merge). Cleared when the send resolves. (Sam, 2026-07-07)
+let CHAT_BUSY=false;
+function setChatBusy(v){ CHAT_BUSY=!!v; document.body.classList.toggle('chatbusy',CHAT_BUSY); }
 async function sendPrompt(){
-  if(isFull())return startFromLanding();   // full mode: the first prompt IS the landing submit
+  if(isFull()){   // full mode = the landing: the first prompt is normally the idea that starts the build…
+    if(LANDING_HELP)return landingHelpSend();   // …but in HELP mode it's a question → a help chat, no build
+    return startFromLanding();
+  }
   const box=$('ws-box'), prompt=box.value.trim(); if(!prompt) return;
   $('ws-err').textContent='';
   chatUser(prompt);
   box.value='';   // submitted — the bubble is the record; clearing NOW says "I heard you"
                   // (routing failure below restores it so nothing typed is ever lost)
+  setChatBusy(true);
+  try{ return await _sendPrompt(prompt,box); }
+  finally{ setChatBusy(false); }
+}
+async function _sendPrompt(prompt,box){
   // an armed "Pivot from here" ghost: the input IS the pivot feedback — spread from that node directly
   if(PIVOT_FROM){ const from=PIVOT_FROM; box.value=''; clearGhost();
-    chatStatus('Pivoting from '+pivotSrcLabel(from)); return pivotSpread(from,prompt); }
+    chatStatus('Pivoting from '+pivotSrcLabel(from)); return await pivotSpread(from,prompt); }
   // the kill gate armed "give it substance": the input IS the substance — straight to /revet
-  if(REVET_ARMED){ box.value=''; return revetSend(prompt); }
+  if(REVET_ARMED){ box.value=''; return await revetSend(prompt); }
   // research mode: the first question slides the chat up into the split; every message re-focuses
   // the stack on what's relevant (fuzzy-finder feel), and remembers whether anything matched
   let rRelated=null;
@@ -494,13 +549,15 @@ async function sendPrompt(){
 async function dispatch(dec,fromNode,prompt){
   switch(dec.intent){
     case 'commit':
+      if(atRefinedGate())return gateProceed();   // the gate questions guard the roll-forward
       if(dec.confirm&&!(await chatConfirm(BIG_STEP_ASK,"Let's go")))return;
-      return commit(null,fromNode);
+      return advanceGuard(()=>commit(null,fromNode));   // + any serious board objection on this step
     case 'next': {   // the funnel's ONE next step — what it means depends on where you are
       if(WIP_LABEL||S.status==='researching'){ chatBot('Already on it — the next part is being written now.'); return; }
       if(S.done||S.stage==='done'){ chatBot("The plan's complete — pivot from any node to take it somewhere new."); return; }
       if(S.stage==='building')return keepGoing();
       if(S.stage==='refined'){
+        if(atRefinedGate())return gateProceed();   // gate first (its own confirm); else the big-step check
         if(!(await chatConfirm(BIG_STEP_ASK,"Let's go")))return;
         return commit();   // 'next' rolls the ACTIVE refined node — a browsed node never hijacks it
       }
@@ -645,26 +702,148 @@ function saveCmt(){ const note=(($('cmtpop-note')||{}).value||'').trim(); hideCm
   if(!note||!CMT_NODE)return;
   (DOCCMTS[CMT_NODE]=DOCCMTS[CMT_NODE]||[]).push({quote:CMT_QUOTE,note});
   renderView(); }
-document.addEventListener('mouseup',e=>{
-  if(e.target.closest('#cmtpop'))return;
-  if(!e.target.closest('.draft'))return;                       // comments live on rendered docs only
-  const sel=window.getSelection(); const quote=(sel&&sel.toString()||'').trim();
-  if(!quote)return;
+// Open the comment popover for a quote at a screen position — shared by highlight + click-a-line.
+function openCmtPop(quote,x,y){
   const id=(VIEWMODE==='docs')?DOCTAB:FOCUS;                   // whichever node's doc is on screen
   CMT_NODE=(id&&id!=='_wip')?id:(nodesOf(S).t||{}).active; if(!CMT_NODE)return;
-  CMT_QUOTE=quote.slice(0,180);
+  CMT_QUOTE=(quote||'').slice(0,180); if(!CMT_QUOTE)return;
   const p=cmtPop();
   $('cmtpop-q').textContent='“'+(CMT_QUOTE.length>90?CMT_QUOTE.slice(0,90)+'…':CMT_QUOTE)+'”';
   $('cmtpop-note').value='';
   p.classList.add('show');                                     // show first so it can be measured
   const pw=p.offsetWidth||280, ph=p.offsetHeight||130;
-  p.style.left=Math.max(8,Math.min(e.clientX-40,window.innerWidth-pw-8))+'px';
-  p.style.top=Math.max(8,Math.min(e.clientY+14,window.innerHeight-ph-8))+'px';
+  p.style.left=Math.max(8,Math.min(x-40,window.innerWidth-pw-8))+'px';
+  p.style.top=Math.max(8,Math.min(y+14,window.innerHeight-ph-8))+'px';
   setTimeout(()=>{const n=$('cmtpop-note');if(n)n.focus();},30);
+}
+// v1 parity (restored 2026-07-07): HIGHLIGHT text OR just CLICK a line/section to comment on it.
+// A drag-selection uses the selected text; a plain click (no selection) grabs the clicked block —
+// the paragraph/list-item/heading under the cursor — as the quote, so the whole section is one click.
+document.addEventListener('mouseup',e=>{
+  if(!(e.target instanceof Element))return;                    // a stray non-element target has no .closest
+  if(e.target.closest('#cmtpop'))return;
+  const draft=e.target.closest('.draft'); if(!draft)return;    // comments live on rendered docs only
+  if(e.target.closest('a,button,textarea,input,select'))return;  // never hijack an interactive element
+  const sel=window.getSelection(); let quote=(sel&&sel.toString()||'').trim();
+  if(!quote){                                                  // no highlight → click-a-line
+    const blk=e.target.closest('p,li,h1,h2,h3,h4,blockquote,td,th');
+    if(blk&&blk!==draft&&draft.contains(blk))quote=(blk.textContent||'').trim();
+  }
+  if(!quote)return;
+  openCmtPop(quote,e.clientX,e.clientY);
 });
 document.addEventListener('keydown',e=>{ if(e.key==='Escape')hideCmtPop(); });
 document.addEventListener('mousedown',e=>{ const p=$('cmtpop');
-  if(p&&p.classList.contains('show')&&!e.target.closest('#cmtpop'))p.classList.remove('show'); });
+  if(p&&p.classList.contains('show')&&e.target instanceof Element&&!e.target.closest('#cmtpop'))p.classList.remove('show'); });
+
+// ── Gate questions (§v2 #14): the merge's ≤3 clarifying questions on the refined card are
+// ANSWERABLE IN PLACE. Each is a clickable row that expands to a box; typed answers fold into a
+// re-merge (/refine) that sharpens the idea. Rolling forward with them unanswered trips a confirm
+// modal — the questions are meant to be reckoned with, not silently skipped past (Sam, 2026-07-07).
+let GATEANS={}, GATEOPEN=new Set();
+function gateKey(id,i){ return (id||'')+':'+i; }
+function gateAnswered(id){ const a=GATEANS[id]||{};
+  return Object.keys(a).filter(k=>((a[k]||'')+'').trim()).length; }
+function setGateAns(id,i,v){ (GATEANS[id]=GATEANS[id]||{})[i]=v; }
+// live feedback as the user types — flip the row's marker + re-enable the fold button, no re-render
+function gateAnsMark(ta){
+  const row=ta.closest('.qrow');
+  if(row){ const on=!!ta.value.trim(); row.classList.toggle('answered',on);
+    const mk=row.querySelector('.qmarker'); if(mk)mk.textContent=on?'✓':'+'; }
+  const nid=(S&&S.activeNode&&S.activeNode.id)||'';
+  const fold=document.querySelector('.qfold'); if(fold)fold.disabled=!gateAnswered(nid);
+}
+function toggleGateQ(id,i){ const k=gateKey(id,i), open=!GATEOPEN.has(k);
+  if(open)GATEOPEN.add(k); else GATEOPEN.delete(k);
+  const row=document.querySelector(`.qrow[data-q="${k}"]`);
+  if(row){ row.classList.toggle('open',open);
+    if(open){ const ta=row.querySelector('textarea'); if(ta)setTimeout(()=>ta.focus(),20); } }
+}
+function openAllGateQ(id){
+  ((S&&S.activeNode&&S.activeNode.questions)||[]).forEach((q,i)=>GATEOPEN.add(gateKey(id,i)));
+  renderView();
+  setTimeout(()=>{ const ta=document.querySelector('.qrow.open textarea'); if(ta)ta.focus(); },40);
+}
+// fold the answered questions into the idea: a /refine re-merge in place (same picks, the answers
+// outweighing) — the documented "answer at the gate re-merges in place" path.
+function foldGateAnswers(id){
+  const qs=(S&&S.activeNode&&S.activeNode.questions)||[], ans=GATEANS[id]||{};
+  const parts=qs.map((q,i)=>((ans[i]||'')+'').trim()?`${q} → ${(''+ans[i]).trim()}`:null).filter(Boolean);
+  if(!parts.length){ toast('Answer at least one question first.','err'); return; }
+  GATEOPEN.clear(); delete GATEANS[id];
+  return refineIdea('Answers to your questions — '+parts.join('; '));
+}
+function atRefinedGate(){ const a=(S&&S.activeNode)||{};
+  return a.kind==='refined' && ((a.questions||[]).length>0); }
+
+// ── ALERTABLE CONCERNS (systemic, 2026-07-07) ────────────────────────────────
+// A "concern" is a surfaced-but-unresolved issue on the CURRENT step: an unanswered gate question,
+// or a serious board objection (the standing skeptic's dissent / non-starter — its whole job is to
+// object, so we grade the verdict). We NEVER block advancing — we surface every concern once, in a
+// confirm modal, before the roll-forward. Acknowledging ("Advance anyway") records the concern so we
+// don't re-nag: old objections that ride forward via board inheritance stay silent (the user already
+// decided). This unifies the gate-question speed bump with board objections under one gate.
+let CONCERN_ACK=new Set();   // concern keys the user chose to advance past — never re-alert
+function boardNotesOf(nid){ const {t}=nodesOf(S);
+  return (nid===t.active)?((S&&S.board)||[]):(((NODECACHE[nid]||{}).board)||[]); }
+// the skeptic verdict grade → severity. 'agree' = no objection; 'concern' = a fixable weakness (amber);
+// 'dissent'/'non-starter' = a serious objection (red).
+function boardSeverity(e){
+  const sv=((e&&e.skeptic&&e.skeptic.verdict)||'').toLowerCase();
+  if(sv==='dissent'||sv==='non-starter')return 'high';
+  if(sv==='concern')return 'med';
+  return null;
+}
+function boardConcernText(e){ return (e.skeptic&&(e.skeptic.take||e.skeptic.rationale))
+  ||e.conflicts||e.verdict||'The board raised an objection.'; }
+// the max board severity on a node's notes — drives the ⚠️ badge on the collapsed board line
+function boardTopSeverity(nid){ let s=null;
+  boardNotesOf(nid).forEach(e=>{ const sev=boardSeverity(e); if(sev==='high')s='high'; else if(sev==='med'&&s!=='high')s='med'; });
+  return s; }
+// every unresolved, unacknowledged concern on the active step
+function stepConcerns(){
+  const a=(S&&S.activeNode)||{}, nid=a.id||'', out=[];
+  if(a.kind==='refined'){ const ans=GATEANS[nid]||{};   // unanswered gate questions
+    (a.questions||[]).forEach((q,i)=>{ const key='q:'+nid+':'+i;
+      if(!((ans[i]||'')+'').trim()&&!CONCERN_ACK.has(key))
+        out.push({key,kind:'question',sev:'med',title:'Unanswered question',detail:q}); }); }
+  boardNotesOf(nid).forEach(e=>{ const sev=boardSeverity(e); if(!sev)return;   // serious board objections
+    const detail=boardConcernText(e), key='board:'+detail.slice(0,90);
+    if(!CONCERN_ACK.has(key))out.push({key,kind:'board',sev,
+      title:(e.skeptic&&(e.skeptic.name||'The Skeptic'))||'Board objection',detail}); });
+  return out;
+}
+// The one gate before any roll-forward: surface the step's concerns, let the user advance anyway or
+// go back. `proceed` is the actual advance (commit / next / …). Returns proceed()'s result, or nothing
+// if the user backed out.
+async function advanceGuard(proceed){
+  const cs=stepConcerns();
+  if(!cs.length)return proceed();
+  const items=cs.map(c=>
+    `<li class="concern ${c.sev}"><span class=cico aria-hidden=true>${c.kind==='question'?'❓':'⚠️'}</span>`+
+    `<div><b>${esc(c.title)}</b><div class=cdetail>${esc(c.detail)}</div></div></li>`).join('');
+  const hasQ=cs.some(c=>c.kind==='question');
+  const go=await modalConfirm('Before you advance',
+    `<p class=cintro>There ${cs.length>1?'are':'is'} <b>${cs.length}</b> unresolved concern${cs.length>1?'s':''} `+
+    `on this step. You can still advance — this is just so you've seen ${cs.length>1?'them':'it'}.</p>`+
+    `<ul class=concernlist>${items}</ul>`,
+    'Advance anyway', hasQ?'Let me address these':'Go back');
+  if(go){ cs.forEach(c=>CONCERN_ACK.add(c.key)); return proceed(); }   // acknowledged → never re-nag
+  if(hasQ)openAllGateQ((S&&S.activeNode&&S.activeNode.id)||'');        // send them to the questions
+  return;
+}
+// The refined-card roll-forward: fold any typed-but-unsubmitted answers first (a convenience), then
+// the unified concern gate (unanswered questions + board objections) guards the deep build.
+async function gateProceed(){
+  const a=(S&&S.activeNode)||{}, nid=a.id||'';
+  if((a.questions||[]).length && gateAnswered(nid)){
+    const fold=await modalConfirm('Fold in your answers?',
+      `You've written answers to the gate questions but haven't folded them in yet. Fold them into the `+
+      `idea first so the deep build uses your input?`,'Fold them in','Not now');
+    if(fold)return foldGateAnswers(nid);
+  }
+  return advanceGuard(()=>commit());
+}
 
 // ── Funnel actions ───────────────────────────────────────────────────────────
 // A keyboard-mash pivot gets the same free roast as a mash at the landing box — in the chat,
@@ -744,12 +923,14 @@ function commitFromBrainstorm(){
   const chosen=(stageOptions()||[]).filter(o=>SEL.has(o.id)).map(o=>o.direction.one_liner||o.direction.title);
   // the PICKS ride along, not just their text — without them the graph drew the checked option as
   // passed-over and a pivot-commit read as "nevermind" even though the build honored it (Sam's QA)
-  commit(chosen.join(' + '),null,[...SEL]);
+  return advanceGuard(()=>commit(chosen.join(' + '),null,[...SEL]));
 }
-async function keepGoing(){
-  const {t}=nodesOf(S);   // inline comments on this doc ride the roll-forward (backlog #8)
-  if(await run(`/api/plan/${SID}/next`,{feedback:cmtSteer(t.active).trim()},'Writing the next part'))
-    delete DOCCMTS[t.active];
+async function keepGoing(){   // advancing to the next part surfaces any unresolved concern on this step first
+  return advanceGuard(async ()=>{
+    const {t}=nodesOf(S);   // inline comments on this doc ride the roll-forward (backlog #8)
+    if(await run(`/api/plan/${SID}/next`,{feedback:cmtSteer(t.active).trim()},'Writing the next part'))
+      delete DOCCMTS[t.active];
+  });
 }
 async function keepGoingForced(){ await run(`/api/plan/${SID}/next`,{feedback:'',force:true},'Building it anyway'); }
 async function run(url,body,label){
@@ -1419,12 +1600,17 @@ function boardNotesHtml(id){
   const {t}=nodesOf(S);
   const list=(id===t.active)?((S&&S.board)||[]):(((NODECACHE[id]||{}).board)||[]);
   if(!list.length)return '';
-  const rows=list.slice().reverse().map(e=>
-    `<div class=bdrow><b>${esc(e.title||'Board review')}</b>${_vchip(e.verdict)}`+
-    (e.skeptic?`<div class="bdrow skept" style="border:none;padding-top:2px;margin-top:2px">🧐 ${esc((e.skeptic.take||e.skeptic.rationale||'').slice(0,180))}</div>`:'')+
-    `</div>`).join('');
-  return `<details class=nhist${HIST_OPEN.has(id+':b')?' open':''} ontoggle="histKeep('${id}:b',this)">`+
-    `<summary>🪑 board notes on this step (${list.length})</summary>${rows}</details>`;
+  const rows=list.slice().reverse().map(e=>{
+    const sev=boardSeverity(e);
+    return `<div class="bdrow${sev?' concerning '+sev:''}"><b>${esc(e.title||'Board review')}</b>${_vchip(e.verdict)}`+
+      (e.skeptic?`<div class="bdrow skept${sev==='high'?' hi':''}" style="border:none;padding-top:2px;margin-top:2px">`+
+        `${sev?'⚠️ ':'🧐 '}${esc((e.skeptic.take||e.skeptic.rationale||'').slice(0,180))}</div>`:'')+
+      `</div>`;}).join('');
+  // a serious/unresolved objection flags the COLLAPSED line so it's visible without opening (Sam, 2026-07-07)
+  const sev=boardTopSeverity(id);
+  const badge=sev?`<span class="alertdot ${sev}" title="The board raised an objection on this step">⚠️</span> `:'';
+  return `<details class="nhist${sev?' hasalert':''}${HIST_OPEN.has(id+':b')?' open':''}" ontoggle="histKeep('${id}:b',this)">`+
+    `<summary>${badge}🪑 board notes on this step (${list.length})</summary>${rows}</details>`;
 }
 // The active node's content while a background op runs on it — no CTAs (double-firing a merge or
 // commit mid-run is the failure this read-only view prevents), but everything readable, right away.
@@ -1556,18 +1742,31 @@ function refinedHtml(s){
   const R=(a.research&&a.research.prose)||{};
   const rows=((a.research&&a.research.rows)||[]).slice(0,4).map(x=>
     `<li>${x.mark==='ok'?'✅':'⚠️'} ${esc(x.text)} <span class="badge ${x.mark==='ok'?'b-ok':'b-warn'}">${x.mark==='ok'?'cited':'vendor'}</span></li>`).join('');
-  const qs=(a.questions||[]).map(q=>`<li>${esc(q)}</li>`).join('');
+  const nid=a.id||'';
+  // each question is a clickable row that expands to an answer box; the row remembers its open state
+  // (GATEOPEN) and its typed answer (GATEANS) across re-renders
+  const qs=(a.questions||[]).map((q,i)=>{
+    const k=gateKey(nid,i), open=GATEOPEN.has(k), val=((GATEANS[nid]||{})[i]||'')+'';
+    return `<li class="qrow${open?' open':''}${val.trim()?' answered':''}" data-q="${esc(k)}">`+
+      `<button type=button class=qtoggle onclick="toggleGateQ('${esc(nid)}',${i})">`+
+      `<span class=qmarker aria-hidden=true>${val.trim()?'✓':'+'}</span><span class=qtext>${esc(q)}</span></button>`+
+      `<div class=qans><textarea rows=2 placeholder="Your answer…" `+
+      `oninput="setGateAns('${esc(nid)}',${i},this.value);gateAnsMark(this)">${esc(val)}</textarea></div></li>`;
+  }).join('');
+  const anyAns=gateAnswered(nid);
   return fb+`<p class=react>${esc(a.thesis||'')}</p>`+
     (a.mold?`<span class=mold>${esc(a.mold)}</span>`:'')+
     (kept?`<p class=eyebrow style="margin-top:14px">Kept</p><ul class=kept>${kept}</ul>`:'')+
     (dropped?`<p class=eyebrow>Cut (and why)</p><ul class=dropped>${dropped}</ul>`:'')+
     (R.offer?`<p class=eyebrow>First-pass read (light pass)</p><p><b>${esc(R.title||'')}</b> — ${esc(R.offer)}</p>`:'')+
     (rows?`<ul class=ev>${rows}</ul>`:'')+
-    (qs?`<p class=eyebrow>Worth answering first</p><ul class=qs>${qs}</ul>`+
-      `<p class=thinking>Answer any of these in the box — they sharpen the idea before the deep dive. Or skip ahead.</p>`:'')+
+    (qs?`<p class=eyebrow>Worth answering first</p><ul class="qs qint">${qs}</ul>`+
+      `<div class=ctarow><button type=button class="stage-cta secondary qfold"${anyAns?'':' disabled'} `+
+      `onclick="foldGateAnswers('${esc(nid)}')">↻ Fold my answers into the idea</button></div>`+
+      `<p class=thinking>Click a question to answer it — answers sharpen the idea before the deep dive. Or build past them.</p>`:'')+
     `<div class=gate>⛳ <b>Prelaunch gate.</b> That read was a quick skim. The next step is the deep one: `+
     `full graded research on every claim, then the plan drafts section by section.</div>`+
-    `<div class=ctarow><button class=stage-cta onclick="commit()">I'm sold, build the plan →`+
+    `<div class=ctarow><button class=stage-cta onclick="gateProceed()">I'm sold, build the plan →`+
     `<span class=ctasub>Next up: deep research — the graded vetting pass</span></button></div>`+
     `<p class=thinking>Not quite? Steer it in the box — it refines this idea in place.</p>`;
 }
@@ -1836,11 +2035,44 @@ function initGrips(){
     });
   });
 }
-// ── Mobile drawer model (Sam, 2026-07-06): the graph owns the screen; the chat is a bottom
-// sheet with a grab handle. An expanded section (research/board) REPLACES the chat sheet
-// (workspace.rx hides .left); Tuck in returns to the split chat drawer; the handle collapses
-// whichever sheet is up (workspace.mclosed) so the decision tree shows. Desktop CSS ignores
-// all three classes — the handles only render under the mobile media query. ──
+// ── Drawer WIDTH resize (Sam, 2026-07-07): the right-edge grip on the chat drawer AND the expanded
+// research/board drawer drags the column wider/narrower. The width rides a CSS var (--left-w / --rd-w)
+// so a CLOSED drawer still collapses to 0 (an inline width would fight it). research + board share one
+// remembered width (they're the same expanded column). Desktop only; remembered across reloads. ──
+const DW_KEY={left:'filg_left_w',rdrawer:'filg_rd_w',bdrawer:'filg_rd_w'};
+const DW_VAR={left:'--left-w',rdrawer:'--rd-w',bdrawer:'--rd-w'};
+function _dwTargets(which){   // the var must land on BOTH expanded drawers so they stay the same width
+  if(which==='rdrawer'||which==='bdrawer')return [$('rdrawer'),$('bdrawer')].filter(Boolean);
+  return [$('left')].filter(Boolean);
+}
+function setDrawerWidth(which,px){ const v=DW_VAR[which];
+  _dwTargets(which).forEach(el=>el.style.setProperty(v,px+'px')); }
+function initDrawerResize(){
+  ['left','rdrawer','bdrawer'].forEach(which=>{   // restore the remembered widths on boot
+    try{ const px=parseInt(localStorage.getItem(DW_KEY[which]),10);
+      if(px>=300&&px<=3000)setDrawerWidth(which,px); }catch(e){}
+  });
+  document.querySelectorAll('.hgrip').forEach(g=>{
+    const which=g.dataset.drawer, el=g.closest('.left,.rdrawer'); if(!el||!which)return;
+    g.addEventListener('pointerdown',e=>{
+      if(window.matchMedia&&window.matchMedia('(max-width:820px)').matches)return;   // mobile = full sheets, no width drag
+      e.preventDefault(); g.setPointerCapture(e.pointerId); g.classList.add('dragging'); el.classList.add('resizing');
+      const move=ev=>{ const r=el.getBoundingClientRect();
+        const w=Math.max(300,Math.min(Math.round(ev.clientX-r.left),Math.round(window.innerWidth*0.66)));
+        setDrawerWidth(which,w); };
+      const up=()=>{ g.classList.remove('dragging'); el.classList.remove('resizing');
+        g.removeEventListener('pointermove',move); g.removeEventListener('pointerup',up); g.removeEventListener('pointercancel',up);
+        const px=parseInt(getComputedStyle(el).getPropertyValue(DW_VAR[which]),10);
+        try{ if(px)localStorage.setItem(DW_KEY[which],String(px)); }catch(x){} };
+      g.addEventListener('pointermove',move); g.addEventListener('pointerup',up); g.addEventListener('pointercancel',up);
+    });
+  });
+}
+// ── Drawer collapse (Sam, 2026-07-06; extended to desktop 2026-07-07): the ‹ rail folds the chat
+// drawer away (workspace.mclosed) and a › rail brings it back — on MOBILE the drawer is a full-height
+// sheet over the graph; on DESKTOP it's the in-flow column collapsing to 0 so the graph takes the
+// width. An expanded section (research/board) REPLACES the chat sheet on mobile (workspace.rx hides
+// .left); on desktop the expanded pane folds via ⇤ Tuck in, and mclosed still targets the chat. ──
 function mToggle(){ const w=$('workspace'); if(w)w.classList.toggle('mclosed'); }
 function mCollapse(){ // any submission that DRAWS THE GRAPH collapses the drawer fully (mobile only)
   if(window.matchMedia&&window.matchMedia('(max-width:820px)').matches){
@@ -2421,6 +2653,7 @@ document.addEventListener('keydown',e=>{
 initGraphInput();
 initMinimap(); initTrail();   // graph chrome: click-to-jump minimap + hover wayfinding trail
 initGrips();   // the split boundary drags; the height is remembered across modes + reloads
+initDrawerResize();   // the drawer WIDTH drags (chat + expanded panes), remembered across reloads
 renderStackChips();   // the model-crew chip
 sendLabel();   // 'Start →' in full mode, 'Send →' once a plan exists
 initAuth();   // session + /api/me + key state, then routeV2 (deep links + /v2/account tabs)
