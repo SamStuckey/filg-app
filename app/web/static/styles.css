@@ -244,44 +244,6 @@ ul.qs li{margin:4px 0}
 .mrail-in,#mrail{display:none;align-items:center;justify-content:center;width:20px;height:54px;
   padding:0;border:0;cursor:pointer;background:#555;color:#fff;font-size:18px;line-height:1}
 .nfold{display:none}
-@media (max-width:820px){
-  .workspace{height:100vh;height:100dvh}
-  .right{min-width:0}
-  .left{position:fixed;top:0;bottom:0;left:0;width:min(92vw,430px);min-width:0;z-index:24;
-    max-height:none;border-right:1px solid var(--line);background:var(--bg);
-    box-shadow:10px 0 30px rgba(0,0,0,.35);
-    padding-bottom:calc(14px + env(safe-area-inset-bottom,0px));
-    transition:transform .3s ease}
-  .workspace.mclosed .left{transform:translateX(-103%)}
-  .workspace.rx .left{visibility:hidden}          /* an expanded section replaces the chat drawer */
-  .rdrawer{position:fixed;top:0;bottom:0;left:0;width:min(92vw,430px);min-width:0;z-index:25;
-    transition:transform .3s ease,opacity .2s ease}
-  .rdrawer.open{flex:none;width:min(92vw,430px);max-height:none;padding:14px;
-    padding-bottom:calc(14px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;
-    border-right:1px solid var(--line);background:var(--bg);box-shadow:10px 0 30px rgba(0,0,0,.35)}
-  .workspace.mclosed .rdrawer.open{transform:translateX(-103%)}
-  .mrail-in{display:flex;position:absolute;right:0;top:50%;transform:translateY(-50%);z-index:12;
-    border-radius:8px 0 0 8px}
-  .workspace.mclosed #mrail{display:flex;position:fixed;left:0;top:50%;transform:translateY(-50%);
-    z-index:23;border-radius:0 8px 8px 0}
-  .workspace.full #mrail{display:none}
-  /* the landing keeps the whole screen (there's no graph yet) and scrolls itself */
-  .workspace.full .left{position:fixed;inset:0;width:auto;max-height:none;transform:none;
-    overflow-y:auto;border-right:none;box-shadow:none}
-  .workspace.full .mrail-in{display:none}
-  .toasts{z-index:40}
-  #minimap{display:none}   /* the screen IS touch-panned — a jump pip is dead weight on a phone */
-  /* stage CTAs share the row at phone size instead of stacking full-width */
-  .ctarow{gap:8px}
-  .ctarow .stage-cta{flex:1 1 40%;min-width:0;padding:8px 10px;font-size:13.5px}
-  .stage-cta .ctasub{font-size:10.5px}
-  /* an open node's ×: a plain close anchored in the top-right corner (no tab chrome), sticky so
-     it stays pinned while the doc scrolls — one tap back to the compact node + restored camera */
-  .nfold{display:block;position:sticky;top:-14px;margin:-10px -14px -26px auto;z-index:3;
-    width:36px;height:32px;border:0;padding:0;cursor:pointer;background:none;color:var(--muted);
-    font-size:21px;line-height:1;text-align:center}
-  .nfold:hover,.nfold:active{color:var(--fg)}
-}
 .jokecard{border:1px solid var(--line);border-radius:12px;padding:16px;margin-top:16px;text-align:left}
 
 /* ── Model-crew chip + session meter + profile ── */
@@ -293,6 +255,9 @@ ul.qs li{margin:4px 0}
 .profile{width:30px;height:30px;border-radius:50%;border:1px solid var(--line);background:var(--card);
   color:var(--muted);display:inline-flex;align-items:center;justify-content:center;padding:0}
 .profile:hover{color:var(--fg)}
+.acctlabel{display:none}        /* the profile reads as an icon on desktop, the word 'Account' in the mobile menu */
+.hmenu{display:none;width:32px;height:30px;border:1px solid var(--line);border-radius:8px;
+  background:var(--card);color:var(--fg);font-size:15px;line-height:1;padding:0}   /* mobile-only */
 .sktile{display:block;width:100%;text-align:left;background:var(--card);border:1px solid var(--line);
   border-radius:10px;padding:10px 12px;margin-bottom:8px;color:var(--fg)}
 .sktile.on{border-color:var(--accent)}
@@ -390,12 +355,21 @@ ul.qs li{margin:4px 0}
 
 /* ── Graph chrome (2026-07-05): search-glow · fit/zoom controls · minimap · stubs · wayfinding ── */
 #gctrls{position:absolute;top:12px;right:14px;display:flex;gap:6px;align-items:center;z-index:5}
-#gctrls input{width:180px;font:13px/1.2 inherit;background:var(--card);color:var(--fg);
-  border:1px solid var(--line);border-radius:7px;padding:6px 9px;outline:none}
-#gctrls input:focus{border-color:var(--accent)}
 #gctrls button{width:30px;height:30px;border:1px solid var(--line);border-radius:7px;
-  background:var(--card);color:var(--fg);font-size:14px;line-height:1}
+  background:var(--card);color:var(--fg);font-size:14px;line-height:1;display:inline-flex;
+  align-items:center;justify-content:center}
 #gctrls button:hover{border-color:var(--accent)}
+/* search collapses to a magnifier; the input expands beside it on click (all screen sizes) */
+#gsearchwrap{display:flex;align-items:center;gap:6px}
+#gsearch{width:0;padding:0;border:0 solid var(--line);opacity:0;box-sizing:border-box;
+  font:13px/1.2 inherit;background:var(--card);color:var(--fg);border-radius:7px;outline:none;
+  transition:width .22s ease,opacity .18s ease,padding .22s ease}
+#gctrls.searchopen #gsearch{width:180px;padding:6px 9px;border-width:1px;opacity:1}
+#gctrls.searchopen #gsearch:focus{border-color:var(--accent)}
+#gzoom{display:flex;gap:6px;align-items:center}
+#gzoomrow{display:flex;gap:6px}
+.gclabel{display:none}       /* labels (Search / Center) only surface inside the mobile dropdown */
+#gctrls #gmenu{display:none} /* the ⋯ dropdown toggle is mobile-only (id-specific: beats #gctrls button) */
 .gsn{font-size:11.5px;color:var(--muted);white-space:nowrap}
 #minimap{position:absolute;right:14px;bottom:14px;width:156px;height:104px;z-index:5;cursor:pointer;
   background:color-mix(in srgb,var(--card) 82%,transparent);border:1px solid var(--line);
@@ -430,8 +404,6 @@ ul.qs li{margin:4px 0}
 .sharerow button.primary{background:var(--accent);color:#fff;border:none}
 #shareurl{width:100%;font:12.5px ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--bg);
   color:var(--fg);border:1px solid var(--line);border-radius:7px;padding:8px 10px;margin-top:4px}
-.sharebtn{white-space:nowrap}
-.workspace.full .sharebtn{display:none}   /* no plan yet on the landing — nothing to share */
 
 /* ── Board room (2026-07-06): the board gets the same three displays as research ── */
 .bacts{display:flex;gap:5px;align-items:center}
@@ -554,4 +526,75 @@ ul.qs li{margin:4px 0}
 @media (prefers-reduced-motion:reduce){
   *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;
     transition-duration:.01ms!important;scroll-behavior:auto!important}
+}
+
+/* ── Mobile overrides live LAST so they win over base rules by source order ── */
+@media (max-width:820px){
+  .workspace{height:100vh;height:100dvh}
+  .right{min-width:0}
+  .left{position:fixed;top:0;bottom:0;left:0;width:min(92vw,430px);min-width:0;z-index:24;
+    max-height:none;border-right:1px solid var(--line);background:var(--bg);
+    box-shadow:10px 0 30px rgba(0,0,0,.35);
+    padding-bottom:calc(14px + env(safe-area-inset-bottom,0px));
+    transition:transform .3s ease}
+  .workspace.mclosed .left{transform:translateX(-103%)}
+  .workspace.rx .left{visibility:hidden}          /* an expanded section replaces the chat drawer */
+  .rdrawer{position:fixed;top:0;bottom:0;left:0;width:min(92vw,430px);min-width:0;z-index:25;
+    transition:transform .3s ease,opacity .2s ease}
+  .rdrawer.open{flex:none;width:min(92vw,430px);max-height:none;padding:14px;
+    padding-bottom:calc(14px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;
+    border-right:1px solid var(--line);background:var(--bg);box-shadow:10px 0 30px rgba(0,0,0,.35)}
+  .workspace.mclosed .rdrawer.open{transform:translateX(-103%)}
+  .mrail-in{display:flex;position:absolute;right:0;top:50%;transform:translateY(-50%);z-index:12;
+    border-radius:8px 0 0 8px}
+  .workspace.mclosed #mrail{display:flex;position:fixed;left:0;top:50%;transform:translateY(-50%);
+    z-index:23;border-radius:0 8px 8px 0}
+  .workspace.full #mrail{display:none}
+  /* the landing keeps the whole screen (there's no graph yet) and scrolls itself */
+  .workspace.full .left{position:fixed;inset:0;width:auto;max-height:none;transform:none;
+    overflow-y:auto;border-right:none;box-shadow:none}
+  .workspace.full .mrail-in{display:none}
+  .toasts{z-index:40}
+  #minimap{display:none}   /* the screen IS touch-panned — a jump pip is dead weight on a phone */
+  /* stage CTAs share the row at phone size instead of stacking full-width */
+  .ctarow{gap:8px}
+  .ctarow .stage-cta{flex:1 1 40%;min-width:0;padding:8px 10px;font-size:13.5px}
+  .stage-cta .ctasub{font-size:10.5px}
+  /* an open node's ×: a plain close anchored in the top-right corner (no tab chrome), sticky so
+     it stays pinned while the doc scrolls — one tap back to the compact node + restored camera */
+  .nfold{display:block;position:sticky;top:-14px;margin:-10px -14px -26px auto;z-index:3;
+    width:36px;height:32px;border:0;padding:0;cursor:pointer;background:none;color:var(--muted);
+    font-size:21px;line-height:1;text-align:center}
+  .nfold:hover,.nfold:active{color:var(--fg)}
+
+  /* ── Header: the model crew, session meter, and account collapse behind a hamburger ── */
+  #lefttop{position:relative}
+  .hmenu{display:inline-flex;align-items:center;justify-content:center;margin-left:auto}
+  .lt-right{display:none;position:absolute;top:calc(100% + 6px);right:0;z-index:32;margin-left:0;
+    flex-direction:column;align-items:stretch;gap:2px;background:var(--bg);border:1px solid var(--line);
+    border-radius:10px;padding:6px;min-width:190px;box-shadow:0 12px 30px rgba(0,0,0,.4)}
+  #lefttop.menu-open .lt-right{display:flex}
+  /* delist: drop the pill boxes so the crew / tokens / account read as one neat ordered list */
+  .lt-right .stackchip,.lt-right .meter,.lt-right .profile{border:0;border-radius:6px;background:none;
+    width:auto;height:auto;justify-content:flex-start;padding:9px 10px;font-size:14px;color:var(--fg)}
+  .lt-right .stackchip:hover,.lt-right .profile:hover{background:var(--card)}
+  .profile .acctlabel{display:inline}
+  .profile svg{display:none}
+
+  /* ── Graph controls collapse into one ⋯ dropdown (they used to overlap the view tabs) ── */
+  #gctrls #gmenu{display:inline-flex}
+  #gctrls #gsearchwrap,#gctrls #gzoom{display:none}
+  #gctrls.gmenu-open{flex-direction:column;align-items:stretch;gap:6px;background:var(--bg);
+    border:1px solid var(--line);border-radius:10px;padding:8px;min-width:154px;
+    box-shadow:0 12px 30px rgba(0,0,0,.4)}
+  #gctrls.gmenu-open #gmenu{order:-1;align-self:flex-end;width:30px}
+  #gctrls.gmenu-open #gsearchwrap{display:flex;flex-direction:column;align-items:stretch;gap:6px}
+  #gctrls.gmenu-open #gzoom{display:flex;gap:6px}
+  #gctrls.gmenu-open #gsearchbtn,#gctrls.gmenu-open #gfit{width:100%;height:auto;padding:10px 12px;
+    justify-content:flex-start;gap:9px;font-size:14px}
+  #gctrls.gmenu-open .gclabel{display:inline}
+  #gctrls.gmenu-open #gfit .gcicon{display:none}
+  #gctrls.gmenu-open #gzoomrow{display:flex;gap:6px}
+  #gctrls.gmenu-open #gzoomrow button{flex:1 1 0;width:auto;height:40px;font-size:18px}
+  #gctrls.gmenu-open.searchopen #gsearch{width:100%;padding:9px 11px;border-width:1px;opacity:1}
 }

@@ -8,15 +8,16 @@ __FILG_HEAD__
      centered. The first prompt collapses it into the sidebar — no swap, no fly-away. ── -->
 <div id=workspace class="workspace full">
   <aside class=left id=left>
-    <div class=left-top>
+    <div class=left-top id=lefttop>
       <button type=button class=logo onclick="v2newPlan()">FILG</button>
-      <div class=lt-right>
-        <button id=stackchip-w class="ghost stackchip" type=button onclick="stackModal()" title="Pick your model crew"></button>
-        <button id=tierchip class="ghost stackchip tierchip" type=button hidden onclick="pricingModal()" title="Your plan + this month's allowance"></button>
+      <button type=button class="ghost hmenu" id=hmenu onclick="toggleHMenu()" aria-label="Menu" title="Menu">☰</button>
+      <div class=lt-right id=ltright>
+        <button id=stackchip-w class="ghost stackchip" type=button onclick="stackModal();closeHMenu()" title="Pick your model crew"></button>
+        <button id=tierchip class="ghost stackchip tierchip" type=button hidden onclick="pricingModal();closeHMenu()" title="Your plan + this month's allowance"></button>
         <span class=meter id=meter title="tokens + $ this session">0 tok · $0.00</span>
-        <button type=button class="ghost small sharebtn" id=sharebtn onclick="shareModal()" title="Share a read-only link">🔗 Share</button>
-        <button type=button class=profile id=profilebtn onclick="profileClick()" aria-label="Account" title="Account">
+        <button type=button class=profile id=profilebtn onclick="profileClick();closeHMenu()" aria-label="Account" title="Account">
           <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="8.2" r="3.6"/><path d="M4.5 19.5c1.3-3.4 4.2-5 7.5-5s6.2 1.6 7.5 5"/></svg>
+          <span class=acctlabel>Account</span>
         </button>
       </div>
     </div>
@@ -114,12 +115,22 @@ __FILG_HEAD__
       <!-- Graph chrome: search-glow (PoE pattern), fit/zoom controls, and the minimap (branch
            structure + viewport, click-to-jump). All render from the last layout — no extra state. -->
       <div id=gctrls>
-        <input id=gsearch type=search placeholder="Search the tree…  ( / )" autocomplete=off
-               oninput="gSearch(this.value)">
-        <span id=gsearch-n class=gsn hidden></span>
-        <button type=button onclick="fitView()" title="Fit the whole tree (F)">⤢</button>
-        <button type=button onclick="zoomStep(1.25)" title="Zoom in (+)">+</button>
-        <button type=button onclick="zoomStep(0.8)" title="Zoom out (−)">−</button>
+        <!-- search collapses to a magnifier that expands the input on click (all screen sizes) -->
+        <div id=gsearchwrap>
+          <button type=button id=gsearchbtn onclick="toggleSearch()" aria-label="Search the tree" title="Search the tree (/)">🔍<span class=gclabel>Search</span></button>
+          <input id=gsearch type=search placeholder="Search the tree…" autocomplete=off
+                 oninput="gSearch(this.value)" onblur="searchBlur()">
+          <span id=gsearch-n class=gsn hidden></span>
+        </div>
+        <!-- fit/center + zoom; on mobile these live inside the ⋯ dropdown, +/− on one row -->
+        <div id=gzoom>
+          <button type=button id=gfit onclick="fitView();closeGMenu()" title="Center the whole tree (F)"><span class=gclabel>Center</span><span class=gcicon>⤢</span></button>
+          <div id=gzoomrow>
+            <button type=button onclick="zoomStep(0.8)" title="Zoom out (−)">−</button>
+            <button type=button onclick="zoomStep(1.25)" title="Zoom in (+)">+</button>
+          </div>
+        </div>
+        <button type=button id=gmenu onclick="toggleGMenu()" aria-label="Graph controls" title="Graph controls">⋯</button>
       </div>
       <div id=minimap title="Click to jump"></div>
     </div>
