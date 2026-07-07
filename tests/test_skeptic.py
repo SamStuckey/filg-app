@@ -93,7 +93,8 @@ def _wait_skeptic(client, sid, tries=120, delay=0.03):
 
 
 def test_stress_test_route_starts_streams_and_returns_result(client):
-    sid = client.post("/api/plan/start", json={"idea": _IDEA, "email": "st@x.com"}).json()["id"]
+    from conftest import start_plan
+    sid = start_plan(client, _IDEA, email="st@x.com")
     assert wait_status(client, sid)["shaped"]["thesis"]
     started = client.post(f"/api/plan/{sid}/stress-test")
     assert started.status_code == 200 and started.json()["started"] is True
@@ -107,7 +108,8 @@ def test_stress_test_route_starts_streams_and_returns_result(client):
 
 
 def test_stress_test_state_idle_before_start(client):
-    sid = client.post("/api/plan/start", json={"idea": _IDEA, "email": "st2@x.com"}).json()["id"]
+    from conftest import start_plan
+    sid = start_plan(client, _IDEA, email="st2@x.com")
     wait_status(client, sid)
     assert client.get(f"/api/plan/{sid}/stress-test").json()["status"] == "idle"
 

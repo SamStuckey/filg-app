@@ -54,9 +54,8 @@ def test_run_slot_caps_at_flat_limit():
 
 
 def test_route_returns_429_when_busy(client, monkeypatch):
+    from conftest import start_plan
+    sid = start_plan(client, "a real idea about mobile dog grooming vans", email="z@x.com")
     monkeypatch.setattr(ops, "concurrency_cap", lambda u: 0)   # force "always busy"
-    sid = client.post("/api/plan/start",
-                      json={"idea": "a real idea about mobile dog grooming vans",
-                            "email": "z@x.com"}).json()["id"]
     r = client.post("/api/plan/" + sid + "/next", json={})
     assert r.status_code == 429 and r.json().get("busy") is True

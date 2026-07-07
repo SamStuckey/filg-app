@@ -8,8 +8,8 @@ shows; `generate_full` synthesizes the complete artifact set over the same grade
 speak the business-planning language, so they live in the app — the engine below them carries
 no product vocabulary (it gets its subject wording via app/domain/research.FRAMING).
 
-Consumed by the plan builder (planner.research), the merge skim (brainstorm.merge), the legacy
-/api/run flow, and the weekly lead-magnet publisher (scripts/teardown_publish.py).
+Consumed by the plan builder (planner.research), the merge skim (brainstorm.merge), and the
+weekly lead-magnet publisher (scripts/teardown_publish.py).
 """
 
 from __future__ import annotations

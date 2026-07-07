@@ -68,3 +68,42 @@ def wait_status(client, sid, target="building", tries=80, delay=0.05):
         time.sleep(delay)
         s = client.get(f"/api/plan/{sid}").json()
     return s
+
+
+def start_plan(client, idea, email="", directors=None, stack=None):
+    """A session at the first BUILD step, driven through the live funnel (brainstorm -> pick the
+    first direction -> merge -> commit) — the replacement for the retired /api/plan/start entry.
+    Returns the session id; the deep build has already landed (status left 'researching')."""
+    body = {"idea": idea}
+    if email:
+        body["email"] = email
+    if directors:
+        body["directors"] = directors
+    if stack:
+        body["stack"] = stack
+    r = client.post("/api/brainstorm", json=body)
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert not d.get("gibberish"), f"unexpected roast for {idea!r}"
+    sid = d["id"]
+    opts = [o["id"] for o in (d.get("activeNode") or {}).get("options") or []]
+    r = client.post(f"/api/plan/{sid}/merge", json={"options": opts[:1]})
+    assert r.status_code == 200, r.text
+    wait_status(client, sid)
+    r = client.post(f"/api/plan/{sid}/commit", json={})
+    assert r.status_code == 200, r.text
+    s = wait_status(client, sid)
+    assert s["status"] == "building", s.get("error") or s["status"]
+    return sid
+
+
+def finish_plan(client, sid):
+    """Roll a building session forward to DONE (the full 7 sections + the QA pass)."""
+    for _ in range(12):
+        s = client.get(f"/api/plan/{sid}").json()
+        if s["status"] == "done":
+            return s
+        r = client.post(f"/api/plan/{sid}/next", json={})
+        assert r.status_code == 200, r.text
+        wait_status(client, sid)
+    raise AssertionError("plan never finished")

@@ -16,8 +16,9 @@ def wait_status(client, sid):
 
 
 def _finish(client, email):
-    sid = client.post("/api/plan/start", json={"idea": GRAB_BAG, "email": email}).json()["id"]
-    s = wait_status(client, sid)
+    from conftest import start_plan
+    sid = start_plan(client, GRAB_BAG, email=email)
+    s = client.get(f"/api/plan/{sid}").json()
     while not s["done"]:
         s = client.post(f"/api/plan/{sid}/next", json={"feedback": ""}).json()
     return sid
@@ -107,9 +108,11 @@ def test_render_watermark_param():
             "vetting": {"verdict": "pursue", "biggest_risk": "thin pipeline",
                         "first_test": "post in 3 communities"}}
     prop, _ = planner.first_proposal(sess["idea"], r, mock=True)
-    sess["proposal"] = prop
-    while sess.get("status") != "done":
-        sess.update(planner.advance(sess, "yes_and", None, mock=True))
+    node = planner.root_node(prop)
+    while node["step"] < planner.N:
+        node, _ = planner.forward(sess["idea"], r, node, None, mock=True)
+    sess.update({"files": node["files"], "history": node["history"], "status": "done",
+                 "step": planner.N, "proposal": None})
     plan, _ = plan_pdf.synthesize(sess, mock=True)
     data = plan_pdf.render(plan, watermark=True)
     assert bytes(data)[:5] == b"%PDF-" and len(data) > 5000

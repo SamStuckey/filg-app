@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Server-rendered HTML for the app's shared/served pages — the display layer for the public share views
-(`/r/{job}` teardown, `/p/{sid}` plan share) and the small error shells.
+Server-rendered HTML for the app's shared/served pages — the display layer for the public plan
+share (`/p/{sid}`) and the small error shells.
 
 Kept separate from `main.py` so no markup lives in the route layer: the routes do the data work (load
 from the store, extract fields) and hand primitives to these pure functions, which return HTML strings.
@@ -11,15 +11,13 @@ Matches the stripped-down "Craigslist-plain" app — no decorative brand chrome,
 from __future__ import annotations
 
 import html
-import markdown
-
 from urllib.parse import urlparse
 
 
 CTA = ('<div class="cta"><a class="btn btn-primary" href="https://filg.ai/#start">'
        'Run your own idea →</a></div>')
 
-# Plain shell shared by /p (plan share) and /r (teardown share). The old teardown.page_shell used the
+# Plain shell for /p (the plan share). The old teardown.page_shell used the
 # teal Fraunces brand + a "Get these weekly" lead-magnet link; the app is now stripped plain, so the
 # share pages match it (no decorative brand, no weekly link).
 SHARE_CSS = (
@@ -67,37 +65,6 @@ def share_shell(title: str, desc: str, body: str, safe: bool = False) -> str:
             f"<footer>Built with FILG. Every number above is graded by a source-credibility gate. "
             f'<a href="/">filg.ai</a></footer>'
             f'</div></body></html>')
-
-
-def receipt(stats: dict) -> str:
-    return (f'<div class="recpt"><strong>The credibility receipt:</strong> {stats["checked"]} '
-            f'claims checked · <strong>{stats["cleared"]} cited</strong> · {stats["flagged"]} '
-            f'flagged as vendor marketing and labeled.</div>')
-
-
-def result_page(job: dict) -> str:
-    """Server-render a finished run as a standalone, shareable page (reuses the engine's evidence
-    renderer). Backed by SQLite (app/store.py) so the share link survives restarts."""
-    res = job["result"]
-    stats = res["stats"]
-    ev = f'<h2>The evidence — graded</h2><ul class="ev">{evidence_li(res["rows"])}</ul>'
-    if job.get("mode") == "full":
-        title = "Your FILG offer"
-        inner = markdown.markdown(res["artifacts_md"], extensions=["extra"])
-        desc = "Your full, cited offer + go-to-market from FILG."
-        article = (f'<article><span class="eyebrow">Full artifact set · ~${res["cost"]:.2f}</span>'
-                   f'{inner}{ev}{receipt(stats)}{CTA}</article>')
-    else:
-        p = res["prose"]
-        title = p["title"]
-        desc = p.get("idea_line", "Your graded offer from FILG.")
-        article = (f'<article><span class="eyebrow">Cited Offer Teardown · ~${res["cost"]:.2f}</span>'
-                   f'<h1>{html.escape(p["title"])}</h1>'
-                   f'<p class="tag">Every number graded — vendor stats labeled, not laundered.</p>'
-                   f'<p><strong>The offer:</strong> {html.escape(p["offer"])}</p>'
-                   f'<p><strong>How you\'d sell it:</strong> {html.escape(p["gtm"])}</p>'
-                   f'{ev}{receipt(stats)}{CTA}</article>')
-    return share_shell(title, desc, article)
 
 
 def shared_plan_page(title: str, inner_html: str, receipts: list | None = None,

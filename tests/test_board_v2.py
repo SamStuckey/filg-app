@@ -17,7 +17,8 @@ def wait_status(client, sid):
 
 
 def _start(client, email):
-    sid = client.post("/api/plan/start", json={"idea": GRAB_BAG, "email": email}).json()["id"]
+    from conftest import start_plan
+    sid = start_plan(client, GRAB_BAG, email=email)
     wait_status(client, sid)
     return sid
 

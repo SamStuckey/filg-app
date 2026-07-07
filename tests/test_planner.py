@@ -1,4 +1,4 @@
-"""Plan builder — prepare(), the decision-tree advance, and board feed-forward."""
+"""Plan builder — prepare(), the tree verbs (forward/rebranch), and board feed-forward."""
 
 from app import planner
 
@@ -56,11 +56,9 @@ def test_working_idea_prefers_thesis():
     assert planner._working_idea({"idea": "raw"}) == "raw"  # back-compat
 
 
-def _fresh_session():
+def _fresh_root():
     prep = planner.prepare("guitar coaching idea", mock=True)
-    return {"idea": "guitar coaching", "shaped": prep["shaped"], "research": prep["research"],
-            "files": {}, "history": [], "step": 0, "cost": 0.0, "board": [],
-            "proposal": prep["proposal"], "status": "building"}
+    return prep, planner.root_node(prep["proposal"])
 
 
 def test_why_you_win_section_and_delivery_model_guide():
@@ -79,31 +77,33 @@ def test_propose_injects_founder_edge_and_section_guide(patch_call):
     assert "WHAT THIS SECTION MUST DO" in cap["p"]               # the per-section guide is injected
 
 
-def test_not_quite_stays_on_node():
-    s = _fresh_session()
-    upd = planner.advance(s, "not_quite", "make it punchier", mock=True)
-    assert "step" not in upd and "revised" in upd["proposal"]["draft"]
+def test_rebranch_redrafts_in_place():
+    # "not quite" = re-draft the same step as a sibling; nothing finalized, the note steers it
+    prep, root = _fresh_root()
+    sib, _ = planner.rebranch("guitar coaching", prep["research"], root, "make it punchier", mock=True)
+    assert sib["step"] == 0 and sib["files"] == {} and "revised" in sib["draft"]
 
 
-def test_yes_and_finalizes_and_advances():
-    s = _fresh_session()
-    upd = planner.advance(s, "yes_and", None, mock=True)
-    assert upd["step"] == 1 and len(upd["files"]) == 1
+def test_forward_finalizes_and_advances():
+    prep, root = _fresh_root()
+    child, _ = planner.forward("guitar coaching", prep["research"], root, None, mock=True)
+    assert child["step"] == 1 and len(child["files"]) == 1
 
 
 def test_board_reviews_each_section_and_feeds_forward():
-    s = _fresh_session()
-    upd = planner.advance(s, "yes_and", None, mock=True, directors=["closer", "cfo"])
-    assert len(upd["board"]) == 1 and len(upd["board"][0]["directors"]) == 2
-    assert upd["board"][0]["verdict"]                       # synthesized takeaway
-    assert "board-guided" in upd["proposal"]["draft"]       # takeaway steered the next draft
-    assert planner._board_notes(upd["board"]).startswith("- on")
+    prep, root = _fresh_root()
+    child, _ = planner.forward("guitar coaching", prep["research"], root, None, mock=True,
+                               directors=["closer", "cfo"])
+    assert len(child["board"]) == 1 and len(child["board"][0]["directors"]) == 2
+    assert child["board"][0]["verdict"]                     # synthesized takeaway
+    assert "board-guided" in child["draft"]                 # takeaway steered the next draft
+    assert planner._board_notes(child["board"]).startswith("- on")
 
 
 def test_no_board_means_no_reviews():
-    s = _fresh_session()
-    upd = planner.advance(s, "yes_and", None, mock=True)   # no directors
-    assert "board" not in upd
+    prep, root = _fresh_root()
+    child, _ = planner.forward("guitar coaching", prep["research"], root, None, mock=True)
+    assert child["board"] == []
 
 
 def test_qa_plan_voted_checklist_flags_and_feeds_editor(patch_call):

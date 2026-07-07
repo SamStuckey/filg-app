@@ -373,9 +373,11 @@ if __name__ == "__main__":  # self-test (mock, no API) — builds a real PDF and
             "founder_edge": "10 years teaching"}, "vetting": {"verdict": "pursue",
             "biggest_risk": "thin pipeline", "first_test": "post in 3 communities"}}
     prop, _ = planner.first_proposal(sess["idea"], r, mock=True)
-    sess["proposal"] = prop
-    while sess.get("status") != "done":
-        sess.update(planner.advance(sess, "yes_and", None, mock=True))
+    node = planner.root_node(prop)
+    while node["step"] < planner.N:
+        node, _ = planner.forward(sess["idea"], r, node, None, mock=True)
+    sess.update({"files": node["files"], "history": node["history"], "status": "done",
+                 "step": planner.N, "proposal": None})
     plan, cost = synthesize(sess, mock=True)
     assert plan["sections"] and len(plan["sections"]) == planner.N
     assert plan["cited"] >= 1 and plan["evidence"]

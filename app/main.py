@@ -39,7 +39,6 @@ from starlette.concurrency import run_in_threadpool  # long engine calls must no
 
 # the engine package (research/grading/metering) + the app-side skill/persona/board layer.
 _APP_DIR = Path(__file__).resolve().parent
-from app import teardown  # noqa: E402 — the research-run product layer (offer summary over graded evidence)
 from engine import usage     # noqa: E402
 from app import personas  # noqa: E402 — advisor/director registry (shared by ask-an-expert + the board)
 from app import board     # noqa: E402 — Board of Directors orchestration
@@ -62,7 +61,7 @@ from .domain import help as domain_help  # noqa: E402 — generated help copy (p
 # Entitlement/provider/metering decisions live in access.py (the pure service layer). Re-exported here
 # so the route bodies call them as bare names and `main._budget` etc. stay importable by tests.
 from .access import (  # noqa: E402,F401 — entitlement/provider/metering (the pure service layer)
-    _is_byok, _acct, _tier, _is_subscriber, _period, _budget, _feature_ok, _has_pdf_access,
+    _acct, _tier, _is_subscriber, _budget, _feature_ok, _has_pdf_access,
     _key_provider_kind, _build_provider, _provider_for, _meter, _needs_key)
 
 # One startup line so a local run never has to guess its wiring (the #1 source of confusing 500s is a
@@ -148,54 +147,6 @@ def _orphan_sweep_loop() -> None:
 
 
 threading.Thread(target=_orphan_sweep_loop, daemon=True).start()
-
-def _run_job(job_id: str, idea: str, user: str, mode: str) -> None:
-    try:
-        with pipeline.run_ledger():
-            res = (teardown.generate_full if mode == "full" else teardown.generate)(idea, mock=ops.MOCK)
-        usage.record_run(user, res["cost"])
-        store.finish(job_id, res, mode)
-    except Exception as e:  # noqa: BLE001 — surface failures to the client, don't crash the worker
-        traceback.print_exc()  # full trace → Render stdout logs (client only sees str(e))
-        store.fail(job_id, ops.humanize_error(e)[0])
-
-
-@app.post("/api/run")
-async def api_run(request: Request):
-    body = await request.json()
-    idea = (body.get("idea") or "").strip()
-    if len(idea) < 12:
-        return JSONResponse({"error": "Tell me a bit more about the idea."}, status_code=400)
-
-    # Identity: a verified Supabase user wins; otherwise fall back to the email typed in the body.
-    authed = auth.user_from_request(request)
-    # Legacy teardown endpoint: in the auth-on regime it takes a verified account (an open POST with
-    # any typed email would be unauthenticated spend on the hosted key). Dev/auth-off keeps the old
-    # body-email behavior.
-    if auth.AUTH_ENABLED and not (authed and authed["email"]):
-        return JSONResponse({"error": "Sign in first.", "needAccount": True}, status_code=401)
-    user = authed["email"] if authed and authed["email"] else (body.get("email") or "").strip().lower()
-    if "@" not in user:
-        return JSONResponse({"error": "Enter an email so we can send your result."}, status_code=400)
-
-    allowed, reason = usage.can_run(user, is_paid=False)
-    if not allowed:
-        return JSONResponse({"error": reason}, status_code=402)
-
-    mode = "teardown"
-    job_id = uuid.uuid4().hex[:12]
-    store.create(job_id, idea, user, mode)
-    threading.Thread(target=_run_job, args=(job_id, idea, user, mode), daemon=True).start()
-    return {"job_id": job_id, "mode": mode}
-
-
-@app.get("/api/run/{job_id}")
-async def api_status(job_id: str):
-    job = store.get(job_id)
-    if not job:
-        return JSONResponse({"error": "unknown job"}, status_code=404)
-    return {"status": job["status"], "result": job.get("result"), "error": job.get("error")}
-
 
 @app.get("/api/me")
 async def api_me(request: Request):
@@ -424,15 +375,6 @@ async def api_models(request: Request):
     return model_catalog.snapshot(check_availability=check)
 
 
-@app.get("/r/{job_id}", response_class=HTMLResponse)
-async def share(job_id: str):
-    job = store.get(job_id)
-    if not job or job.get("status") != "done":
-        return HTMLResponse(render.not_found("This result isn't ready yet, failed, or doesn't exist."),
-                            status_code=404)
-    return render.result_page(job)
-
-
 @app.get("/p/{sid}", response_class=HTMLResponse)
 async def share_plan(sid: str):
     """Public, read-only view of a plan the owner explicitly shared (private by default). Carries the
@@ -489,34 +431,6 @@ def _regrade_setup(s: dict, node: dict, cost: float) -> tuple[dict | None, float
     except Exception:  # noqa: BLE001
         return None, cost
     return vetting, round(cost + vc, 4)
-
-
-def _plan_research(session_id: str, idea: str, user: str) -> None:
-    try:
-        progress: list[str] = []
-        def on_progress(line: str) -> None:  # write each real milestone/receipt + the running usage so
-            progress.append(line)            # the UI spews it live AND the session meter ticks during research
-            store.plan_save(session_id, progress=list(progress),
-                            tokens=pipeline.LEDGER.tokens(), cost=round(pipeline.LEDGER.cost(), 4))
-        sess0 = store.plan_get(session_id) or {}
-        with ops.bind_session_run(user, sess0.get("stack")) as prov:
-            prep = planner.prepare(idea, mock=ops.MOCK, on_progress=on_progress)  # intake → research → vet → draft
-            toks = pipeline.LEDGER.tokens()   # the welcome run's token usage → seeds the session meter
-        if prov is not None and prov.bills_filg:   # runs on FILG's hosted key → meter it (invariant #3)
-            if _is_subscriber(user):               # subscriber → count against their monthly fair-use cap
-                usage.record_monthly(_acct(user), _period(user), prep["cost"], toks)
-            else:                                  # free taste → per-user counter (alias-deduped) + daily
-                usage.record_run(auth.normalize_email(user), prep["research_cost"])  # free run + daily total
-                usage.record_spend(prep["cost"] - prep["research_cost"])  # intake + vet + first draft → daily
-        root = _new_node(planner.root_node(prep["proposal"]), None)  # seed the decision tree's root
-        root["log"] = _op_log(progress, 0)
-        tree = dtree.seed(root)
-        store.plan_save(session_id, status="building", research=prep["research"], step=0,
-                        proposal=prep["proposal"], shaped=prep["shaped"], vetting=prep["vetting"],
-                        cost=prep["cost"], tokens=toks, tree=tree, progress=progress)
-    except Exception as e:  # noqa: BLE001
-        traceback.print_exc()  # full trace → Render stdout logs (client only sees str(e))
-        store.plan_save(session_id, status="error", error=ops.humanize_error(e)[0])
 
 
 # ── The diverge/converge funnel (brainstorm → merge → commit), layered on the same node tree ──
@@ -664,71 +578,6 @@ _route_context = context.screen
 
 def _path_snippets(nodes: dict, at_id: str | None) -> list[str]:   # legacy signature shim
     return context.path({"tree": {"nodes": nodes}}, at_id)
-
-
-@app.post("/api/plan/start")
-async def api_plan_start(request: Request):
-    body = await request.json()
-    idea = (body.get("idea") or "").strip()
-    if len(idea) < 12:
-        return JSONResponse({"error": "Tell me a bit more about the idea."}, status_code=400)
-    if gibberish.looks_like_gibberish(idea):  # total nonsense → roast them for free (no run, no LLM)
-        return JSONResponse({"gibberish": True, **gibberish.roast(idea)})
-    user, verified = _identity(request, body.get("email"))
-    if "@" not in user:
-        return JSONResponse({"error": "Enter an email so we can save your plan."}, status_code=400)
-    # The legacy one-shot welcome taste retired with v1 (2026-07-06): in the auth-on regime this
-    # route requires a verified account AND a key/subscription, same as every other deep-build verb.
-    # (The new funnel's free taste is /api/brainstorm → /merge; this route jumps straight to the
-    # deep research run, so an open POST here would be an unauthenticated spend hole on our key.)
-    if auth.AUTH_ENABLED:
-        if not verified:
-            return JSONResponse(
-                {"error": "Create a free account to build a plan — it saves to your account.",
-                 "needAccount": True}, status_code=401)
-        if _needs_key(user):
-            return JSONResponse(
-                {"error": "Keep building free on your own API key (OpenRouter or Anthropic), or "
-                          "subscribe to run on ours.", "needKey": True}, status_code=402)
-    taste_id = auth.normalize_email(user)   # dedupe the free taste across +suffix / gmail-dot aliases
-    if _is_byok(user):
-        pass   # has a key → unlimited plans on their own spend
-    elif _is_subscriber(user):
-        # Subscriber: runs on FILG's key, bounded by the monthly fair-use cap. Over it → offer the
-        # two off-ramps (own key, or wait for the renewal reset) instead of building on our dime.
-        b = _budget(user)
-        if b and b["over"]:
-            return JSONResponse(
-                {"error": "You've used this month's plan allowance on our key. Add your own API key to "
-                          "keep building free, or your allowance resets when your subscription renews.",
-                 "fairUse": True, "needKey": True, "resetAt": b.get("reset_at")}, status_code=402)
-        # else: runs on FILG's hosted key → _plan_research meters it against the monthly cap
-    elif keys.enabled():
-        # BYOK on, no key: the FIRST query is on us when FILG has a hosted key (metered + kill-switch).
-        # Once the free taste is used (or the daily budget is hit), degrade to a key prompt, not a wall.
-        if not ops.HOSTED_FREE:
-            return JSONResponse(
-                {"error": "Add your API key to build your plan — an OpenRouter key (any model) or your "
-                          "own Anthropic key (Claude direct), usually pennies a plan.",
-                 "needKey": True}, status_code=402)
-        allowed, _reason = usage.can_run(taste_id, is_paid=False)   # per-user free cap + daily kill switch
-        if not allowed:
-            return JSONResponse(
-                {"error": "Your free plan is used up (or today's free pool is tapped). Add your own "
-                          "API key to keep building — usually pennies a plan.",
-                 "needKey": True}, status_code=402)
-        # else: first query on the house → runs on FILG's hosted key; _plan_research meters it
-    else:
-        # BYOK off (no FILG_KEY_SECRET — dev/local): keep the legacy free-cap behavior so dev works.
-        allowed, reason = usage.can_run(taste_id, is_paid=False)
-        if not allowed:
-            return JSONResponse({"error": reason}, status_code=402)
-    directors = [k for k in (body.get("directors") or []) if k in personas.KEYS]  # optional board
-    sid = uuid.uuid4().hex[:12]
-    store.plan_create(sid, user, idea, directors=directors)
-    store.plan_save(sid, stack=provider.stack_name(body.get("stack")))  # honor the crew picked at intake
-    threading.Thread(target=_plan_research, args=(sid, idea, user), daemon=True).start()
-    return {"id": sid}
 
 
 @app.post("/api/brainstorm")
@@ -1237,34 +1086,6 @@ async def api_plan_claim(sid: str, request: Request):
     return views.plan_state(store.plan_get(sid))
 
 
-@app.post("/api/plan/{sid}/respond")
-async def api_plan_respond(sid: str, request: Request):
-    s = store.plan_get(sid)
-    if not s or not _owns(request, s):
-        return JSONResponse({"error": "unknown session"}, status_code=404)
-    if (wall := _account_wall(request, s) or _key_wall(s)):
-        return wall
-    if s["status"] != "building":
-        return JSONResponse({"error": f"session is {s['status']}"}, status_code=409)
-    body = await request.json()
-    choice = body.get("choice")
-    if choice not in planner.CHOICES:
-        return JSONResponse({"error": "pick yes_and / not_quite / okay_but"}, status_code=400)
-    try:
-        with ops.run_slot(s.get("user"), s.get("stack")):
-            # If a board is set it vets each finalized section and its takeaway steers the next draft
-            # (planner.advance runs the board inline). cost includes any board review.
-            upd = planner.advance(s, choice, body.get("note"), mock=ops.MOCK,
-                                  directors=s.get("directors") or None)
-    except ops.BusyError as be:
-        return ops.busy_response(be)
-    except Exception as e:  # noqa: BLE001
-        return ops.engine_error(e)
-    _meter(s.get("user"), round((upd.get("cost", 0) or 0) - (s.get("cost") or 0), 4))  # draft + board review
-    store.plan_save(sid, **upd)
-    return views.plan_state(store.plan_get(sid))
-
-
 @app.post("/api/plan/{sid}/next")
 async def api_plan_next(sid: str, request: Request):
     """Roll forward: finalize the active node's section (a note steers it) and draft the next one.
@@ -1523,7 +1344,7 @@ async def api_plan_board(sid: str, request: Request):
     a = (tree.get("nodes") or {}).get(tree.get("active"))
     if a is not None:
         entry = {"section": "convene", "title": f"Board convened: “{question[:90]}”", **res}
-        # the legacy /respond flow advances the flat mirror without the tree — trust whichever is ahead
+        # pre-tree sessions advanced the flat mirror without the tree — trust whichever is ahead
         base = max((a.get("board") or []), (s.get("board") or []), key=len)
         reviews = dtree.clip("board", list(base) + [entry])
         a["board"] = reviews

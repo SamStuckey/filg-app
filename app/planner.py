@@ -42,8 +42,6 @@ WOD = domain_copy.WOD
 _MOCK_QA = domain_copy.MOCK_QA
 _MOCK_NUDGES = domain_copy.MOCK_NUDGES
 
-CHOICES = {"yes_and", "not_quite", "okay_but"}
-
 # "Ask an expert" + "Board of Directors" both draw on the persona registry (app/personas.py) — FILG-
 # owned COMPOSITE ARCHETYPES, never real named people. Naming/impersonating a real person would
 # trigger right-of-publicity / the ELVIS Act / the NO FAKES Act (commercial use of likeness/voice);
@@ -401,74 +399,6 @@ def _steer(choice: str, note: str | None) -> str | None:
     return None
 
 
-def advance(session: dict, choice: str, note: str | None, mock: bool = False,
-            directors: list | None = None) -> dict:
-    """Apply a branch to the current node and return the fields to persist
-    ({files, step, proposal, history, status, cost, board}).
-
-    - not_quite → re-draft THIS section with a different angle (stay on the node).
-    - yes_and / okay_but with a note → re-synthesize THIS section honoring the note, then finalize.
-    - yes_and / okay_but with no note → accept the current draft as-is, then finalize.
-    The choice+note are appended to history, which feeds every later section's prompt.
-
-    If `directors` is set (the operator built a Board of Directors), each finalized section is vetted
-    by the board (board.review_section) — each director's take + a synthesized takeaway — and that
-    takeaway is fed into the NEXT section's synthesis, so the board genuinely steers the output."""
-    if choice not in CHOICES:
-        raise ValueError(f"bad choice {choice!r}")
-    step = session["step"]
-    section = SECTIONS[step]
-    files = dict(session.get("files") or {})
-    history = list(session.get("history") or [])
-    reviews = list(session.get("board") or [])
-    cost = session.get("cost") or 0.0
-    note = (note or "").strip() or None
-    idea = _working_idea(session)  # synthesize on the focused thesis, not the raw grab-bag
-    founder = _founder(session)
-    history.append({"section": section["key"], "choice": choice, "note": note})
-
-    if choice == "not_quite":
-        draft, c = propose(idea, section["key"], session["research"], history,
-                           steer=_steer(choice, note), board_notes=_board_notes(reviews),
-                           founder=founder, mock=mock, plan_so_far=_plan_so_far(files))
-        return {"proposal": {"section": section["key"], "title": section["title"], "draft": draft},
-                "history": history, "cost": round(cost + c, 4)}
-
-    # yes_and / okay_but → finalize this file (re-synthesizing if the note steers it), then advance
-    steer = _steer(choice, note)
-    if steer:
-        draft, c = propose(idea, section["key"], session["research"], history,
-                           steer=steer, board_notes=_board_notes(reviews), founder=founder, mock=mock,
-                           plan_so_far=_plan_so_far(files))
-        cost = round(cost + c, 4)
-    else:
-        draft = session["proposal"]["draft"]
-    files[section["file"]] = draft
-
-    # The board reviews the section just finalized; its takeaway then steers the next draft.
-    if directors:
-        review, bc = board.review_section(idea, section["title"], draft,
-                                          bundle_markdown(idea, files), directors, mock=mock,
-                                          extra_personas=session.get("custom_directors"))
-        reviews.append({"section": section["file"], "title": section["title"], **review})
-        cost = round(cost + bc, 4)
-
-    if step + 1 < N:
-        nxt = SECTIONS[step + 1]
-        draft, c = propose(idea, nxt["key"], session["research"], history,
-                           board_notes=_board_notes(reviews), founder=founder, mock=mock,
-                           plan_so_far=_plan_so_far(files))
-        upd = {"files": files, "step": step + 1, "history": history, "cost": round(cost + c, 4),
-               "proposal": {"section": nxt["key"], "title": nxt["title"], "draft": draft}}
-    else:
-        files, qa, qc = qa_plan(idea, files, mock=mock)   # final QA pass before the plan is complete
-        upd = {"files": files, "step": N, "history": history, "status": "done",
-               "proposal": None, "qa": qa, "cost": round(cost + qc, 4)}
-    if directors:
-        upd["board"] = reviews
-    return upd
-
-
 # ── Branching decision tree (Next / Back / navigate between branches) ─────────
 # The builder is a *tree* of section-proposals, not one straight line. Each node is a proposal for a
 # single section, carrying the files its ancestors finalized. Going forward (Next) finalizes this
@@ -613,61 +543,41 @@ def bundle_markdown(idea: str, files: dict) -> str:
 if __name__ == "__main__":  # self-test (mock, no API)
     r = research("I play guitar and want to help people learn", mock=True)
     assert r["prose"]["title"]
-    sess = {"idea": "guitar coaching", "research": r, "files": {}, "history": [], "step": 0,
-            "cost": 0.0, "status": "building"}
-    prop, _ = first_proposal(sess["idea"], r, mock=True)
-    sess["proposal"] = prop
+    prop, _ = first_proposal("guitar coaching", r, mock=True)
     assert prop["section"] == "brief"
-    # not_quite stays on the same node and re-drafts
-    upd = advance(sess, "not_quite", "make it punchier", mock=True)
-    assert "revised" in upd["proposal"]["draft"] and "step" not in upd
-    sess.update(upd)
-    # yes_and WITH a note re-synthesizes the section (the note steers it, not just a footnote)
-    sess.update(advance(sess, "yes_and", "add a freemium hook", mock=True))
-    assert "revised" in sess["files"]["1-the-setup.md"] and sess["step"] == 1
-    # finish the rest with plain acceptance (no re-gen)
-    while sess.get("status") != "done":
-        sess.update(advance(sess, "yes_and", None, mock=True))
-    assert sess["status"] == "done" and len(sess["files"]) == N
-    assert "revised" not in sess["files"]["7-your-first-30-days.md"]  # plain-accepted kept as-is
-    md = bundle_markdown(sess["idea"], sess["files"])
-    assert "Business plan" in md
-    exp, _ = ask_expert(sess["idea"], sess["files"], "closer", "is the price right?", mock=True)
-    assert exp["archetype"] == "The Closer" and "AI composite" in exp["answer"]
+    md_probe = ask_expert("guitar coaching", {}, "closer", "is the price right?", mock=True)[0]
+    assert md_probe["archetype"] == "The Closer" and "AI composite" in md_probe["answer"]
     # prepare(): intake shapes a grab-bag → thesis drives synthesis; vet returns a verdict
     prep = prepare("I like basketball, MTG, food, and I'm good at sales", mock=True)
     assert prep["shaped"]["thesis"] and prep["vetting"]["verdict"] in ("pursue", "pivot", "kill")
-    sess2 = {"idea": "raw grab-bag", "shaped": prep["shaped"], "research": prep["research"],
-             "files": {}, "history": [], "step": 0, "cost": prep["cost"], "proposal": prep["proposal"]}
+    sess2 = {"idea": "raw grab-bag", "shaped": prep["shaped"], "research": prep["research"]}
     assert _working_idea(sess2) == prep["shaped"]["thesis"]  # builds on the focused thesis
     assert _working_idea({"idea": "x"}) == "x"               # back-compat: no shaped → raw idea
-    # board-driven advance: each finalized section gets a board review, takeaway steers the next draft
-    sess2.update({"history": [], "step": 0, "cost": 0.0, "board": []})
-    upd = advance(sess2, "yes_and", None, mock=True, directors=["closer", "cfo"])
-    assert len(upd["board"]) == 1 and len(upd["board"][0]["directors"]) == 2  # per-director takes
-    assert upd["board"][0]["verdict"]                                          # synthesized takeaway
-    assert "board-guided" in upd["proposal"]["draft"]                          # takeaway steered next
-    assert _board_notes(upd["board"]).startswith("- on")
     # branching tree: root → forward (finalize + next) → rebranch (re-draft previous as a sibling)
-    r3 = research("guitar coaching", mock=True)
-    prop3, _ = first_proposal("guitar coaching", r3, mock=True)
-    root = root_node(prop3)
+    root = root_node(prop)
     assert root["step"] == 0 and root["files"] == {}
-    child, _ = forward("guitar coaching", r3, root, "go bolder", mock=True)
+    child, _ = forward("guitar coaching", r, root, "go bolder", mock=True)
     assert child["step"] == 1 and len(child["files"]) == 1            # section 0 finalized
     assert "revised" in child["files"]["1-the-setup.md"]             # forward note steered it
     assert child["change"] and "go bolder" in child["change"]        # the fold-in is flagged
-    sib, _ = rebranch("guitar coaching", r3, root, "narrower niche", mock=True)
+    sib, _ = rebranch("guitar coaching", r, root, "narrower niche", mock=True)
     assert sib["step"] == 0 and "revised" in sib["draft"] and sib["files"] == {}  # re-draft, no finalize
     assert sib["change"] and "narrower niche" in sib["change"]
-    assert forward("guitar coaching", r3, root, None, mock=True)[0]["change"] is None  # no note, no flag
-    # forward to the end → terminal node
+    assert forward("guitar coaching", r, root, None, mock=True)[0]["change"] is None  # no note, no flag
+    # board-reviewed forward: the finalized section gets a review; its takeaway steers the next draft
+    b_child, _ = forward("guitar coaching", r, root, None, directors=["closer", "cfo"], mock=True)
+    assert len(b_child["board"]) == 1 and len(b_child["board"][0]["directors"]) == 2
+    assert b_child["board"][0]["verdict"]                             # synthesized takeaway
+    assert "board-guided" in b_child["draft"]                         # takeaway steered the next draft
+    assert _board_notes(b_child["board"]).startswith("- on")
+    # forward to the end → terminal node with the full file tree + the QA pass
     node = child
     while node["step"] < N:
-        node, _ = forward("guitar coaching", r3, node, None, mock=True)
+        node, _ = forward("guitar coaching", r, node, None, mock=True)
     assert node["step"] == N and node["draft"] is None and len(node["files"]) == N
+    md = bundle_markdown("guitar coaching", node["files"])
+    assert "Business plan" in md
     # waste-of-time mode: force past a kill → comedic placeholder, zero spend, still advances the tree
     wod, wc = wod_forward(root)
     assert wc == 0.0 and wod["step"] == 1 and wod.get("wod") and "button" in wod["files"]["1-the-setup.md"].lower()
-    print("planner.py self-test OK —", N, "sections,", len(sess["files"]),
-          "files, expert ok, prepare ok, board ok, tree ok")
+    print("planner.py self-test OK —", N, "sections, expert ok, prepare ok, board ok, tree ok")
