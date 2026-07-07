@@ -88,7 +88,7 @@ PHASES: list[Phase] = [
 ]
 
 
-# ── deterministic helpers (moved here from teardown; the engine's logic) ──────
+# ── deterministic helpers (the engine's assembly logic) ──────────────────────
 def _row_host(url: str) -> str:
     m = re.search(r"https?://([^/]+)", url or "")
     return (m.group(1).replace("www.", "") if m else (url or "")).strip().lower()

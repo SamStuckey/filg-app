@@ -1,23 +1,22 @@
 #!/usr/bin/env python3
 """
-FILG MVP backend — the thin app that runs the engine for a stranger.
+FILG's route surface — the FastAPI app over the layered backend (see app/README.md).
 
-Flow: plain-text idea in → async label-don't-chase run (the engine) → graded artifact out, gated by
-the free-tier cap + daily kill switch (engine/usage.py). Reuses the engine wholesale; nothing
-about the pipeline is reimplemented here.
+This module holds ROUTES, WALLS, and BACKGROUND WORKERS only. The logic lives in its layers:
+ops.py (how an engine op runs — slots, guards, metering), access.py (entitlements + provider
+selection), views.py (session → frontend shaping), exports.py (free text exports), domain/
+(the use-case plug), and the engine package (research, grading, the decision tree).
 
-Auth + billing are real (Supabase JWT + Stripe $39/mo), but degrade gracefully: with no Supabase /
-Stripe env set the app still runs free-tier-only on the email typed in the body (mock/dev). Paid is
-always gated on a verified user with a live subscription (app/auth.py + app/billing.py). Jobs +
-results + subscription state persist in SQLite (app/store.py); swap for Postgres + a real queue and
-this stays the same shape.
+The funnel: /api/brainstorm (anonymous spread) → /merge (converge + light skim) → /refine →
+/commit (THE WALL: account + key/subscription; the deep build) → /next /back /redraft /goto
+(the staged tree build) — plus chat routing, the board, research lookups, exports, billing.
 
 Run:
-  pip install fastapi uvicorn
-  FILG_MOCK=1 uvicorn app.main:app --reload        # free, no API/auth/billing (dev/frontend)
-  uvicorn app.main:app                              # real runs (~$0.40 each, metered)
-Env: FILG_MOCK, FILG_FREE_RUNS, FILG_DAILY_BUDGET, FILG_PAID_EMAILS (csv comp override),
-     SUPABASE_URL/SUPABASE_PUBLISHABLE_KEY (auth via JWKS), STRIPE_*/FILG_PUBLIC_URL.
+  FILG_MOCK=1 uvicorn app.main:app --reload        # dev: canned results, no spend
+  uvicorn app.main:app                              # real runs, metered
+Env: FILG_MOCK, FILG_FREE_RUNS, FILG_DAILY_BUDGET, FILG_ANTHROPIC_API_KEY (hosted key),
+     FILG_KEY_SECRET (BYOK store), SUPABASE_URL/SUPABASE_PUBLISHABLE_KEY (auth),
+     STRIPE_*/FILG_PUBLIC_URL (billing), FILG_ORPHAN_TTL_HOURS.
 """
 
 from __future__ import annotations

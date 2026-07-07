@@ -1,63 +1,37 @@
-# Prototype 01 — source-credibility + verify gate
+# The decision engine
 
-**Why this exists.** Both dogfood runs proved the engine produces sellable, whole-arc output.
-The failure mode they exposed: on research, **self-interested vendor-blog stats get laundered
-into the artifact set as fact**. That's the single thing that would destroy the cited-research
-moat. This is the smallest real version of the gate that prevents it.
+Use-case-agnostic machinery for **graded-evidence decision building**: fan out research on a
+subject, grade every quantitative claim's source credibility, assemble labeled evidence, and
+grow a branching **decision tree** of typed nodes from what the operator decides. The host app
+supplies what a run is ABOUT; this package supplies how it runs.
 
-## What it does
-For each research claim (text + source URL):
-1. Classify the source domain — PRIMARY (gov/AMA/MGMA) / RESEARCH (market-research firm) /
-   VENDOR (sells something) / FORUM / UNKNOWN.
-2. Detect **conflict of interest** — a quantitative claim that makes a category look good,
-   sourced from a domain that *sells in that category*.
-3. Verdict per claim; **FAIL the gate** if any quantitative claim is self-interested and not
-   backed by a primary cite.
+## Modules
 
-Run:
-```
-python3 source_credibility_gate.py          # heuristic, no API key needed
-python3 source_credibility_gate.py --judge   # + Haiku cross-check (needs ANTHROPIC_API_KEY)
-```
+| Module | Owns |
+|---|---|
+| `spine.py` | The deterministic conductor: a fixed phase DAG (plan → research → grade → re-search → assemble), the model only at typed seams, every phase logged (`PhaseEvent`). Also `run_author` (generate → validate → reprompt, bounded) and `regrade_engine` (re-grade carried claims without re-fetching). |
+| `pipeline.py` | The LLM call layer (`call`, provider routing, web_search variants), the per-run cost `LEDGER`, `Claim` + the research seam (`plan`, `research_lane`, schema-validated), and the GATE (`gate_claims`: voted self-interest judge + deterministic staleness, boolean-algebra flagging). `ResearchFraming` is the subject-wording seam. |
+| `evidence.py` | `build_evidence` — the public graded-evidence run; forwards the phase log as readable activity lines. |
+| `tree.py` | The decision tree: node wiring (id/parent/children), a KIND registry (the host names its node kinds + display labels), bounded/inheritable ATTACHMENTS (board trail, build log — future: decisions, blockers, sub-trees), root→node walks, run epochs. Dict-in/dict-out on purpose: the persisted blob and the frontend read the same shape. |
+| `provider.py` | Per-run provider + model-stack binding (BYOK seam). Contextvars + `bound()` to carry them into fan-out threads. |
+| `model_catalog.py` | Model ids / prices / OpenRouter slugs, env-overridable — repoint a slot with no deploy. |
+| `source_credibility_gate.py` | Domain-tier classification (PRIMARY/RESEARCH/VENDOR/FORUM/UNKNOWN) + conflict-of-interest heuristics. |
+| `voice_lint.py` | The deterministic no-AI-tells copy linter — the author-seam validator (reprompts the author; never post-processes). |
+| `usage.py` | Metering: per-user run caps, the daily kill switch, monthly cost caps. SQLite-backed. |
 
-## Result on the real dogfood claims
-Seeded with the actual claims from the two dogfood runs (`dogfood_run_01.md` + `dogfood_run_02.md`
-in the sibling [filg-docs](https://github.com/SamStuckey/filg-docs) repo). The gate
-**failed** (exit 1) and flagged **6 self-interested** stats, including:
-- "$201,600/yr from switching billers" — listerventures.com (an RCM vendor) ✓ the one I caught by hand
-- in-house billing "$55-80K/yr" — carecloud.com (sells outsourced billing)
-- denial rate "12% / 15-18%" — aptarro.com (sells denial management) — **a number I had rated
-  "med-high confidence" by hand; the gate is stricter than I was, correctly**
+## The boundary
 
-**The finding I did NOT catch by hand:** run 01's two marquee stats — "62% of calls unanswered"
-and "78% buy from the first responder" — both came from **getaira.io, an AI-receptionist vendor**.
-I leaned on them as credible in run 01. The gate flags both. So the laundering problem wasn't
-unique to the unfamiliar niche; it was in the *familiar* run too, and I missed it because the
-numbers matched my priors. **That is exactly the value of an automated gate: it doesn't have priors.**
+The engine carries **no product vocabulary** — no sections, no personas, no business copy.
+Hosts plug in through three seams:
 
-## What this proves / what's still stubbed
-- **Proves:** a cheap deterministic layer (domain registry + COI rule) catches the moat-killing
-  failure on real data, with no LLM call. This is shippable as the v1 spine.
-- **Stubbed for production:**
-  - Domain → tier/seller-category is a hand-built registry. Production needs (a) a maintained
-    allowlist of primary sources, (b) an LLM classifier for unknown domains (the `--judge` path
-    is the seed of this — routed to Haiku, a classify task), (c) detecting the *category a claim
-    promotes* automatically rather than from hand-tags.
-  - "Demand a primary cite" is a verdict, not yet an action. Production should trigger a
-    re-search for a primary source, or down-rank the claim to "marketing claim, unverified" in
-    the artifact.
-- **Next:** wire this gate as a stage in the unattended prompt→artifact pipeline, then measure
-  what fraction of a fresh run's claims survive it (the real quality metric for the product).
+1. **`ResearchFraming`** (pipeline) — the subject wording of the research prompts.
+2. **`tree.register_kind` / `register_attachment`** — the host's node vocabulary and per-node
+   histories (FILG's live in `app/domain/nodes.py`).
+3. **Prose/synthesis** — the host writes its own summaries over the graded rows
+   (FILG's in `app/teardown.py`).
 
-## Update — the unattended pipeline now exists (`pipeline.py`)
-`pipeline.py` is the live, no-human-in-the-loop stage chain: **Haiku research fan-out (real
-`web_search`) → Sonnet synthesis → this gate → Haiku re-search of flagged claims.** It meters
-every API call so it prints a real $/run. Run on a fresh niche (independent property managers):
-- Produced a complete sellable artifact set unattended (`live_run_artifacts.md`).
-- Gate flagged **79%** of raw research as self-interested/non-primary (the moat finding holds on
-  a 3rd niche); re-search lifted clean cites **21% → 57%**.
-- **Measured ~$1.05/run** vs the $0.21 token-only estimate — re-search (72% of cost) and
-  web-search fees were unmodeled. See `test_01_live_results.md`.
-- Confirmed the "stubbed for production" warning above: the hand registry doesn't generalize to
-  fresh niches, so survival is scored **judge-led**, not registry-led. The judge/allowlist must
-  replace the hand registry in production.
+`tests/test_engine_neutrality.py` greps this package for product vocabulary and fails the
+build on a leak. When a sibling product forks the app layer, the engine should need zero edits.
+
+Modules use relative imports (the package is relocatable); self-tests run via
+`python -m engine.<module>`.

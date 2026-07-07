@@ -9,8 +9,8 @@ log as readable activity lines when the caller wired a progress stream. The host
 this; what the run is ABOUT arrives via `framing` (pipeline.ResearchFraming) so the engine
 carries no product vocabulary.
 
-Prose/synthesis over the graded rows is the host's business — see app/teardown.py for
-FILG's offer-summary layer on top of this.
+Prose/synthesis over the graded rows belongs to the host's product layer, which calls
+this and writes its own summary on top.
 """
 
 from __future__ import annotations

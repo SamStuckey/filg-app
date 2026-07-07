@@ -109,7 +109,7 @@ class Ledger:
 
 # Per-run ledger: a fresh Ledger is bound per request so concurrent operations don't interleave
 # their rows (cost_slice would otherwise mis-bill one run with another's tokens). Outside a bound
-# run (tests, standalone, teardown) calls fall back to the process-global ledger.
+# run (tests, standalone tools) calls fall back to the process-global ledger.
 _GLOBAL_LEDGER = Ledger()
 _ledger_var: contextvars.ContextVar[Ledger | None] = contextvars.ContextVar("filg_ledger", default=None)
 
@@ -434,9 +434,9 @@ NEUTRAL_FRAMING = ResearchFraming(
         "the question with SPECIFIC, sourced facts. Prefer hard numbers. For every "
         "claim, record the exact source URL you took it from."),
     subject_label="SUBJECT",
-    fallback_lanes=("What is the market size and number of target buyers?",
-                    "Who are the competitors and what are the pricing norms?",
-                    "What is the buyer's most acute, expensive pain point?"),
+    fallback_lanes=("What is the size of the relevant market or audience?",
+                    "Who are the established alternatives and what do they charge?",
+                    "What is the most acute, expensive pain point involved?"),
 )
 
 
@@ -604,7 +604,7 @@ def gate_claim(c: Claim, jv: str | None = None, now_year: int | None = None) -> 
 def gate_claims(claims: list[Claim], votes: int = JUDGE_VOTES, now_year: int | None = None) -> list[Verdict]:
     """Batched + VOTED gate: vote the self-interested judge across the full claim set, then assemble a
     verdict per claim from the atomic checks (judge vote + deterministic staleness). Use this over a
-    per-claim `gate_claim` loop whenever you have the full claim set up front (teardown + pipeline)."""
+    per-claim `gate_claim` loop whenever you have the full claim set up front."""
     jvs = judge_batch_voted(claims, votes=votes)
     return [gate_claim(c, jv, now_year=now_year) for c, jv in zip(claims, jvs)]
 

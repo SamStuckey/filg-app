@@ -37,7 +37,7 @@ import time
 # id -> {display, rung, price (in,out per 1M USD), openrouter}. `rung` is the cost↔quality placement
 # (cheap→premium: fast < mid < high < frontier) — the one judgment the API can't make for us. Prices
 # per Anthropic's published rates. Sonnet 5 / Fable 5 are catalogued (priced + placed) so they're ready
-# to offer via an env repoint or a future stack, without a code edit.
+# to enable via an env repoint or a future stack, without a code edit.
 CATALOG: dict[str, dict] = {
     "claude-haiku-4-5":  {"display": "Haiku 4.5",  "rung": "fast",     "price": (1.0, 5.0),   "openrouter": "anthropic/claude-haiku-4.5"},
     "claude-sonnet-4-6": {"display": "Sonnet 4.6", "rung": "mid",      "price": (3.0, 15.0),  "openrouter": "anthropic/claude-sonnet-4.6"},

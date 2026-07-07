@@ -1,9 +1,9 @@
 """The decision engine — use-case-agnostic research, grading, and orchestration machinery.
 
 This package knows about CLAIMS, SOURCES, GRADES, RESEARCH LANES, AUTHOR LOOPS, PHASES,
-PROVIDERS, and COST. It deliberately knows nothing about any one product built on it
-(business plans, wedding playbooks, …): domain vocabulary, section lists, personas, and
-prompt copy live in the host app's domain layer and are passed in through typed seams.
+PROVIDERS, and COST. It deliberately knows nothing about any one product built on it:
+domain vocabulary, stage lists, advisors, and prompt copy live in the host app's domain
+layer and are passed in through typed seams.
 
 Modules:
   spine                    the deterministic conductor — walks the phase DAG, model only at seams
