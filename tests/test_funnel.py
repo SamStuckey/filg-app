@@ -63,7 +63,7 @@ def test_merge_needs_a_selection(client):
 
 # ── refine: the prelaunch gate sharpens in place, never re-spreads ────────────
 def test_refined_gate_carries_questions_and_a_light_skim(client):
-    import brainstorm
+    from app import brainstorm
     s = _brainstorm(client)
     sid = s["id"]
     client.post(f"/api/plan/{sid}/merge", json={"options": [s["activeNode"]["options"][0]["id"]]})
@@ -334,7 +334,7 @@ def test_info_requests_never_pivot(client):
 
 
 def test_scaffold_never_renders_as_a_direction():
-    import brainstorm
+    from app import brainstorm
     echo = [{"title": "THE OPERATOR IS PIVOTING. Their pivot instruction OUTWEIGHS",
              "one_liner": "THE OPERATOR IS PIVOTING. Their pivot instruction OUTWEIGHS everything"}]
     assert brainstorm._clean_directions(echo) == []

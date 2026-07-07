@@ -36,7 +36,7 @@ import functools
 import os
 from dataclasses import dataclass, field
 
-import model_catalog  # noqa: E402 — id/price/slug source of truth (one-directional: provider → catalog)
+from . import model_catalog  # noqa: E402 — id/price/slug source of truth (one-directional: provider → catalog)
 
 # Logical model ids (canonical; pipeline imports these). Resolved from the catalog so each slot is
 # env-repointable (FILG_MODEL_HAIKU/SONNET/OPUS) — defaults are the current live models, so behavior is

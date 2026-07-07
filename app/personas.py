@@ -22,11 +22,8 @@ deep domain instruction, a SKILL.md it points at) — no caller changes.
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))  # app/ on path → bare sibling imports
-import skill_registry as skills  # noqa: E402
+from app import skill_registry as skills  # noqa: E402
 
 # key, name, blurb (operator-facing), domains (skill set → routing), voice (persona instruction).
 # `board_default` marks the personas suggested as a starter board.

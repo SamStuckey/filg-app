@@ -1,7 +1,7 @@
 """Board of Directors — convening, the collaboration matrix, and review_section."""
 
-import board
-import personas
+from app import board
+from app import personas
 
 
 def test_convene_mock_structure():

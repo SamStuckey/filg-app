@@ -4,8 +4,8 @@ The linter must be verified against BOTH a known-clean and a known-dirty fixture
 can be trusted to gate (a linter that false-positives blocks valid work). The author seam
 must converge (clean output passes through; dirty output is reprompted, never stripped)."""
 
-import spine
-import voice_lint
+from engine import spine
+from engine import voice_lint
 
 
 # ── the linter: known-good and known-bad fixtures ─────────────────────────────
@@ -41,7 +41,7 @@ def test_voice_rule_single_sources_the_wordlist():
     for w in voice_lint.BANNED_WORDS:
         assert w in voice_lint.VOICE_RULE
     # skill_registry re-exports the same object (one source for prompt + gate).
-    import skill_registry
+    from app import skill_registry
     assert skill_registry.VOICE is voice_lint.VOICE_RULE
 
 

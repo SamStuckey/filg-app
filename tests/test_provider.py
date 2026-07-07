@@ -6,8 +6,8 @@ existing test are untouched."""
 
 import types
 
-import pipeline
-import provider
+from engine import pipeline
+from engine import provider
 
 
 # ── fake clients ──────────────────────────────────────────────────────────────

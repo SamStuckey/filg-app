@@ -32,12 +32,8 @@ every redraft. `mock=True` returns a canned assessment with no API spend.
 from __future__ import annotations
 
 import json
-import sys
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))                       # app/  → intake
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "prototype"))  # prototype/ → engine
 
 _VERDICTS = ("survives", "weakened", "broken")
 
@@ -72,7 +68,7 @@ def _clamp01(v) -> float:
 def _refute(idea: str, assumption: str):
     """One adversarial research pass: web_search for the STRONGEST evidence this assumption is FALSE.
     Returns pipeline.Claim objects (the disconfirming findings, with the source URL each came from)."""
-    from pipeline import call, extract_json, Claim, HAIKU, WEB_SEARCH_TOOL, _as_year
+    from engine.pipeline import call, extract_json, Claim, HAIKU, WEB_SEARCH_TOOL, _as_year
     out = call("research_refute", HAIKU, max_tokens=1200, tools=[WEB_SEARCH_TOOL], prompt=(
         "You are a red-team researcher. An operator's business plan DEPENDS on the assumption below "
         "being true. Use web_search to find the STRONGEST real evidence that it is FALSE or overstated: "
@@ -95,7 +91,7 @@ def _refute(idea: str, assumption: str):
 def _verdicts(assumptions: list[str], ev_lists: list[list[dict]], priors: dict) -> list[dict]:
     """One batched call weighing each assumption's GRADED disconfirming evidence. Fresh context: the
     verdict sees only the assumptions + graded counter-evidence, never the optimistic plan (G1)."""
-    from pipeline import call, extract_json, SONNET
+    from engine.pipeline import call, extract_json, SONNET
     blocks = []
     for i, (a, evs) in enumerate(zip(assumptions, ev_lists)):
         eb = "\n".join(f'   - [tier={e["tier"]}, judge={e["judge"]}] {e["text"]} [{e["url"]}]'
@@ -152,8 +148,8 @@ def stress_test(idea: str, shaped: dict, research: dict | None = None, mock: boo
         return {k: [dict(x) for x in v] if isinstance(v, list) else dict(v)
                 for k, v in _MOCK.items()}, 0.0
 
-    import intake  # noqa: PLC0415 — reuse premortem for assumption extraction
-    from pipeline import LEDGER, gate_claims, bound
+    from app import intake  # noqa: PLC0415 — reuse premortem for assumption extraction
+    from engine.pipeline import LEDGER, gate_claims, bound
     start = len(LEDGER.rows)
 
     pre, _c = intake.premortem(idea, shaped, research, mock=False)

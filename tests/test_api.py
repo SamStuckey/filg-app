@@ -489,8 +489,8 @@ def test_pdf_open_when_billing_unconfigured(client):
 def test_free_taste_dedup_normalizes_email():
     # Anti-abuse (§16.2 #2): the free-taste counter dedupes on a normalized email, so +suffix and
     # gmail-dot aliases of the same person count as one taste, not infinite.
-    import auth
-    import usage
+    from app import auth
+    from engine import usage
     a = auth.normalize_email("Taste.Dedup+one@gmail.com")
     b = auth.normalize_email("tastededup+two@googlemail.com")
     assert a == b == "tastededup@gmail.com"

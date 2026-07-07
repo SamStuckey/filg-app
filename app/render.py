@@ -11,16 +11,9 @@ Matches the stripped-down "Craigslist-plain" app — no decorative brand chrome,
 from __future__ import annotations
 
 import html
-import sys
-from pathlib import Path
-
 import markdown
 
-# `teardown` is the engine's evidence renderer (prototype/); mirror main.py's path bootstrap so this
-# module also works when imported standalone (e.g. a unit test that only touches rendering).
-_HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(_HERE.parent / "prototype"))
-import teardown  # noqa: E402
+from engine import teardown  # the engine's evidence renderer (graded-row HTML)
 
 
 CTA = ('<div class="cta"><a class="btn btn-primary" href="https://filg.ai/#start">'

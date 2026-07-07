@@ -144,7 +144,7 @@ def test_legacy_start_walled_when_auth_on(client, monkeypatch):
 def test_merge_reads_the_kill_switch(client, monkeypatch):
     """The taste's one web-touching step (merge) runs in a background thread — the daily kill switch
     must be read at the route, before the spawn (metered-but-uncapped = an invariant-#3 breach)."""
-    import usage
+    from engine import usage
     d = client.post("/api/brainstorm", json={"idea": IDEA}).json()
     sid, opts = d["id"], d["activeNode"]["options"]
     monkeypatch.setattr(main, "MOCK", False)                       # the gate skips mock runs

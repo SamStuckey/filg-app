@@ -24,19 +24,16 @@ caller (app/main.py) — this module just runs the board.
 
 from __future__ import annotations
 
-import sys
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))  # app/ on path → bare sibling imports
-import personas  # noqa: E402
-import skill_registry as skills  # noqa: E402
+from app import personas  # noqa: E402
+from app import skill_registry as skills  # noqa: E402
 
 
 def _director_take(idea: str, plan_text: str, focus: str, persona: dict) -> tuple[dict, float]:
     """One director's take. Real mode: one Sonnet call under that persona's system block. `persona` is
     a full persona dict (a built-in or a custom-forged one), so customs need no special casing."""
-    from pipeline import LEDGER, call, SONNET
+    from engine.pipeline import LEDGER, call, SONNET
     start = len(LEDGER.rows)
     ans = call(f"board_{persona['key']}", SONNET, max_tokens=450,
                system=personas.system_for_persona(persona), cache=True,
@@ -55,7 +52,7 @@ def _skeptic_take(idea: str, plan_text: str, focus: str) -> tuple[dict, float]:
     """The standing adversary's structured verdict. Ported from biz-skeptic + business-manager G3/G4:
     a counterfactual-CoT prompt (premortem / inversion / strongest objection) that forces a committed
     verdict, NOT an agreeable take. Its rationale is preserved verbatim downstream (G7)."""
-    from pipeline import LEDGER, call, extract_json, SONNET
+    from engine.pipeline import LEDGER, call, extract_json, SONNET
     start = len(LEDGER.rows)
     p = personas.get(personas.SKEPTIC_KEY)
     out = call("board_skeptic", SONNET, max_tokens=400, system=personas.system_for(personas.SKEPTIC_KEY),
@@ -89,7 +86,7 @@ def _synthesize(idea: str, focus: str, takes: list[dict], skeptic: dict | None =
     """Reconcile the directors' takes into a collaboration matrix (agreement / conflict / net call).
     The skeptic's objection is fed in so the net verdict ACCOUNTS for it — but the skeptic's own
     rationale is preserved verbatim by the caller (G7), never paraphrased away here."""
-    from pipeline import LEDGER, call, extract_json, SONNET
+    from engine.pipeline import LEDGER, call, extract_json, SONNET
     start = len(LEDGER.rows)
     board_block = "\n\n".join(f"### {t['name']}\n{t['take']}" for t in takes)
     skeptic_block = ""
@@ -165,7 +162,7 @@ def convene(idea: str, plan_text: str, focus: str, director_keys: list[str] | No
                   "disclaimer": personas.DISCLAIMER}
         return result, 0.0
 
-    from pipeline import bound   # re-bind the user's provider/stack/ledger into the fan-out threads
+    from engine.pipeline import bound   # re-bind the user's provider/stack/ledger into the fan-out threads
     cost = 0.0
     # fan-out: the subagent pattern. The skeptic runs alongside the directors in the same wave.
     # bound() is load-bearing — without it these workers don't inherit the run's provider contextvar

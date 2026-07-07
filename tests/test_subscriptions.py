@@ -6,8 +6,8 @@ math, PDF-free-for-subscribers, the feature gate, legacy tier folding, the allow
 upgrade prompt, and that a subscriber is not key-walled.
 """
 
-import provider
-import usage
+from engine import provider
+from engine import usage
 from app import access, billing, keys, main, store, tiers
 
 
@@ -115,7 +115,7 @@ def test_subscribe_route_validates(client, monkeypatch):
 def test_key_precedence_paid_allowance_first(monkeypatch):
     """A subscriber spends their paid allowance on OUR key first, THEN falls back to their own key —
     we never charge for credits and then quietly bill their key. Free/BYOK users run on their key."""
-    import usage
+    from engine import usage
     email = "prec@x.com"
     # free user: no key → hosted taste; with a key → their key
     monkeypatch.setattr(access, "_is_byok", lambda u: False)
@@ -136,7 +136,7 @@ def test_key_precedence_paid_allowance_first(monkeypatch):
 def test_meter_follows_actual_key(monkeypatch):
     """Metering follows the key the run ACTUALLY used: a subscriber under allowance (on our key) is
     metered monthly even though they have a key saved — the bug was skipping it because they had a key."""
-    import usage
+    from engine import usage
     email = "mfollow@x.com"
     _sub(email, "pro")
     monkeypatch.setattr(access, "_is_byok", lambda u: True)   # has a key, but under allowance → our key

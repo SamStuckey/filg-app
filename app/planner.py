@@ -20,18 +20,14 @@ from __future__ import annotations
 
 import json
 import re
-import sys
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 
-# reuse the engine (prototype/ is a sibling of app/) and the app-side skill/persona layer (app/).
-sys.path.insert(0, str(Path(__file__).resolve().parent))                       # app/  → skills, personas
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "prototype"))  # prototype/ → engine
-import teardown  # noqa: E402
-import intake  # noqa: E402
-import personas  # noqa: E402
-import board  # noqa: E402 — Board of Directors review, run inline so its takeaway can steer next draft
-import skill_registry as skills  # noqa: E402
+# the engine package (research/grading) + the app-side skill/persona layer.
+from engine import teardown  # noqa: E402
+from app import intake  # noqa: E402
+from app import personas  # noqa: E402
+from app import board  # noqa: E402 — Board of Directors review, run inline so its takeaway can steer next draft
+from app import skill_registry as skills  # noqa: E402
 
 # The plan = an ordered set of files. Plain-language titles (operator voice), friendly filenames.
 # `guide` (optional) is extra per-section instruction injected into synthesis — it forces the section
@@ -227,7 +223,7 @@ def prepare(idea: str, mock: bool = False, on_progress=None, prior: dict | None 
     # another's output, so run them concurrently instead of serially (3 model round-trips → 1
     # wall-clock). pipeline.bound() carries the provider/stack/ledger into each worker thread
     # (threads don't inherit contextvars); progress lines are emitted after, in the original order.
-    from pipeline import bound  # noqa: PLC0415
+    from engine.pipeline import bound  # noqa: PLC0415
     emit("Vetting the idea, pressure-testing assumptions, and drafting your first offer")
     with ThreadPoolExecutor(max_workers=3) as ex:
         f_vet = ex.submit(bound(lambda: intake.vet(idea, shaped, research_data, mock=mock)))
@@ -272,7 +268,7 @@ def propose(idea: str, section_key: str, research_data: dict, history: list,
             draft += "\n\n*(board-guided)*"
         return draft, 0.0
 
-    from pipeline import LEDGER, call, SONNET  # heavy; only in real mode
+    from engine.pipeline import LEDGER, call, SONNET  # heavy; only in real mode
     start = len(LEDGER.rows)
     section = next(s for s in SECTIONS if s["key"] == section_key)
     cited, flagged = _cited_flagged(research_data["rows"])
@@ -281,7 +277,7 @@ def propose(idea: str, section_key: str, research_data: dict, history: list,
     # Wrapped so grounding can NEVER break plan building (a bad key / missing dep just skips it).
     method_block = ""
     try:
-        from rag import grounding  # noqa: PLC0415 — additive integration, lazy so it's optional
+        from app.rag import grounding  # noqa: PLC0415 — additive integration, lazy so it's optional
         method_block, _msrc, _mcost = grounding.method_grounding(
             f"{section['title']}: {section.get('guide', '')}\nBUSINESS: {idea}", mock=mock)
     except Exception:
@@ -307,7 +303,7 @@ def propose(idea: str, section_key: str, research_data: dict, history: list,
         f"CITED RESEARCH:\n{cited}\n\nFLAGGED (vendor) CLAIMS:\n{flagged}")
     # VOICE author seam (spine): generate → voice-lint → reprompt until clean (bounded, accumulating).
     # The system block stays cached (the IP); only the appended lint feedback varies per attempt.
-    import spine, voice_lint  # noqa: PLC0415 — engine modules, real mode only
+    from engine import spine, voice_lint  # noqa: PLC0415 — engine modules, real mode only
     def _gen(fb: str) -> str:
         return call(f"plan_{section_key}", SONNET, max_tokens=800,
                     system=skills.system("synth_section"), cache=True,
@@ -327,7 +323,7 @@ def _change_note(idea: str, feedback: str | None, section: dict, mock: bool = Fa
         return None, 0.0
     if mock:
         return (f"Folded in your note (“{fb[:60]}”): this part now takes it into account."), 0.0
-    from pipeline import LEDGER, call, SONNET  # heavy; real mode only
+    from engine.pipeline import LEDGER, call, SONNET  # heavy; real mode only
     start = len(LEDGER.rows)
     note = call("plan_change_note", SONNET, max_tokens=120, system=skills.VOICE, cache=True, prompt=(
         f"The operator is building a business plan for: {idea}.\nThey just added this note: \"{fb}\".\n"
@@ -357,7 +353,7 @@ def _qa_judge(idea: str, plan_md: str, votes: int = 3) -> list[tuple[str, str]]:
     """Voted boolean checklist over the assembled plan. Runs the atomic checks ×votes and resolves each
     by majority with DEFAULT-TO-FAIL on a tie/uncertain. Returns the FAILED checks as (id, why) so the
     editor can fix exactly those. The script owns the route; the model only answers yes/no + why."""
-    from pipeline import call, extract_json, SONNET
+    from engine.pipeline import call, extract_json, SONNET
     listing = "\n".join(f"{i + 1}. [{cid}] {q}" for i, (cid, q) in enumerate(QA_CHECKS))
     prompt = (
         "You are auditing a finished business plan against a fixed checklist. For EACH numbered check, "
@@ -396,7 +392,7 @@ def qa_plan(idea: str, files: dict, mock: bool = False) -> tuple[dict, dict, flo
         return files, {"notes": [], "fixed": []}, 0.0
     if mock:
         return dict(files), {"notes": list(_MOCK_QA["notes"]), "fixed": []}, 0.0
-    from pipeline import LEDGER, call, extract_json, SONNET  # heavy; real mode only
+    from engine.pipeline import LEDGER, call, extract_json, SONNET  # heavy; real mode only
     start = len(LEDGER.rows)
     paths = list(files.keys())
     plan_md = bundle_markdown(idea, files)
@@ -633,7 +629,7 @@ def nudges(idea: str, section_key: str, draft: str, mock: bool = False) -> tuple
     section = next((s for s in SECTIONS if s["key"] == section_key), None)
     if not section or not (draft or "").strip():
         return list(_MOCK_NUDGES), 0.0
-    from pipeline import LEDGER, call, extract_json, HAIKU
+    from engine.pipeline import LEDGER, call, extract_json, HAIKU
     start = len(LEDGER.rows)
     out = call("nudges", HAIKU, max_tokens=140, system=skills.VOICE, cache=True, prompt=(
         "Suggest 5 SHORT feedback nudges (2-4 words each, lowercase, no punctuation) that this founder "
@@ -667,7 +663,7 @@ def ask_expert(idea: str, files: dict, archetype_key: str, question: str,
                 "answer": f"{_DISCLAIMER}\n\n**{p['name']}** on “{q}”: tighten the offer to one "
                           f"outcome, charge for it up front, and go get one yes this week. (mock)"}, 0.0
 
-    from pipeline import LEDGER, call, SONNET  # heavy; only in real mode
+    from engine.pipeline import LEDGER, call, SONNET  # heavy; only in real mode
     start = len(LEDGER.rows)
     plan = "\n\n".join(f"## {f}\n{c}" for f, c in files.items()) or "(plan still in progress)"
     ans = call(f"expert_{archetype_key}", SONNET, max_tokens=700,

@@ -1,6 +1,6 @@
 """RAG stage 1 — chunking strategy + document/chunk persistence."""
 
-from rag import ingest, store
+from app.rag import ingest, store
 
 
 # ── chunking ─────────────────────────────────────────────────────────────────

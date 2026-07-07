@@ -2,8 +2,7 @@
 
 Set the env BEFORE importing any app module: mock mode (no API spend), a throwaway
 sqlite DB, and a high free-run cap so the metering guardrail doesn't trip tests.
-Paths mirror how the app wires itself (prototype/ + app/ on sys.path, plus repo
-root for `import app.main`).
+The repo root goes on sys.path so `app` and `engine` import as packages.
 """
 
 import os
@@ -19,9 +18,7 @@ os.environ["FILG_DB"] = os.path.join(tempfile.mkdtemp(prefix="filg-test-"), "tes
 os.environ["FILG_FREE_RUNS"] = "1000"     # don't let the free-tier cap make tests flaky
 os.environ["FILG_DAILY_BUDGET"] = "1000"
 
-sys.path.insert(0, str(ROOT / "prototype"))   # engine
-sys.path.insert(0, str(ROOT / "app"))         # bare sibling imports (skill_registry, personas, ...)
-sys.path.insert(0, str(ROOT))                 # `import app.main`
+sys.path.insert(0, str(ROOT))   # `app` + `engine` import as packages from the repo root
 
 import pytest  # noqa: E402
 
@@ -40,7 +37,7 @@ def patch_call(monkeypatch):
     without an API key. Pass a str (same reply for every stage), a dict (stage -> reply), or a
     callable(stage, prompt) -> reply. This is how we exercise extract_json / intake / vet / board
     real paths — the layer the mock self-tests never touched."""
-    import pipeline
+    from engine import pipeline
 
     def setter(responses):
         def fake(stage, model, prompt, *, max_tokens=1500, tools=None, system=None, cache=False):

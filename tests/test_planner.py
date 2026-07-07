@@ -1,6 +1,6 @@
 """Plan builder — prepare(), the decision-tree advance, and board feed-forward."""
 
-import planner
+from app import planner
 
 
 def test_prepare_shapes_researches_and_vets():
@@ -29,7 +29,7 @@ def test_prepare_attaches_assumption_premortem_to_vetting():
 def test_prepare_reuse_skips_reshape_and_carries_claims(monkeypatch):
     # T2: given a prior payload (the refined node's merge skim, same thesis), prepare must NOT re-shape
     # the idea and must carry the fetched claims into research (which re-grades them, no web fan-out).
-    import intake
+    from app import intake
 
     def boom_shape(*a, **k):
         raise AssertionError("intake.shape ran on the reuse path")

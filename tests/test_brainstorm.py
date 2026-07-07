@@ -3,7 +3,7 @@
 Mock paths return canned dicts; the real paths (patch_call) exercise the JSON parsing/assembly
 the mock self-tests never touch — the same regression surface intake/vet had."""
 
-import brainstorm
+from app import brainstorm
 
 RAW = "I'm a baker and think I'm really good. I live in the middle of nowhere, how do I sell what I make?"
 

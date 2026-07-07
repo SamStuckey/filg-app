@@ -1,6 +1,6 @@
 """RAG stage 5 — grounded answer generation with citations."""
 
-from rag import answer, search, store
+from app.rag import answer, search, store
 
 
 def _seed():

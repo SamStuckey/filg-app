@@ -118,12 +118,12 @@ def page_shell(title: str, desc: str, body: str) -> str:
 # signature + return shape) so the app layer is unchanged. `on_phase(PhaseEvent)` is an
 # optional typed run-log stream (the showcase activity feed); on_progress still carries the
 # §LANES§/§LANEDONE§ leaf sentinels. Design: filg-docs/engine_spine_design.md.
-from spine import _label_triangulation, _row_host  # noqa: E402,F401 — engine helpers live in the spine now
+from .spine import _label_triangulation, _row_host  # noqa: E402,F401 — engine helpers live in the spine now
 
 
 def build_evidence(idea: str, headlines: int, on_progress=None, on_phase=None, max_lanes=None,
                    votes=None, sink=None):
-    from spine import run_engine  # lazy: --rebuild needs no API and no pipeline import
+    from .spine import run_engine  # lazy: --rebuild needs no API and no pipeline import
     # Surface the conductor's typed phase log as the live activity feed: when the caller wired a
     # progress stream but no explicit phase sink, forward each phase as a readable "⚙ <phase> · …" line
     # so the runner panel shows the real control flow (grade verdicts, reprompts, stale flags), not just
@@ -139,8 +139,8 @@ def build_evidence(idea: str, headlines: int, on_progress=None, on_phase=None, m
 
 
 def write_prose(idea: str, rows) -> dict:
-    from pipeline import call, extract_json, SONNET
-    import spine, voice_lint
+    from .pipeline import call, extract_json, SONNET
+    from . import spine, voice_lint
     cleared_block = "\n".join(f"- {r['text']}" for r in rows if r["mark"] == "ok") or "- (none cleared)"
     base = (
         "You write a short, punchy 'Cited Offer Teardown' for an operator audience. From the "
@@ -213,8 +213,8 @@ def generate(idea: str, headlines: int = HEADLINES_TO_RESEARCH, mock: bool = Fal
         if max_lanes:
             out["lanes"] = list(MOCK_RESULT["lanes"])[:max_lanes]   # mock paints the capped fan-out too
         return out
-    from pipeline import Claim, LEDGER
-    from spine import regrade_engine
+    from .pipeline import Claim, LEDGER
+    from .spine import regrade_engine
     start = len(LEDGER.rows)
     if prior_claims:
         # Reuse path: re-grade the skim's already-fetched claims at full strength; no plan, no re-fan.
@@ -254,8 +254,8 @@ def generate_full(idea: str, headlines: int = HEADLINES_TO_RESEARCH, mock: bool 
     {artifacts_md, rows, stats, cost}."""
     if mock:
         return {**MOCK_FULL}
-    from pipeline import LEDGER, call, SONNET
-    import spine, voice_lint
+    from .pipeline import LEDGER, call, SONNET
+    from . import spine, voice_lint
     start = len(LEDGER.rows)
     rows, stats, _lanes = build_evidence(idea, headlines)
     cited = "\n".join(f"- {r['text']} [{r['url']}]" for r in rows if r["mark"] == "ok") or "- (none)"
@@ -378,7 +378,7 @@ def main() -> int:
     headlines = HEADLINES_TO_RESEARCH
     if "--headlines" in sys.argv:
         headlines = int(sys.argv[sys.argv.index("--headlines") + 1])
-    from pipeline import LEDGER, DEFAULT_IDEA
+    from .pipeline import LEDGER, DEFAULT_IDEA
     idea = args[0] if args else DEFAULT_IDEA
 
     print(f"\nGenerating teardown (label-don't-chase, re-source top {headlines})…")

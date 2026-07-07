@@ -18,12 +18,8 @@ check runs on Sonnet (rarer, higher stakes). `mock=True` returns canned decision
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))                       # app/  -> skills
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "prototype"))  # prototype/ -> engine
-import skill_registry as skills  # noqa: E402
+from app import skill_registry as skills  # noqa: E402
 
 STAGES = ("brainstorm", "merge", "refined", "plan")
 MODES = ("build", "help", "research", "board")
@@ -160,7 +156,7 @@ def route(prompt: str, stage: str = "plan", mode: str = "build",
     mode = mode if mode in MODES else "build"
     if mock:
         return _mock_route(prompt, stage, mode), 0.0
-    from pipeline import LEDGER, call, extract_json, HAIKU  # heavy; real mode only
+    from engine.pipeline import LEDGER, call, extract_json, HAIKU  # heavy; real mode only
     start = len(LEDGER.rows)
     ctx = f"\n\nWHAT THEY'RE LOOKING AT:\n{context}" if context else ""
     out = call("router", HAIKU, max_tokens=300, system=skills.system("router"), cache=True, prompt=(
@@ -194,7 +190,7 @@ def check_integration(steer: str, thesis: str, plan_md: str = "",
                     "clash": "This changes the core of what you're selling, not just this part.",
                     "skeptic_say": "That's a different business, not a tweak to this one."}, 0.0
         return dict(_MOCK_INTEGRATION), 0.0
-    from pipeline import LEDGER, call, extract_json, SONNET
+    from engine.pipeline import LEDGER, call, extract_json, SONNET
     start = len(LEDGER.rows)
     out = call("integration_check", SONNET, max_tokens=300, system=skills.VOICE, prompt=(
         "A solo operator is building a business plan and just gave a piece of feedback. Decide whether "

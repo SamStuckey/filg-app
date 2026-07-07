@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Source-credibility + verify gate — prototype for the Idea → Offer Engine.
+Source-credibility + verify gate — the engine's source-tier registry + COI heuristics.
 
 The dogfood runs proved the engine's moat (cited research) is fragile: on an
 unfamiliar niche it laundered self-interested vendor-blog stats as fact

@@ -21,14 +21,11 @@ from __future__ import annotations
 
 import os
 import re
-import sys
 
 import numpy as np
 
 _APP = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # …/app on path → `from rag import`
-if _APP not in sys.path:
-    sys.path.insert(0, _APP)
-from rag import embed, store   # noqa: E402
+from . import embed, store   # noqa: E402
 
 DEFAULT_K = 5
 CANDIDATE_K = 20        # how many each retriever contributes to the merge pool before rerank
@@ -146,7 +143,7 @@ def rerank(query: str, hits: list[dict], top_n: int = DEFAULT_K, *,
             h["rerank_score"] = float(_overlap(query, h["text"]))
         return scored[:top_n]
 
-    from pipeline import LEDGER, call, HAIKU, extract_json   # heavy; real mode only
+    from engine.pipeline import LEDGER, call, HAIKU, extract_json   # heavy; real mode only
     _ = LEDGER  # cost is read by the caller via LEDGER.cost_slice around the retrieve/answer block
     listing = "\n\n".join(f"[{i}] {h['text']}" for i, h in enumerate(hits))
     out = call("rag_rerank", HAIKU, max_tokens=30 + 8 * len(hits), prompt=(

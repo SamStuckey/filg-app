@@ -6,11 +6,7 @@ assertion; a new drop should fail HERE, not in the operator's chat. When you add
 add it to the engine's renderers AND add its fact to _SESSION + an assertion below.
 """
 
-import os
-import sys
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "app"))
-import context  # noqa: E402
+from app import context
 
 
 def _session():

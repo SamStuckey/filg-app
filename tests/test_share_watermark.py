@@ -98,11 +98,8 @@ def test_pdf_paywalled_without_key_or_credits(client, monkeypatch):
 
 def test_render_watermark_param():
     # plan_pdf.render accepts watermark=True and still produces a valid PDF.
-    import sys
-    from pathlib import Path
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "app"))
-    import plan_pdf
-    import planner
+    from app import plan_pdf
+    from app import planner
     r = planner.research("I play guitar and want to help people learn", mock=True)
     sess = {"idea": "guitar coaching", "research": r, "files": {}, "history": [], "step": 0,
             "cost": 0.0, "status": "building",

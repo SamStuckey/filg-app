@@ -25,12 +25,9 @@ from __future__ import annotations
 
 import os
 import re
-import sys
 
 _APP = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # …/app on path → `from rag import`
-if _APP not in sys.path:
-    sys.path.insert(0, _APP)
-from rag import embed, search, store   # noqa: E402
+from . import embed, search, store   # noqa: E402
 
 DEFAULT_K = 5
 _CITE_RE = re.compile(r"\[(\d+)\]")
@@ -75,8 +72,8 @@ def answer(query: str, k: int = DEFAULT_K, *, doc_id: str | None = None, collect
         return {"answer": ans, "sources": sources, "cited": _cited(ans, len(sources)),
                 "used_chunks": len(sources)}, 0.0
 
-    import skill_registry as skills   # noqa: PLC0415 — FILG's no-AI-tells VOICE rule
-    from pipeline import LEDGER, call, SONNET   # heavy; real mode only
+    from app import skill_registry as skills   # noqa: PLC0415 — FILG's no-AI-tells VOICE rule
+    from engine.pipeline import LEDGER, call, SONNET   # heavy; real mode only
     start = len(LEDGER.rows)
     block = "\n\n".join(f'[{s["n"]}] (from "{s["title"]}") {s["text"]}' for s in sources)
     ans = call("rag_answer", SONNET, max_tokens=700, system=skills.VOICE, prompt=(

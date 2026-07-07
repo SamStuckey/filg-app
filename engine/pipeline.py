@@ -44,11 +44,11 @@ from urllib.parse import urlparse
 
 import anthropic
 
-import model_catalog
-import provider
-from provider import HAIKU, SONNET, OPUS  # canonical model ids (defined in provider to avoid a cycle)
+from . import model_catalog
+from . import provider
+from .provider import HAIKU, SONNET, OPUS  # canonical model ids (defined in provider to avoid a cycle)
 
-from source_credibility_gate import (
+from .source_credibility_gate import (
     classify_domain,
     TIER_PRIMARY, TIER_RESEARCH, TIER_VENDOR, TIER_FORUM, TIER_UNKNOWN,
 )

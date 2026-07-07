@@ -27,8 +27,8 @@ from urllib.parse import urlparse
 
 from fpdf import FPDF
 
-import planner  # section list + working idea
-import skill_registry as skills  # the standing VOICE rule (no AI tells)
+from app import planner  # section list + working idea
+from app import skill_registry as skills  # the standing VOICE rule (no AI tells)
 
 _FONTS = Path(__file__).resolve().parent / "assets" / "fonts"
 
@@ -65,7 +65,7 @@ def _exec_summary(thesis: str, files: dict, vetting: dict, mock: bool = False) -
                 f"you win customers, how you deliver repeatably, and your first 30 days. The biggest "
                 f"risk and the cheapest first test are named up front, and every market claim is "
                 f"sourced and graded in the evidence appendix."), 0.0
-    from pipeline import LEDGER, call, SONNET  # heavy; real mode only
+    from engine.pipeline import LEDGER, call, SONNET  # heavy; real mode only
     start = len(LEDGER.rows)
     plan = "\n\n".join(f"## {s['title']}\n{files[s['file']]}" for s in planner.SECTIONS
                        if files.get(s["file"]))

@@ -19,7 +19,12 @@ Run:  python3 pipeline_economics.py
 
 from __future__ import annotations
 
-from source_credibility_gate import (
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # repo root -> `engine` package
+
+from engine.source_credibility_gate import (  # noqa: E402
     CLAIMS, evaluate, PASS_HIGH, PASS_OK, FLAG_WEAK, FLAG_SELF_INTERESTED,
 )
 

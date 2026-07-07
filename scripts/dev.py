@@ -28,25 +28,24 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))   # repo root -> `app` + `engine` packages
 os.environ.setdefault("FILG_DB", str(ROOT / ".dev" / "filg.db"))
-sys.path.insert(0, str(ROOT / "app"))         # store.py
-sys.path.insert(0, str(ROOT / "prototype"))   # usage.py
 
 
 def _store():
-    import store
+    from app import store
     store.init()
     return store
 
 
 def _usage():
-    import usage
+    from engine import usage
     return usage
 
 
 def _norm(email):
     """Normalize an email the way the app dedupes the free taste + PDF unlock (alias collapse)."""
-    import auth
+    from app import auth
     return auth.normalize_email(email)
 
 
@@ -68,9 +67,9 @@ def cmd_engine(args):
     The single end-to-end smoke test of the deterministic spine: conductor, research validator, voted
     moat gate, staleness, and the ⚙ activity feed, with no server and no DB. Key comes from the env
     (never the CLI): ANTHROPIC_API_KEY (sk-ant-...) or OPENROUTER_API_KEY (sk-or-...)."""
-    import provider
-    import pipeline
-    import teardown
+    from engine import provider
+    from engine import pipeline
+    from engine import teardown
     key = os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("OPENROUTER_API_KEY")
     if not key:
         print("set ANTHROPIC_API_KEY (sk-ant-...) or OPENROUTER_API_KEY (sk-or-...) in your env first "
@@ -175,8 +174,7 @@ def cmd_models(args):
     """Show the model catalog (ids/prices/rungs/slugs + logical-slot resolution). --check does the
     cached Anthropic Models API availability pass + lists any uncatalogued (newly-shipped) ids."""
     import json
-    sys.path.insert(0, str(ROOT / "prototype"))
-    import model_catalog
+    from engine import model_catalog
     print(json.dumps(model_catalog.snapshot(check_availability=args.check), indent=2))
 
 
@@ -186,7 +184,7 @@ def cmd_account(args):
     no key) gets one welcome plan then a key prompt on every later step."""
     from datetime import datetime, timezone
     store, usage = _store(), _usage()
-    import keys
+    from app import keys
     norm = _norm(args.email)
     raw = (args.email or "").strip().lower()   # keys are stored on the raw-lower email; subs on the alias-norm
     tier = store.account_tier(norm)
@@ -206,7 +204,7 @@ def cmd_account(args):
 def cmd_key(args):
     """Inspect or clear a saved BYOK key for an identity (so you can flip one email between
     free / BYOK without juggling addresses). `key <email>` shows it; `key <email> --clear` removes it."""
-    import keys
+    from app import keys
     raw = (args.email or "").strip().lower()
     if args.clear:
         keys.delete_key(raw)

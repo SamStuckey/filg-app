@@ -21,13 +21,9 @@ the merge may also return up to 3 clarifying questions the operator can answer (
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))                       # app/  -> skills
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "prototype"))  # prototype/ -> engine
-import skill_registry as skills  # noqa: E402
-import teardown  # noqa: E402
+from app import skill_registry as skills  # noqa: E402
+from engine import teardown  # noqa: E402
 
 # How light the merge-stage research skim is: grade the lanes, skip the re-source chase,
 # research only the top lanes, and vote the moat's grade ONCE (the skim is a throwaway first pass;
@@ -76,7 +72,7 @@ def diverge(idea: str, mock: bool = False) -> tuple[dict, float]:
         head = (lines[1] if idea.startswith("THE OPERATOR IS PIVOTING") and len(lines) > 1 else idea)[:56]
         dirs[0]["one_liner"] = f"[mock — heard: \u201c{head}\u201d] " + dirs[0]["one_liner"]
         return {"spread": _MOCK_DIVERGE["spread"], "directions": dirs}, 0.0
-    from pipeline import LEDGER, call, extract_json, SONNET  # heavy; real mode only
+    from engine.pipeline import LEDGER, call, extract_json, SONNET  # heavy; real mode only
     start = len(LEDGER.rows)
     is_pivot = idea.startswith("THE OPERATOR IS PIVOTING")
     pivot = _pivot_text(idea)
@@ -155,7 +151,7 @@ def _honors_pivot(pivot: str, directions: list[dict], set_aside: dict | None = N
     set_aside counts: declining part of the ask OUT LOUD while honoring the rest is honest; only
     silent dropping fails. One cheap vote on the judge slot (writer != critic on any stack above
     the floor). Parse failure fails OPEN — 'could not verify' must not brick every pivot."""
-    from pipeline import call, extract_json, HAIKU
+    from engine.pipeline import call, extract_json, HAIKU
     blob = "\n".join(f"- {d.get('title', '')}: {d.get('one_liner', '')}" for d in directions)
     declared = (f"\nIT ALSO DECLARED, TO THE OPERATOR'S FACE: it set aside “{set_aside['what']}” "
                 f"because {set_aside['why']}" if set_aside else "")
@@ -202,7 +198,7 @@ def _reconcile(idea: str, directions: list[dict], mock: bool = False) -> tuple[d
     Split out so merge() can add the light research on top. Returns (reconciled, cost)."""
     if mock:
         return {k: (list(v) if isinstance(v, list) else v) for k, v in _MOCK_MERGE.items()}, 0.0
-    from pipeline import LEDGER, call, extract_json, SONNET
+    from engine.pipeline import LEDGER, call, extract_json, SONNET
     start = len(LEDGER.rows)
     chosen = "\n".join(
         f"- {d.get('title', '').strip()}: {d.get('one_liner', '').strip()}"

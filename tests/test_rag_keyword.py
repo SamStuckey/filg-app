@@ -1,6 +1,6 @@
 """RAG stage 3 — keyword/BM25 search via SQLite FTS5 (with fallback)."""
 
-from rag import search, store
+from app.rag import search, store
 
 
 def _seed():

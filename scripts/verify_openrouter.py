@@ -14,23 +14,26 @@ to confirm, end to end, that:
 It never prints the key. Spend is a few cents on YOUR OpenRouter credit (that's the BYOK model).
 
 Run:
-    OPENROUTER_API_KEY=sk-or-... python3 prototype/verify_openrouter.py
+    OPENROUTER_API_KEY=sk-or-... python3 scripts/verify_openrouter.py
 """
 
 from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 
-import provider
-import pipeline
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # repo root -> `engine` package
+
+from engine import provider  # noqa: E402
+from engine import pipeline  # noqa: E402
 
 
 def main() -> int:
     key = os.environ.get("OPENROUTER_API_KEY")
     if not key:
         print("OPENROUTER_API_KEY not set. Set it in the environment and re-run:")
-        print("    OPENROUTER_API_KEY=sk-or-... python3 prototype/verify_openrouter.py")
+        print("    OPENROUTER_API_KEY=sk-or-... python3 scripts/verify_openrouter.py")
         return 2
 
     prov = provider.openrouter_provider(key)

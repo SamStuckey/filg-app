@@ -1,6 +1,6 @@
 """Adversarial assumption-checking on the live research path (skeptic.stress_test) + its route."""
 
-import skeptic
+from app import skeptic
 from conftest import wait_status
 
 

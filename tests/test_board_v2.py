@@ -98,7 +98,7 @@ def test_help_pricing_facts_track_the_live_ladder():
     assert "Lead with the FORK" in block
     assert "NOT qualified" in block and "authoritative" in block
     # help is a real SKILL now (app/skills/help), not a hardcoded prompt in main.py
-    import skill_registry
+    from app import skill_registry
     assert skill_registry.exists("help")
 
 

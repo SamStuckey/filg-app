@@ -1,7 +1,7 @@
 """RAG integration — method-corpus grounding + collection scoping + the planner hook."""
 
-import planner
-from rag import grounding, search, store
+from app import planner
+from app.rag import grounding, search, store
 
 
 # ── collection scoping in the store/search layer ─────────────────────────────

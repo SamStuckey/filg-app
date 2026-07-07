@@ -3,7 +3,7 @@
 FILG MVP backend — the thin app that runs the engine for a stranger.
 
 Flow: plain-text idea in → async label-don't-chase run (the engine) → graded artifact out, gated by
-the free-tier cap + daily kill switch (prototype/usage.py). Reuses the engine wholesale; nothing
+the free-tier cap + daily kill switch (engine/usage.py). Reuses the engine wholesale; nothing
 about the pipeline is reimplemented here.
 
 Auth + billing are real (Supabase JWT + Stripe $39/mo), but degrade gracefully: with no Supabase /
@@ -27,7 +27,6 @@ import json
 import contextlib
 import os
 import re
-import sys
 import threading
 import time
 import traceback
@@ -41,27 +40,25 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool  # long engine calls must not block the event loop
 
-# import the engine + guardrail (prototype/) and the app-side skill/persona/board layer (app/).
+# the engine package (research/grading/metering) + the app-side skill/persona/board layer.
 _APP_DIR = Path(__file__).resolve().parent
-sys.path.insert(0, str(_APP_DIR.parent / "prototype"))
-sys.path.insert(0, str(_APP_DIR))  # app/ → bare sibling imports (personas, intake, board, skills)
-import teardown  # noqa: E402
-import usage     # noqa: E402
-import personas  # noqa: E402 — advisor/director registry (shared by ask-an-expert + the board)
-import board     # noqa: E402 — Board of Directors orchestration
-import director_forge  # noqa: E402 — forge a custom Board director from a description (distill→draft→QA)
-import gibberish  # noqa: E402 — pre-LLM "is this even an idea?" gate (saves a run, hands back a roast)
-import intake     # noqa: E402 — shape + vet (the kill-gate); /revet re-runs it after added substance
-import brainstorm # noqa: E402 — diverge/merge: the top of the funnel (1-3 directions → one refined idea)
-import router     # noqa: E402 — the single prompt box (intent routing) + the pivot-fork integration gate
-import plan_pdf   # noqa: E402 — styled PDF generation (synthesis + fpdf2 render)
-import advisor    # noqa: E402 — "chat with your plan" (grounded advisory layer)
-import context    # noqa: E402 — THE CONTEXT ENGINE: every model-facing view of session state
-import skeptic    # noqa: E402 — adversarial assumption-checking on the live research path
-import skill_registry as skills  # noqa: E402 — the skill bodies (help/system blocks)
-import provider   # noqa: E402 — BYOK: per-run LLM provider (FILG's key vs a user's OpenRouter key)
-import pipeline   # noqa: E402 — engine: per-run cost ledger (run_ledger) for safe concurrency
-import model_catalog  # noqa: E402 — model ids/prices/slugs + cached Models API availability
+from engine import teardown  # noqa: E402
+from engine import usage     # noqa: E402
+from app import personas  # noqa: E402 — advisor/director registry (shared by ask-an-expert + the board)
+from app import board     # noqa: E402 — Board of Directors orchestration
+from app import director_forge  # noqa: E402 — forge a custom Board director from a description (distill→draft→QA)
+from app import gibberish  # noqa: E402 — pre-LLM "is this even an idea?" gate (saves a run, hands back a roast)
+from app import intake     # noqa: E402 — shape + vet (the kill-gate); /revet re-runs it after added substance
+from app import brainstorm # noqa: E402 — diverge/merge: the top of the funnel (1-3 directions → one refined idea)
+from app import router     # noqa: E402 — the single prompt box (intent routing) + the pivot-fork integration gate
+from app import plan_pdf   # noqa: E402 — styled PDF generation (synthesis + fpdf2 render)
+from app import advisor    # noqa: E402 — "chat with your plan" (grounded advisory layer)
+from app import context    # noqa: E402 — THE CONTEXT ENGINE: every model-facing view of session state
+from app import skeptic    # noqa: E402 — adversarial assumption-checking on the live research path
+from app import skill_registry as skills  # noqa: E402 — the skill bodies (help/system blocks)
+from engine import provider   # noqa: E402 — BYOK: per-run LLM provider (FILG's key vs a user's OpenRouter key)
+from engine import pipeline   # noqa: E402 — engine: per-run cost ledger (run_ledger) for safe concurrency
+from engine import model_catalog  # noqa: E402 — model ids/prices/slugs + cached Models API availability
 
 from . import auth, billing, keys, planner, render, store, tiers  # noqa: E402 — persistence, auth, billing, keys, tiers, share-page HTML
 # Entitlement/provider/metering decisions live in access.py (the pure service layer). Re-exported here
@@ -509,8 +506,8 @@ def _validate_key(provider_name: str, api_key: str) -> tuple[bool, str]:
     if MOCK:
         return True, "ok (mock)"
     try:
-        import provider as prov_mod
-        import pipeline
+        from engine import provider as prov_mod
+        from engine import pipeline
         with prov_mod.use(_build_provider(provider_name, api_key)):
             out = pipeline.call("key_validate", pipeline.HAIKU, "Reply with: OK", max_tokens=5)
         return (True, "ok") if out else (False, "The key didn't return a response.")

@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-import pipeline
+from engine import pipeline
 from app import main
 
 
