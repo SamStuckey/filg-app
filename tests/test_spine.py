@@ -25,10 +25,10 @@ C_TEXT = _claim("qualitative note", "https://blog.com/c", quant=False)
 
 
 def _install(monkeypatch):
-    monkeypatch.setattr(pipeline, "plan", lambda idea: list(LANES))
+    monkeypatch.setattr(pipeline, "plan", lambda idea, framing=None: list(LANES))
     monkeypatch.setattr(pipeline, "research_lane",
-                        lambda idea, ln: {"L0 market?": [C_OK, C_FLAG1],
-                                          "L1 pricing?": [C_FLAG2, C_TEXT]}[ln])
+                        lambda idea, ln, framing=None: {"L0 market?": [C_OK, C_FLAG1],
+                                                        "L1 pricing?": [C_FLAG2, C_TEXT]}[ln])
 
     def fake_gate(claims, votes=None):
         out = []
@@ -161,7 +161,7 @@ def test_regrade_votes_the_moat_at_full_strength(monkeypatch):
 def test_build_evidence_delegates_to_spine(monkeypatch):
     # The public entry point keeps its signature and returns the conductor's output unchanged.
     _install(monkeypatch)
-    from engine import teardown
+    from app import teardown
     rows, stats, lanes = teardown.build_evidence("an idea", 1)
     assert lanes == LANES and stats == {"checked": 3, "cleared": 2, "flagged": 1}
     assert rows[1]["url"] == "https://primary.gov/p"
@@ -171,7 +171,7 @@ def test_build_evidence_streams_phase_lines(monkeypatch):
     # When a progress stream is wired, the conductor's phase log surfaces as readable ⚙ lines (the
     # showcase activity feed) alongside the leaf sentinels — one per engine phase.
     _install(monkeypatch)
-    from engine import teardown
+    from app import teardown
     seen = []
     teardown.build_evidence("an idea", 1, on_progress=seen.append)
     phase_lines = [s for s in seen if s.startswith("⚙ ")]

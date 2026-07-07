@@ -23,7 +23,7 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 
 # the engine package (research/grading) + the app-side skill/persona layer.
-from engine import teardown  # noqa: E402
+from app import teardown  # noqa: E402 — the research-run layer (graded evidence + offer summary)
 from app import intake  # noqa: E402
 from app import personas  # noqa: E402
 from app import board  # noqa: E402 — Board of Directors review, run inline so its takeaway can steer next draft

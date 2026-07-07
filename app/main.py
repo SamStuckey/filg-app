@@ -42,7 +42,7 @@ from starlette.concurrency import run_in_threadpool  # long engine calls must no
 
 # the engine package (research/grading/metering) + the app-side skill/persona/board layer.
 _APP_DIR = Path(__file__).resolve().parent
-from engine import teardown  # noqa: E402
+from app import teardown  # noqa: E402 — the research-run product layer (offer summary over graded evidence)
 from engine import usage     # noqa: E402
 from app import personas  # noqa: E402 — advisor/director registry (shared by ask-an-expert + the board)
 from app import board     # noqa: E402 — Board of Directors orchestration

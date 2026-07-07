@@ -13,7 +13,7 @@ from __future__ import annotations
 import html
 import markdown
 
-from engine import teardown  # the engine's evidence renderer (graded-row HTML)
+from urllib.parse import urlparse
 
 
 CTA = ('<div class="cta"><a class="btn btn-primary" href="https://filg.ai/#start">'
@@ -80,7 +80,7 @@ def result_page(job: dict) -> str:
     renderer). Backed by SQLite (app/store.py) so the share link survives restarts."""
     res = job["result"]
     stats = res["stats"]
-    ev = f'<h2>The evidence — graded</h2><ul class="ev">{teardown.evidence_li(res["rows"])}</ul>'
+    ev = f'<h2>The evidence — graded</h2><ul class="ev">{evidence_li(res["rows"])}</ul>'
     if job.get("mode") == "full":
         title = "Your FILG offer"
         inner = markdown.markdown(res["artifacts_md"], extensions=["extra"])
@@ -140,3 +140,22 @@ def not_found(message: str) -> str:
     """A bare, styled 404 body for the share routes (result/plan not ready, private, or missing)."""
     return (f"<p style='font-family:sans-serif;max-width:520px;margin:60px auto;padding:0 22px'>"
             f"{html.escape(message)}</p>")
+
+
+# ─── Graded evidence rows (moved from the retired engine/teardown.py) ─────────
+def _host(url: str) -> str:
+    return urlparse(url).netloc.removeprefix("www.") or url
+
+
+def evidence_li(rows) -> str:
+    """The graded rows as share-page <li> items — the ✅/⚠️ receipts with source + note."""
+    out = []
+    for r in rows:
+        ok = r["mark"] == "ok"
+        out.append(
+            f'<li><span class="ico {"ok" if ok else "warn"}">{"✅" if ok else "⚠️"}</span>'
+            f'<span>{html.escape(r["text"])} '
+            f'<span class="badge {"ok" if ok else "warn"}">{"cited" if ok else "vendor, unverified"}</span>'
+            f'<br><span class="note"><a href="{html.escape(r["url"])}">{html.escape(_host(r["url"]))}</a>, '
+            f'{html.escape(r["note"])}</span></span></li>')
+    return "\n".join(out)

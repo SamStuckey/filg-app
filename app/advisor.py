@@ -110,7 +110,7 @@ def research_answer(session: dict, question: str, mode: str = "quick", mock: boo
                      "url": "https://example.com", "note": "mock deeper research"}]
             return {"mode": "deep", "answer": f"Deeper research on “{q[:80]}”: here's what fresh, graded "
                     f"sources say… (mock).", "rows": rows}, 0.0
-        from engine import teardown  # noqa: PLC0415 — heavy engine import, real mode only
+        from app import teardown  # noqa: PLC0415 — heavy engine import, real mode only
         from engine.pipeline import LEDGER, call, SONNET
         start = len(LEDGER.rows)
         rows, _stats, _lanes = teardown.build_evidence(q, headlines=3, on_progress=on_progress)

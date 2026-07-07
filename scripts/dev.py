@@ -69,7 +69,7 @@ def cmd_engine(args):
     (never the CLI): ANTHROPIC_API_KEY (sk-ant-...) or OPENROUTER_API_KEY (sk-or-...)."""
     from engine import provider
     from engine import pipeline
-    from engine import teardown
+    from app import teardown
     key = os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("OPENROUTER_API_KEY")
     if not key:
         print("set ANTHROPIC_API_KEY (sk-ant-...) or OPENROUTER_API_KEY (sk-or-...) in your env first "

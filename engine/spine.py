@@ -13,7 +13,7 @@ Design + the full target (validators on author seams, voted boolean gates on the
 moat + qa, the VOICE copy-lint loop) live in `filg-docs/engine_spine_design.md`.
 
 Migration step 1 (2026-06-30): wrap the already-deterministic engine chain
-(`teardown.build_evidence`) in this conductor with ZERO behavior change — same
+(`evidence.build_evidence`) in this conductor with ZERO behavior change — same
 lanes, same fan-out concurrency, same `§LANES§`/`§LANEDONE§` progress sentinels,
 same graded rows. Validators and voted gates land in later steps. Golden-output
 verified against the legacy chain (tests/test_spine.py).
@@ -287,7 +287,8 @@ def regrade_engine(claim_lanes: list, headlines: int, on_progress=None, on_phase
 
 
 def run_engine(idea: str, headlines: int, on_progress=None, on_phase=None, cost_cap: float | None = -1.0,
-               max_lanes: int | None = None, votes: int | None = None, sink: dict | None = None):
+               max_lanes: int | None = None, votes: int | None = None, sink: dict | None = None,
+               framing=None):
     """Walk the engine phase DAG, delegating to the pipeline at each seam, and return
     `(rows, stats, lanes)` — byte-identical to the legacy build_evidence chain. `on_progress(line)`
     streams the `§LANES§`/`§LANEDONE§` leaf sentinels for the live UI; `on_phase(PhaseEvent)`
@@ -296,8 +297,10 @@ def run_engine(idea: str, headlines: int, on_progress=None, on_phase=None, cost_
     many times the moat's grade is voted (default = pipeline.JUDGE_VOTES = 3): the committed deep build
     keeps the full ×3 (invariant #1), the throwaway first-pass skim can drop to 1. `sink` (optional
     dict) receives the fetched claims as `sink['claims'] = [(Claim, lane), …]` so the merge skim can
-    persist them and the deep build can re-grade them without re-fetching (see `regrade_engine`). Lazy
-    import keeps `--rebuild` API-free and lets tests monkeypatch the pipeline functions."""
+    persist them and the deep build can re-grade them without re-fetching (see `regrade_engine`).
+    `framing` (pipeline.ResearchFraming) is the host app's subject wording for the plan/research
+    prompts — None runs the engine's neutral default. Lazy import keeps `--rebuild` API-free and
+    lets tests monkeypatch the pipeline functions."""
     from .pipeline import JUDGE_VOTES, bound, plan, research_lane  # noqa: PLC0415
     if votes is None:
         votes = JUDGE_VOTES
@@ -305,7 +308,7 @@ def run_engine(idea: str, headlines: int, on_progress=None, on_phase=None, cost_
 
     # P1 · plan (author) — decompose the idea into research lanes
     s = _start()
-    lanes = plan(idea)
+    lanes = plan(idea, framing=framing)
     if max_lanes:
         lanes = lanes[:max_lanes]
     # Announce the fan-out shape so the UI can paint one leaf per research lane up front (grey), then
@@ -319,7 +322,7 @@ def run_engine(idea: str, headlines: int, on_progress=None, on_phase=None, cost_
     s = _start()
     lane_claims_map: dict[int, list] = {}
     with ThreadPoolExecutor(max_workers=RESEARCH_WORKERS) as ex:
-        futs = {ex.submit(bound(lambda ln=ln: research_lane(idea, ln))): li
+        futs = {ex.submit(bound(lambda ln=ln: research_lane(idea, ln, framing=framing))): li
                 for li, ln in enumerate(lanes)}
         for f in as_completed(futs):
             li = futs[f]

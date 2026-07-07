@@ -23,7 +23,7 @@ from __future__ import annotations
 
 
 from app import skill_registry as skills  # noqa: E402
-from engine import teardown  # noqa: E402
+from app import teardown  # noqa: E402 — the research-run layer (light skim at merge)
 
 # How light the merge-stage research skim is: grade the lanes, skip the re-source chase,
 # research only the top lanes, and vote the moat's grade ONCE (the skim is a throwaway first pass;

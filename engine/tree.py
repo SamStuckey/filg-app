@@ -44,7 +44,7 @@ FRESH tree and discards its result (never the spend) if the user pivoted meanwhi
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 # ── ids ───────────────────────────────────────────────────────────────────────
 def new_id() -> str:
