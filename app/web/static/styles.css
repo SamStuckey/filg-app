@@ -143,8 +143,11 @@ body.chatbusy .nbody .ctarow{position:relative;pointer-events:none}
 body.chatbusy .nbody .ctarow .stage-cta{opacity:.5}
 body.chatbusy .nbody .ctarow::after{content:'';position:absolute;left:50%;top:50%;width:18px;height:18px;
   transform:translate(-50%,-50%);border-radius:50%;border:2px solid color-mix(in srgb,var(--accent) 30%,transparent);
-  border-top-color:var(--accent);animation:gspin .8s linear infinite;z-index:3;pointer-events:none;
+  border-top-color:var(--accent);animation:ctaspin .8s linear infinite;z-index:3;pointer-events:none;
   background:var(--card);box-shadow:0 0 0 7px var(--card)}
+/* keep the centering translate through the rotation — a bare rotate keyframe would drop it and the
+   spinner would spin off-center over the CTA row */
+@keyframes ctaspin{from{transform:translate(-50%,-50%) rotate(0)}to{transform:translate(-50%,-50%) rotate(360deg)}}
 
 /* ── Zoomed-in node: the document/step expands IN PLACE inside the node ── */
 #gview.ease{transition:transform .6s cubic-bezier(.22,.8,.3,1)}
