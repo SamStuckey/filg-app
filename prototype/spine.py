@@ -45,6 +45,11 @@ ERROR = "ERROR"   # infra — never proceed
 # above a normal run (~$0.4–1) so only a runaway trips it; None disables the guard.
 RUN_COST_CAP = 2.0
 
+# T3: research fan-out width — how many lanes / re-source chases run concurrently. Bumped 3→5 so a
+# full (up-to-3-lane) deep run and its re-search chase finish in one wave. Watch web_search rate limits
+# if a stack ever fans out wider than this.
+RESEARCH_WORKERS = 5
+
 
 def _run_cost() -> float:
     from pipeline import LEDGER  # noqa: PLC0415
@@ -189,16 +194,50 @@ def run_author(generate, validate, feedback_fn=None, max_fix: int = 3):
 
 
 # ── the conductor ────────────────────────────────────────────────────────────
-def run_engine(idea: str, headlines: int, on_progress=None, on_phase=None, cost_cap: float | None = -1.0,
-               max_lanes: int | None = None):
-    """Walk the engine phase DAG, delegating to the pipeline at each seam, and return
-    `(rows, stats, lanes)` — byte-identical to the legacy build_evidence chain. `on_progress(line)`
-    streams the `§LANES§`/`§LANEDONE§` leaf sentinels for the live UI; `on_phase(PhaseEvent)`
-    streams the typed run log (verdict + cost per phase). `max_lanes` caps the research fan-out
-    (the funnel's light refine-stage skim researches fewer lanes than the deep run). Lazy import
-    keeps `--rebuild` API-free and lets tests monkeypatch the pipeline functions."""
-    from pipeline import (LEDGER, bound, gate_claims, plan, research_lane,  # noqa: PLC0415
-                          research_primary)
+def _grade_and_assemble(quant, claim_lane, headlines, votes, log, _start, _run_cost_fn, cost_cap):
+    """Phases P3 (grade) → P4 (re-search) → P5 (assemble), factored out so both the full run and the
+    reuse path (re-grade already-fetched claims, no web fan-out) share the moat's exact logic. Returns
+    `(rows, stats)`. `log(pid, kind, verdict, detail, start)` and `_start()`/`_run_cost_fn()` are the
+    conductor's cost/logging closures; `cost_cap` guards the optional re-source chase (invariant #2)."""
+    from pipeline import bound, gate_claims, research_primary  # noqa: PLC0415
+
+    # P3 · grade (judge) — the source-credibility gate (the moat). Voted per `votes`.
+    s = _start()
+    verdicts = gate_claims(quant, votes=votes)
+    cleared = [v for v in verdicts if not v.flagged]
+    flagged = [v for v in verdicts if v.flagged]
+    log("grade", JUDGE, PASS, f"{len(cleared)} cleared / {len(flagged)} flagged (×{votes})", s)
+
+    # P4 · re-search (research) — re-source the top flagged claims; label the rest (invariant #2).
+    s = _start()
+    cap = RUN_COST_CAP if cost_cap == -1.0 else cost_cap
+    rescues: list = []
+    if cap is not None and _run_cost_fn() > cap:
+        to_chase, to_label = [], list(flagged)
+        log("re-search", RESEARCH, PAUSE,
+            f"cost cap ${cap:g} hit → labeled {len(flagged)} flagged, skipped re-search", s)
+    else:
+        to_chase, to_label = flagged[:headlines], flagged[headlines:]
+        if to_chase:
+            with ThreadPoolExecutor(max_workers=RESEARCH_WORKERS) as ex:
+                rescues = list(ex.map(bound(lambda v: research_primary(v.claim)), to_chase))
+            for v, r in zip(to_chase, rescues):
+                r.original = v
+        log("re-search", RESEARCH, PASS, f"{len(to_chase)} re-sourced / {len(to_label)} labeled", s)
+
+    # P5 · assemble (deterministic) — graded rows + triangulation labels
+    rows = _assemble_rows(cleared, rescues, to_label, claim_lane)
+    _label_triangulation(rows)
+    n_clean = sum(1 for r in rows if r["mark"] == "ok")
+    stats = {"checked": len(rows), "cleared": n_clean, "flagged": len(rows) - n_clean}
+    log("assemble", DETERMINISTIC, PASS, f"{len(rows)} graded rows", _start())
+    return rows, stats
+
+
+def _log_closures(on_phase, on_progress):
+    """Build the (emit, _start, _cost, log) closures the conductor uses to stream progress + the typed
+    phase log with per-phase cost slices. Shared by the full run and the reuse path."""
+    from pipeline import LEDGER  # noqa: PLC0415
 
     def emit(line: str) -> None:
         if on_progress:
@@ -226,6 +265,44 @@ def run_engine(idea: str, headlines: int, on_progress=None, on_phase=None, cost_
             except Exception:  # noqa: BLE001 — the log must never break the run
                 pass
 
+    return emit, _start, _cost, log
+
+
+def regrade_engine(claim_lanes: list, headlines: int, on_progress=None, on_phase=None,
+                   cost_cap: float | None = -1.0, votes: int | None = None):
+    """The T2 reuse path: re-grade ALREADY-FETCHED claims (from the merge skim) instead of re-running
+    the web fan-out. `claim_lanes` is a list of `(Claim, lane)` pairs carried forward from the skim.
+    Runs the moat's grade at the FULL `votes` (default 3 — the committed deliverable stays ×3-voted,
+    invariant #1) plus the re-source chase, then assembles — but skips P1 (plan) and P2 (the web
+    research fan-out), which is the expensive/slow half that already ran at merge. Returns
+    `(rows, stats)`. Roughly halves the deep build's web wait when the thesis is unchanged."""
+    from pipeline import JUDGE_VOTES  # noqa: PLC0415
+    if votes is None:
+        votes = JUDGE_VOTES
+    emit, _start, _cost, log = _log_closures(on_phase, on_progress)
+    quant = [c for c, _ln in claim_lanes if c.quantitative]
+    claim_lane = {id(c): ln for c, ln in claim_lanes}
+    emit("Re-grading the first-pass evidence at full strength (no re-fetch — same thesis)")
+    return _grade_and_assemble(quant, claim_lane, headlines, votes, log, _start, _run_cost, cost_cap)
+
+
+def run_engine(idea: str, headlines: int, on_progress=None, on_phase=None, cost_cap: float | None = -1.0,
+               max_lanes: int | None = None, votes: int | None = None, sink: dict | None = None):
+    """Walk the engine phase DAG, delegating to the pipeline at each seam, and return
+    `(rows, stats, lanes)` — byte-identical to the legacy build_evidence chain. `on_progress(line)`
+    streams the `§LANES§`/`§LANEDONE§` leaf sentinels for the live UI; `on_phase(PhaseEvent)`
+    streams the typed run log (verdict + cost per phase). `max_lanes` caps the research fan-out
+    (the funnel's light refine-stage skim researches fewer lanes than the deep run). `votes` sets how
+    many times the moat's grade is voted (default = pipeline.JUDGE_VOTES = 3): the committed deep build
+    keeps the full ×3 (invariant #1), the throwaway first-pass skim can drop to 1. `sink` (optional
+    dict) receives the fetched claims as `sink['claims'] = [(Claim, lane), …]` so the merge skim can
+    persist them and the deep build can re-grade them without re-fetching (see `regrade_engine`). Lazy
+    import keeps `--rebuild` API-free and lets tests monkeypatch the pipeline functions."""
+    from pipeline import JUDGE_VOTES, bound, plan, research_lane  # noqa: PLC0415
+    if votes is None:
+        votes = JUDGE_VOTES
+    emit, _start, _cost, log = _log_closures(on_phase, on_progress)
+
     # P1 · plan (author) — decompose the idea into research lanes
     s = _start()
     lanes = plan(idea)
@@ -241,7 +318,7 @@ def run_engine(idea: str, headlines: int, on_progress=None, on_phase=None, cost_
     # contextvars, so without it the fan-out runs on FILG's default key, not the user's BYOK key.
     s = _start()
     lane_claims_map: dict[int, list] = {}
-    with ThreadPoolExecutor(max_workers=3) as ex:
+    with ThreadPoolExecutor(max_workers=RESEARCH_WORKERS) as ex:
         futs = {ex.submit(bound(lambda ln=ln: research_lane(idea, ln))): li
                 for li, ln in enumerate(lanes)}
         for f in as_completed(futs):
@@ -253,39 +330,13 @@ def run_engine(idea: str, headlines: int, on_progress=None, on_phase=None, cost_
     claim_lane = {id(c): lanes[li] for li, lane in enumerate(lane_claims) for c in lane}
     quant = [c for lane in lane_claims for c in lane if c.quantitative]
     log("research", RESEARCH, PASS, f"{len(quant)} quantitative claims", s)
+    # Expose the fetched claims (with their lane) to the caller so the merge skim can PERSIST them and
+    # the deep build can re-grade them without re-fetching (T2 reuse path). Opt-in via `sink`.
+    if sink is not None:
+        sink["claims"] = [(c, claim_lane.get(id(c), "")) for c in quant]
 
-    # P3 · grade (judge) — the source-credibility gate (the moat)
-    s = _start()
-    verdicts = gate_claims(quant)  # one batched judge call for all claims (token win)
-    cleared = [v for v in verdicts if not v.flagged]
-    flagged = [v for v in verdicts if v.flagged]
-    log("grade", JUDGE, PASS, f"{len(cleared)} cleared / {len(flagged)} flagged", s)
-
-    # P4 · re-search (research) — re-source the top flagged claims; label the rest (invariant #2).
-    # Cost guard: if the run already blew past the cap, skip the optional fan-out and label everything.
-    s = _start()
-    cap = RUN_COST_CAP if cost_cap == -1.0 else cost_cap
-    rescues: list = []
-    if cap is not None and _run_cost() > cap:
-        to_chase, to_label = [], list(flagged)
-        log("re-search", RESEARCH, PAUSE,
-            f"cost cap ${cap:g} hit → labeled {len(flagged)} flagged, skipped re-search", s)
-    else:
-        to_chase, to_label = flagged[:headlines], flagged[headlines:]
-        if to_chase:
-            with ThreadPoolExecutor(max_workers=3) as ex:
-                rescues = list(ex.map(bound(lambda v: research_primary(v.claim)), to_chase))
-            for v, r in zip(to_chase, rescues):
-                r.original = v
-        log("re-search", RESEARCH, PASS, f"{len(to_chase)} re-sourced / {len(to_label)} labeled", s)
-
-    # P5 · assemble (deterministic) — graded rows + triangulation labels
-    rows = _assemble_rows(cleared, rescues, to_label, claim_lane)
-    _label_triangulation(rows)
-    n_clean = sum(1 for r in rows if r["mark"] == "ok")
-    stats = {"checked": len(rows), "cleared": n_clean, "flagged": len(rows) - n_clean}
-    log("assemble", DETERMINISTIC, PASS, f"{len(rows)} graded rows", _start())
-
+    # P3-P5 · grade (the moat) → re-search → assemble
+    rows, stats = _grade_and_assemble(quant, claim_lane, headlines, votes, log, _start, _run_cost, cost_cap)
     return rows, stats, lanes
 
 

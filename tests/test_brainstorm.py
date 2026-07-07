@@ -36,14 +36,15 @@ def test_merge_mock_carries_gate_questions_and_a_capped_skim():
 
 def test_merge_skim_requests_the_lane_cap(monkeypatch):
     seen = {}
-    def fake_generate(idea, headlines=3, mock=False, on_progress=None, max_lanes=None):
-        seen["headlines"], seen["max_lanes"] = headlines, max_lanes
+    def fake_generate(idea, headlines=3, mock=False, on_progress=None, max_lanes=None, votes=None):
+        seen["headlines"], seen["max_lanes"], seen["votes"] = headlines, max_lanes, votes
         return {"prose": {"title": "t"}, "rows": [], "stats": {}, "lanes": [], "cost": 0.0}
     monkeypatch.setattr(brainstorm.teardown, "generate", fake_generate)
     d, _ = brainstorm.diverge(RAW, mock=True)
     brainstorm.merge(RAW, d["directions"], mock=True)
     assert seen == {"headlines": brainstorm.MERGE_RESEARCH_HEADLINES,
-                    "max_lanes": brainstorm.MERGE_RESEARCH_LANES}
+                    "max_lanes": brainstorm.MERGE_RESEARCH_LANES,
+                    "votes": brainstorm.MERGE_RESEARCH_VOTES}   # the throwaway skim votes the moat once
 
 
 def test_merge_mock_research_false_skips_the_skim():

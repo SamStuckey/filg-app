@@ -26,6 +26,31 @@ def test_prepare_attaches_assumption_premortem_to_vetting():
     assert pm and all(a["assumption"] and a["status"] in ("holds", "shaky", "breaks") for a in pm)
 
 
+def test_prepare_reuse_skips_reshape_and_carries_claims(monkeypatch):
+    # T2: given a prior payload (the refined node's merge skim, same thesis), prepare must NOT re-shape
+    # the idea and must carry the fetched claims into research (which re-grades them, no web fan-out).
+    import intake
+
+    def boom_shape(*a, **k):
+        raise AssertionError("intake.shape ran on the reuse path")
+
+    monkeypatch.setattr(intake, "shape", boom_shape)
+    seen = {}
+
+    def spy_research(idea, mock=False, on_progress=None, prior_claims=None):
+        seen["idea"], seen["prior_claims"] = idea, prior_claims
+        return {"prose": {"title": "t"}, "rows": [], "stats": {}, "lanes": [], "claims": [], "cost": 0.0}
+
+    monkeypatch.setattr(planner, "research", spy_research)
+    prior = {"thesis": "a sharp reused thesis", "founder_edge": "sales",
+             "claims": [{"text": "x", "source_url": "https://census.gov", "quantitative": True, "lane": "L0"}]}
+    prep = planner.prepare("ignored raw idea", mock=True, prior=prior)
+    assert seen["idea"] == "a sharp reused thesis"          # research runs on the merged thesis, unchanged
+    assert seen["prior_claims"] == prior["claims"]          # the skim's claims are carried forward
+    assert prep["shaped"]["thesis"] == "a sharp reused thesis"
+    assert prep["shaped"]["founder_edge"] == "sales"        # built from the refined node, not a re-shape
+
+
 def test_working_idea_prefers_thesis():
     assert planner._working_idea({"idea": "raw", "shaped": {"thesis": "focused"}}) == "focused"
     assert planner._working_idea({"idea": "raw"}) == "raw"  # back-compat

@@ -188,7 +188,7 @@ def test_build_evidence_emits_leaf_events(monkeypatch):
     lanes = ["lane A?", "lane B?", "lane C?"]
     monkeypatch.setattr(pipeline, "plan", lambda idea: list(lanes))
     monkeypatch.setattr(pipeline, "research_lane", lambda idea, ln: [])
-    monkeypatch.setattr(pipeline, "gate_claims", lambda claims: [])
+    monkeypatch.setattr(pipeline, "gate_claims", lambda claims, votes=None: [])
     monkeypatch.setattr(pipeline, "research_primary", lambda c: None)
     seen = []
     teardown.build_evidence("an idea", 3, on_progress=seen.append)
@@ -196,6 +196,27 @@ def test_build_evidence_emits_leaf_events(monkeypatch):
     done_lines = [s for s in seen if s.startswith("§LANEDONE§")]
     assert len(lanes_lines) == 1 and __import__("json").loads(lanes_lines[0][len("§LANES§"):]) == lanes
     assert sorted(int(s[len("§LANEDONE§"):]) for s in done_lines) == [0, 1, 2]  # one green leaf per lane
+
+
+def test_generate_reuse_path_regrades_without_refetch(monkeypatch):
+    # T2: generate(prior_claims=...) re-grades the carried claims (no build_evidence / web fan-out) and
+    # echoes them back serialized on the result so a downstream node keeps the reusable evidence.
+    import teardown
+    import spine
+
+    def boom(*a, **k):
+        raise AssertionError("build_evidence ran on the reuse path")
+
+    monkeypatch.setattr(teardown, "build_evidence", boom)
+    monkeypatch.setattr(spine, "regrade_engine",
+                        lambda cl, h, on_progress=None, votes=None:
+                        ([{"mark": "ok", "text": "x", "url": "u"}], {"checked": 1, "cleared": 1, "flagged": 0}))
+    monkeypatch.setattr(teardown, "write_prose",
+                        lambda idea, rows: {"title": "t", "idea_line": "i", "offer": "o", "gtm": "g"})
+    prior = [{"text": "x", "source_url": "https://census.gov", "quantitative": True, "lane": "L0"}]
+    res = teardown.generate("thesis", prior_claims=prior)
+    assert res["stats"]["cleared"] == 1 and res["rows"][0]["text"] == "x"
+    assert res["claims"] and res["claims"][0]["lane"] == "L0"   # carried claims round-trip, serialized
 
 
 def test_label_triangulation_marks_single_vs_corroborated():

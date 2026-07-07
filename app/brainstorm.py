@@ -30,9 +30,12 @@ import skill_registry as skills  # noqa: E402
 import teardown  # noqa: E402
 
 # How light the merge-stage research skim is: grade the lanes, skip the re-source chase,
-# and research only the top lanes (the deep run at commit covers the full spread).
+# research only the top lanes, and vote the moat's grade ONCE (the skim is a throwaway first pass;
+# the deep run at commit covers the full spread AND keeps the full ×3 vote — invariant #1 holds on
+# what actually ships).
 MERGE_RESEARCH_HEADLINES = 0
 MERGE_RESEARCH_LANES = 2
+MERGE_RESEARCH_VOTES = 1
 
 _MOCK_DIVERGE = {
     "spread": "loose",
@@ -260,7 +263,7 @@ def merge(idea: str, directions: list[dict], mock: bool = False,
         emit("Running a light first-pass skim")
         res = teardown.generate(reconciled["thesis"], headlines=MERGE_RESEARCH_HEADLINES,
                                 mock=mock, on_progress=on_progress,
-                                max_lanes=MERGE_RESEARCH_LANES)
+                                max_lanes=MERGE_RESEARCH_LANES, votes=MERGE_RESEARCH_VOTES)
         reconciled["research"] = res
         cost = round(cost + res.get("cost", 0.0), 4)
     return reconciled, round(cost, 4)
