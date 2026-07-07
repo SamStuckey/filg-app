@@ -1079,7 +1079,11 @@ function renderGraph(){
       inner=`<div class=nk><span aria-hidden=true>${KICON[n.kind]||'▤'}</span>${esc(n.kind||'part')}${tuck}</div>`+
         `<div class=nt>${esc(nodeLabel(n))}</div>`;
     }
-    if(isFocus)inner+=`<div class=nbody>${nodeBody(n)}</div>`;
+    // mobile: an open node carries its own collapse tab (sticky, top-right) — tap to drop back to
+    // the compact node view with the camera restored (unfocus), so jumping in/out is one thumb-tap
+    if(isFocus)inner+=`<button type=button class=nfold aria-label="Collapse this node" `+
+      `title="Collapse back to the graph" onclick="event.stopPropagation();unfocus()">×</button>`+
+      `<div class=nbody>${nodeBody(n)}</div>`;
     el.innerHTML=inner;
     if(fresh)requestAnimationFrame(()=>requestAnimationFrame(()=>el.classList.remove('enter')));
   });
