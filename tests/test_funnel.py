@@ -191,9 +191,9 @@ def test_commit_reuses_the_skim_claims_when_thesis_unchanged(client, monkeypatch
     seen = {}
     real_prepare = m.planner.prepare
 
-    def spy(idea, mock=False, on_progress=None, prior=None):
+    def spy(idea, mock=False, on_progress=None, prior=None, **kw):
         seen["prior"] = prior
-        return real_prepare(idea, mock=mock, on_progress=on_progress, prior=prior)
+        return real_prepare(idea, mock=mock, on_progress=on_progress, prior=prior, **kw)
 
     monkeypatch.setattr(m.planner, "prepare", spy)
     client.post(f"/api/plan/{sid}/commit", json={})
@@ -220,7 +220,7 @@ def test_commit_from_body_thesis_does_not_reuse(client, monkeypatch):
     seen = {}
     real_prepare = m.planner.prepare
     monkeypatch.setattr(m.planner, "prepare",
-                        lambda idea, mock=False, on_progress=None, prior=None:
+                        lambda idea, mock=False, on_progress=None, prior=None, **kw:
                         seen.update(prior=prior) or real_prepare(idea, mock=mock, on_progress=on_progress))
     client.post(f"/api/plan/{sid}/commit",
                 json={"thesis": "A totally different steered thesis the skim never researched"})
@@ -499,9 +499,9 @@ def test_pivot_from_an_option_builds_off_that_option_with_path_context(client, m
     opt = s["activeNode"]["options"][0]["id"]
     captured = {}
     real = main.brainstorm.diverge
-    def spy(idea, mock=False):
+    def spy(idea, mock=False, **kw):
         captured["in"] = idea
-        return real(idea, mock=mock)
+        return real(idea, mock=mock, **kw)
     monkeypatch.setattr(main.brainstorm, "diverge", spy)
     r = client.post(f"/api/plan/{sid}/rebrainstorm",
                     json={"feedback": "make it sexy, maybe an onlyfans?", "node": opt})

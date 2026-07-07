@@ -56,6 +56,7 @@ def plan_state(s: dict) -> dict:
         "stage": s.get("stage"),                      # funnel position: brainstorm | refined | building | done
         "activeNode": active_node_view(s),           # the active node's funnel payload (option cards / refined idea / fork)
         "chat": s.get("chat") or [], "chatStarters": advisor.STARTERS,
+        "decisions": s.get("decisions") or [],   # standing axioms — the Summary tab's editable index
         "lookups": s.get("lookups") or [],   # persisted chat-lookup claims — the research stack survives a reload
         # the stress-test's durable state (status + result only; live progress rides its poll route)
         "skeptic": ({"status": (s.get("skeptic") or {}).get("status"),
@@ -86,7 +87,10 @@ def tree_view(tree: dict) -> dict:
                        "kind": _kind(n), "title": n.get("title"), "feedback": n.get("feedback"),
                        # a refined node names the options it JOINED — the graph draws it as a merge
                        # of those branches, not a sibling branch off the brainstorm fork
-                       **({"selected": n.get("selected")} if n.get("selected") else {})}
+                       **({"selected": n.get("selected")} if n.get("selected") else {}),
+                       # the standing decisions in force when this node was built (ids) — the
+                       # frontend renders the 🧭 reference note from these
+                       **({"decisions": n.get("decisions")} if n.get("decisions") else {})}
                       for n in nodes.values()],
             "show": bool(nodes)}
 

@@ -709,3 +709,47 @@ ul.concernlist .concern .cdetail{color:var(--muted);font-size:13px;line-height:1
   #gctrls.gmenu-open #gzoomrow button{flex:1 1 0;width:auto;height:40px;font-size:18px}
   #gctrls.gmenu-open.searchopen #gsearch{width:100%;padding:9px 11px;border-width:1px;opacity:1}
 }
+
+/* ── Standing decisions — the Summary tab's color-coded axiom index (app.js decListHtml) ── */
+.dechead{display:flex;justify-content:space-between;align-items:center;gap:8px;margin:2px 0 6px}
+.dechead .eyebrow{margin:0}
+.declist{display:flex;flex-direction:column;gap:5px;margin-bottom:12px}
+.decrow{border:1px solid var(--line);border-left:3px solid var(--muted);border-radius:9px;
+  background:var(--card)}
+.decrow summary{display:flex;align-items:center;gap:8px;cursor:pointer;list-style:none;
+  padding:7px 10px;font-size:13px}
+.decrow summary::-webkit-details-marker{display:none}
+.decrow .dectext{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.decrow[open] .dectext{white-space:normal;overflow:visible}
+.decw{font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);
+  white-space:nowrap;flex:none}
+.decdot{width:9px;height:9px;border-radius:50%;background:var(--muted);flex:none;display:inline-block}
+/* the color code: non-negotiable = red, firm = amber, nice-to-have = green */
+.decrow.non_negotiable,.decoffer.non_negotiable,.decref.non_negotiable{border-left-color:var(--red)}
+.decrow.firm,.decoffer.firm,.decref.firm{border-left-color:var(--yellow)}
+.decrow.nice_to_have,.decoffer.nice_to_have,.decref.nice_to_have{border-left-color:var(--green)}
+.non_negotiable .decdot{background:var(--red)}
+.firm .decdot{background:var(--yellow)}
+.nice_to_have .decdot{background:var(--green)}
+.decbody{padding:0 10px 9px;font-size:12.5px}
+.decwhy{margin:0 0 7px;color:var(--muted)}
+.decacts{display:flex;gap:6px}
+.decinput{width:100%;margin:9px 0 0;padding:8px 10px;border:1px solid var(--line);border-radius:8px;
+  background:var(--bg);color:var(--fg);font:inherit;font-size:13px;box-sizing:border-box}
+.decwpick{display:flex;gap:6px;margin-top:10px;flex-wrap:wrap}
+.decwchip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);
+  border-radius:999px;padding:5px 11px;font-size:12.5px;background:var(--card);color:var(--fg);
+  cursor:pointer}
+.decwchip.on{border-color:currentColor;box-shadow:0 0 0 1px currentColor inset}
+.decwchip.non_negotiable{color:var(--red)}
+.decwchip.firm{color:var(--yellow)}
+.decwchip.nice_to_have{color:var(--green)}
+.decoffer{display:flex;align-items:center;gap:8px;border:1px solid var(--line);
+  border-left:3px solid var(--muted);border-radius:8px;padding:7px 10px;margin-top:7px;font-size:13px}
+.cmsg .cbtns .decwchip{border-radius:999px}
+.decimps{max-height:260px;overflow-y:auto;margin-top:4px}
+.decimp{display:flex;align-items:center;gap:8px;padding:7px 9px;border:1px solid var(--line);
+  border-radius:8px;margin-top:6px;font-size:13px;cursor:pointer}
+.decimp .decw{margin-left:auto}
+.decref{display:flex;align-items:center;gap:7px;border-left:3px solid var(--muted);padding:4px 8px}
+.decref.gone{opacity:.6}

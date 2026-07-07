@@ -61,9 +61,11 @@ _MOCK_MERGE = {
 }
 
 
-def diverge(idea: str, mock: bool = False) -> tuple[dict, float]:
+def diverge(idea: str, mock: bool = False, decisions: str | None = None) -> tuple[dict, float]:
     """Spread a raw prompt into 1-3 distinct, vetted-SHAPE directions. Pure LLM, no web, cheap.
-    Returns (result, cost) where result = {spread, directions:[{title, one_liner, mold, leans_on}]}."""
+    `decisions` (the standing-decisions block) constrains the spread — a direction that violates a
+    non-negotiable must never be offered. Returns (result, cost) where result =
+    {spread, directions:[{title, one_liner, mold, leans_on}]}."""
     if mock:
         dirs = [dict(d) for d in _MOCK_DIVERGE["directions"]]
         # echo what we heard, so mock UX runs SHOW the input plumbing working. A pivot input leads
@@ -78,9 +80,10 @@ def diverge(idea: str, mock: bool = False) -> tuple[dict, float]:
     pivot = _pivot_text(idea)
     feedback = ""
     directions, spread = [], "loose"
+    dec_block = f"\n\n{decisions}" if decisions else ""
     for _ in range(2):   # generate -> validate -> reprompt once (the research-lane seam contract)
         out = call("diverge", SONNET, max_tokens=700, system=skills.system("diverge"), cache=True,
-                   prompt=f"The operator typed this in plain text:\n\n{idea}\n\n"
+                   prompt=f"The operator typed this in plain text:\n\n{idea}{dec_block}\n\n"
                           f"Spread it into directions now.{feedback}")
         data = extract_json(out)
         data = data if isinstance(data, dict) else {}
@@ -193,7 +196,8 @@ def _clean_directions(raw) -> list[dict]:
     return directions
 
 
-def _reconcile(idea: str, directions: list[dict], mock: bool = False) -> tuple[dict, float]:
+def _reconcile(idea: str, directions: list[dict], mock: bool = False,
+               decisions: str | None = None) -> tuple[dict, float]:
     """The LLM reconcile half of merge: chosen directions -> one thesis + kept/dropped cull.
     Split out so merge() can add the light research on top. Returns (reconciled, cost)."""
     if mock:
@@ -204,9 +208,10 @@ def _reconcile(idea: str, directions: list[dict], mock: bool = False) -> tuple[d
         f"- {d.get('title', '').strip()}: {d.get('one_liner', '').strip()}"
         + (f" [mold: {d.get('mold', '').strip()}]" if d.get("mold") else "")
         for d in directions) or "- (none)"
+    dec_block = f"\n\n{decisions}" if decisions else ""
     out = call("merge", SONNET, max_tokens=700, system=skills.system("merge"), cache=True, prompt=(
-        f"OPERATOR'S ORIGINAL INPUT:\n{idea}\n\nTHE DIRECTIONS THEY CHECKED (reconcile these):\n"
-        f"{chosen}\n\nReconcile them now."))
+        f"OPERATOR'S ORIGINAL INPUT:\n{idea}{dec_block}\n\nTHE DIRECTIONS THEY CHECKED (reconcile "
+        f"these):\n{chosen}\n\nReconcile them now."))
     data = extract_json(out)
     data = data if isinstance(data, dict) else {}
     dropped = []
@@ -238,11 +243,13 @@ def _clean_questions(raw) -> list[str]:
 
 
 def merge(idea: str, directions: list[dict], mock: bool = False,
-          on_progress=None, research: bool = True) -> tuple[dict, float]:
+          on_progress=None, research: bool = True,
+          decisions: str | None = None) -> tuple[dict, float]:
     """Converge the checked directions into ONE thesis (adversarial cull) + a LIGHT first-pass
     research skim. `directions` is the list of chosen direction dicts (from diverge). `research=False`
-    skips the skim (pure reconcile, for a fast re-merge). Returns (result, cost) where
-    result = {thesis, founder_edge, mold, kept, dropped, research?}."""
+    skips the skim (pure reconcile, for a fast re-merge). `decisions` (the standing-decisions block)
+    constrains the reconcile — a merged thesis must honor the operator's pinned axioms. Returns
+    (result, cost) where result = {thesis, founder_edge, mold, kept, dropped, research?}."""
     def emit(line: str) -> None:
         if on_progress:
             try:
@@ -251,7 +258,7 @@ def merge(idea: str, directions: list[dict], mock: bool = False,
                 pass
 
     emit("Reconciling the directions you picked")
-    reconciled, c_rec = _reconcile(idea, directions, mock=mock)
+    reconciled, c_rec = _reconcile(idea, directions, mock=mock, decisions=decisions)
     cost = c_rec
     for d in reconciled["dropped"]:
         emit(f"✂ dropped: {d['thread']}")

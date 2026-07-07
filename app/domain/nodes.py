@@ -19,6 +19,9 @@ Attachments (bounded per-node histories):
     board       board reviews + chat convenes; INHERITED so a convene during the funnel
                 still steers drafts and shows in exports after commit
     log         build receipts (registered by the engine itself; stays with its node)
+    decisions   ids of the standing decisions (app/decisions.py) in force when the node was
+                built — stamped at creation so editing/removing a decision can name the steps
+                it shaped; never inherited (each node records its OWN build-time truth)
 
 Future relationships — decisions, blockers, linked sub-trees — are new kinds or new
 attachments declared HERE, not new tree mechanics.
@@ -44,3 +47,8 @@ tree.register_kind("section",
 BOARD = tree.register_attachment(
     "board", max_items=12, inherit=True,
     desc="board reviews + chat convenes — the advisory trail follows the branch")
+
+DECISIONS = tree.register_attachment(
+    "decisions", max_items=30, inherit=False,
+    desc="ids of the standing decisions in force when this node was built — the reference "
+         "trail the revisit-a-decision modal walks (stamped at creation, never inherited)")

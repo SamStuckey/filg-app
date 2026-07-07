@@ -515,12 +515,16 @@ async function _sendPrompt(prompt,box){
   const fromNode=(FOCUS&&FOCUS!==t.active)?FOCUS:null;
   const btn=$('ws-send'); btn.disabled=true;
   btn.innerHTML='<span class="spin sendspin" aria-hidden=true></span> Routing…';   // instant feedback
-  // summary is display-only for routing purposes — the chat under it behaves like build mode
+  // summary is display-only for routing purposes — the chat under it behaves like build mode. The
+  // `summary` flag rides along so a declarative statement typed THERE gets the "pin it as a
+  // standing decision?" offer before any routing happens.
   const body={prompt,mode:(MODE==='summary'?'build':MODE)}; if(fromNode)body.node=fromNode;
+  if(MODE==='summary')body.summary=true;
   const {ok,d}=await api('POST',`/api/plan/${SID}/route`,body);
   btn.disabled=false; sendLabel();
   if(!ok){ if(!box.value)box.value=prompt;   // give the words back — the send failed
     if(gateV2(d))return; chatErr((d&&d.error)||'Could not route that.'); return; }
+  if(d.offer)return decOfferChat(d.offer,prompt);   // summary-tab declarative → offer the pin, ask first
   if(d.fork){ PENDING_FORK=d.fork;
     chatBot(d.fork.clash||'That pulls against the committed idea — pick a path on the graph.');
     focusActive(true); return; }
@@ -1641,6 +1645,7 @@ function nodeBody(n){
   else body=pastBody(n)+`<div class=ctarow><button class="stage-cta secondary" onclick="pivotFromHere('${n.id}')">⑂ Pivot from here</button></div>`;
   body+=cmtsHtml(n.id);   // inline comments on this doc, awaiting the next build verb (backlog #8)
   body+=boardNotesHtml(n.id);   // this step's convenes — the persisted history, visible on the node
+  body+=decNoteHtml(n.id);   // 🧭 the standing decisions this step was built under (the reference)
   const log=NODELOG[n.id];
   // the open state survives re-renders — the WIP poll rebuilds this HTML every tick, and an
   // unremembered <details> flashes open then collapses
@@ -2520,6 +2525,9 @@ function applySmode(){
 }
 function summaryHtml(){
   if(!S)return '<p class=thinking>Start a plan and your idea\'s summary lives here.</p>';
+  return decListHtml()+sumCardHtml();   // the decisions index leads; the in-voice read follows
+}
+function sumCardHtml(){
   const v=S.vetting||{}, sh=S.shaped||{};
   const prose=(S.research&&S.research.prose)
     ||(S.activeNode&&S.activeNode.research&&S.activeNode.research.prose)||{};
@@ -2540,6 +2548,158 @@ function summaryHtml(){
     `${rows}</div>`;
 }
 function renderSummary(){ const el=$('slist'); if(el)el.innerHTML=summaryHtml(); }
+
+// ── STANDING DECISIONS — the operator's axioms, pinned in the Summary tab ──
+// Non-negotiable / firm / nice-to-have (color-coded). Once pinned, the server injects them into
+// every model surface (drafts, spreads, merges, board, advisor) and stamps each node built with
+// the ids in force — so editing/removing one can name the steps it shaped (the revisit modal)
+// and offer a pivot from each. Nothing pins itself: the chat only ever OFFERS.
+const DEC_WEIGHTS=['non_negotiable','firm','nice_to_have'];
+function decWLabel(w){return {non_negotiable:'non-negotiable',firm:'firm',nice_to_have:'nice to have'}[w]||'firm';}
+function decSorted(){const o={non_negotiable:0,firm:1,nice_to_have:2};
+  return [...((S&&S.decisions)||[])].sort((a,b)=>(o[a.weight]??1)-(o[b.weight]??1));}
+let DEC_OPEN=new Set();   // expanded rows survive the poll's re-render (same pattern as HIST_OPEN)
+function decKeep(id,el){ if(el.open)DEC_OPEN.add(id); else DEC_OPEN.delete(id); }
+function decListHtml(){
+  const rows=decSorted().map(d=>
+    `<details class="decrow ${esc(d.weight)}"${DEC_OPEN.has(d.id)?' open':''} ontoggle="decKeep('${d.id}',this)">`+
+    `<summary><span class=decdot title="${decWLabel(d.weight)}"></span><span class=dectext>${esc(d.text)}</span>`+
+    `<span class=decw>${decWLabel(d.weight)}</span></summary>`+
+    `<div class=decbody>${d.why?`<p class=decwhy>${esc(d.why)}</p>`:''}`+
+    `<div class=decacts><button type=button class="ghost small" onclick="decModal('${d.id}')">✎ Edit</button>`+
+    `<button type=button class="ghost small" onclick="decRemove('${d.id}')">✕ Remove</button></div></div></details>`).join('');
+  return `<div class=dechead><span class=eyebrow>Decisions — the things you've settled</span>`+
+    `<button type=button class="ghost small" onclick="decModal()">+ Pin one</button></div>`+
+    (rows?`<div class=declist>${rows}</div>`:
+      `<p class=thinking>Nothing pinned yet. A decision is a constraint that's settled — “no cold-call `+
+      `marketing”, “this stays a non-profit” — and every step from here honors it. Type one below, or `+
+      `click “+ Pin one”.</p>`);
+}
+let DEC_W='firm';
+function decModal(id){
+  const d=id?decSorted().find(x=>x.id===id):null;
+  DEC_W=(d&&d.weight)||'firm';
+  $('modal-body').innerHTML=
+    `<p class=muted>A standing decision shapes every step from here — drafts, pivots, the board, and `+
+    `the advisor all honor it, weighted by how settled it is.</p>`+
+    `<textarea id=dectext class=decinput rows=2 maxlength=240 `+
+    `placeholder='The decision — e.g. "no cold-call marketing"'>${esc((d&&d.text)||'')}</textarea>`+
+    `<input id=decwhy class=decinput maxlength=300 placeholder="A little context — why it's settled (optional)" `+
+    `value="${esc((d&&d.why)||'')}">`+
+    `<div class=decwpick>${DEC_WEIGHTS.map(w=>`<button type=button class="decwchip ${w}${w===DEC_W?' on':''}" `+
+      `data-w="${w}" onclick="decPickW('${w}')"><span class=decdot></span>${decWLabel(w)}</button>`).join('')}</div>`;
+  $('modal-acts').innerHTML=`<button type=button onclick="closeModal()">Cancel</button>`+
+    `<button type=button class=primary onclick="decSave('${id||''}')">${id?'Save':'📌 Pin it'}</button>`;
+  openModal(id?'Edit a decision':'Pin a decision');
+}
+function decPickW(w){ DEC_W=w;
+  document.querySelectorAll('.decwpick .decwchip').forEach(b=>b.classList.toggle('on',b.dataset.w===w)); }
+async function decSave(id){
+  const text=(($('dectext')||{}).value||'').trim(), why=(($('decwhy')||{}).value||'').trim();
+  if(text.length<4){ toast('Give the decision a few real words.','err'); return; }
+  const {ok,d}=id?await api('PATCH',`/api/plan/${SID}/decisions/${id}`,{text,why,weight:DEC_W})
+                 :await api('POST',`/api/plan/${SID}/decisions`,{text,why,weight:DEC_W});
+  if(!ok){ toast((d&&d.error)||'Could not save that.','err'); return; }
+  if(S)S.decisions=d.decisions;
+  closeModal(); renderSummary(); renderGraph();
+  if(id){ chatStatus('🧭 Decision updated: '+text);
+    if((d.impact||[]).length)decRevisitModal(d.impact,decChangeSteer(d.changed)); }
+  else chatStatus('🧭 Pinned ('+decWLabel(DEC_W)+'): '+text);
+}
+async function decRemove(id){
+  const d0=decSorted().find(x=>x.id===id);
+  if(!(await modalConfirm('Remove this decision?',
+    `<p>“${esc((d0&&d0.text)||'')}” stops shaping new steps. Steps already built with it stay as they `+
+    `are — you'll get the chance to revisit them next.</p>`,'Remove it','Keep it')))return;
+  const {ok,d}=await api('DELETE',`/api/plan/${SID}/decisions/${id}`);
+  if(!ok){ toast((d&&d.error)||'Could not remove that.','err'); return; }
+  if(S)S.decisions=d.decisions;
+  renderSummary(); renderGraph();
+  chatStatus('🧭 Decision removed: '+((d.removed&&d.removed.text)||''));
+  if((d.impact||[]).length)decRevisitModal(d.impact,decRemoveSteer(d.removed));
+}
+function decChangeSteer(ch){
+  const b=(ch||{}).before||{}, a=(ch||{}).after||{};
+  return `A standing decision changed: it was "${b.text}" (${decWLabel(b.weight)}); it is now `+
+    `"${a.text}" (${decWLabel(a.weight)}). Rework this step so it honors the new version.`;
+}
+function decRemoveSteer(rm){
+  return `The standing decision "${(rm&&rm.text)||''}" was removed and no longer applies. `+
+    `Rethink this step without that constraint.`;
+}
+// The revisit modal: the steps a changed/removed decision shaped, checkable — each picked one gets
+// a fresh spread of directions pivoted from it (the same pivot verb as ⑂ Pivot from here).
+let DEC_STEER='';
+function decRevisitModal(impact,steer){
+  DEC_STEER=steer;
+  const rows=impact.map(n=>
+    `<label class=decimp><input type=checkbox value="${n.id}"${n.onPath?' checked':''}>`+
+    `<span>${esc(n.label||n.kind||'a step')}</span>`+
+    `<span class=decw>${n.onPath?'on your path':'side branch'}</span></label>`).join('');
+  $('modal-body').innerHTML=
+    `<p class=muted>That decision shaped these steps. Want to revisit any based on the change? Each `+
+    `one you keep checked gets a fresh spread of directions pivoted from it — nothing is deleted.</p>`+
+    `<div class=decimps>${rows}</div>`;
+  $('modal-acts').innerHTML=`<button type=button onclick="closeModal()">Leave them as they are</button>`+
+    `<button type=button class=primary onclick="decPivotSelected()">⑂ Pivot the checked steps</button>`;
+  openModal('Revisit these steps?');
+}
+async function decPivotSelected(){
+  const ids=[...document.querySelectorAll('.decimps input:checked')].map(i=>i.value);
+  closeModal();
+  if(!ids.length)return;
+  for(const id of ids)await pivotSpread(id,DEC_STEER);   // sequential — each pivot lands before the next fires
+  if(ids.length>1)chatStatus('⑂ Pivoted from '+ids.length+' steps — fresh directions on each.');
+}
+// The in-chat offer (summary tab): a declarative message reads like an axiom → ask, never auto-pin.
+function decOfferChat(o,prompt){
+  chatPush('bot','Pin as a standing decision? '+o.text);
+  const m=chatSay('bot','That reads like a standing decision — pin it and every step from here honors it. How settled is it?'+
+    `<div class="decoffer ${esc(o.weight)}"><span class=decdot></span>${esc(o.text)}</div>`+
+    `<div class=cbtns>`+DEC_WEIGHTS.map(w=>`<button type=button class="decwchip ${w}${w===o.weight?' on':''}" `+
+      `data-w="${w}"><span class=decdot></span>${decWLabel(w)}</button>`).join('')+
+    `<button type=button class=nah>No — just feedback</button></div>`);
+  if(!m)return;
+  m.querySelectorAll('.decwchip').forEach(b=>b.onclick=async()=>{
+    m.classList.add('asked');
+    const {ok,d}=await api('POST',`/api/plan/${SID}/decisions`,{text:o.text,why:o.why||'',weight:b.dataset.w});
+    if(!ok){ if(gateV2(d))return; chatErr((d&&d.error)||'Could not pin that.'); return; }
+    if(S)S.decisions=d.decisions;
+    chatStatus('🧭 Pinned ('+decWLabel(b.dataset.w)+'): '+o.text);
+    if(SMODE)renderSummary();
+  });
+  m.querySelector('.nah').onclick=async()=>{
+    m.classList.add('asked');
+    chatStatus('Okay — treating it as regular feedback.');
+    await routeDispatch(prompt||o.text);
+  };
+}
+// Route + dispatch a prompt that skipped normal routing (a declined pin offer re-enters here).
+async function routeDispatch(prompt){
+  const {ok,d}=await api('POST',`/api/plan/${SID}/route`,{prompt,mode:'build'});
+  if(!ok){ if(gateV2(d))return; chatErr((d&&d.error)||'Could not route that.'); return; }
+  if(d.fork){ PENDING_FORK=d.fork;
+    chatBot(d.fork.clash||'That pulls against the committed idea — pick a path on the graph.');
+    focusActive(true); return; }
+  const dec=d.decision||{};
+  if(SMODE&&['steer','next','commit','diverge','pick','restart_keep','restart_hard'].includes(dec.intent))
+    exitSummary();
+  chatBot(dec.say||'On it.');
+  await dispatch(dec,null,prompt);
+}
+// The 🧭 reference on a node: which standing decisions were in force when this step was built.
+// Ids resolve against the CURRENT list — an edited decision shows its current text, a removed one
+// stays visible as history (the stamp is the record, not a live pointer).
+function decNoteHtml(id){
+  const {m}=nodesOf(S); const n=m[id]; const ids=(n&&n.decisions)||[];
+  if(!ids.length)return '';
+  const by={}; ((S&&S.decisions)||[]).forEach(d=>by[d.id]=d);
+  const rows=ids.map(i=>{const d=by[i];
+    return d?`<div class="bdrow decref ${esc(d.weight)}"><span class=decdot></span>${esc(d.text)}</div>`
+            :`<div class="bdrow decref gone"><span class=decdot></span>(a decision since removed)</div>`;}).join('');
+  return `<details class="nhist${HIST_OPEN.has(id+':d')?' open':''}" ontoggle="histKeep('${id}:d',this)">`+
+    `<summary>🧭 built under ${ids.length} standing decision${ids.length!==1?'s':''}</summary>${rows}</details>`;
+}
 
 // ═══ THE ACCOUNT SURFACE — projects / files / API key / account, ported from v1 ═══
 // A full overlay over the workspace with real routes (/v2/account/<tab>) so refresh, bookmarks, and

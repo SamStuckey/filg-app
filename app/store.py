@@ -120,7 +120,7 @@ def init() -> None:
                 # NOT EXISTS) — add any missing ones, ignore if already present.
                 have = {r["name"] for r in con.execute("PRAGMA table_info(plan_sessions)")}
                 for col in ("shaped", "vetting", "directors", "board", "tree", "chat", "progress",
-                            "custom_directors", "qa", "skeptic", "stage", "lookups"):
+                            "custom_directors", "qa", "skeptic", "stage", "lookups", "decisions"):
                     if col not in have:
                         con.execute(f"ALTER TABLE plan_sessions ADD COLUMN {col} TEXT")
                 if "shared" not in have:
@@ -416,7 +416,7 @@ def account_by_stripe(*, customer_id: str | None = None,
 # ── Plan-builder sessions ────────────────────────────────────────────────────
 _PLAN_JSON = ("research", "files", "proposal", "history",  # columns stored as JSON
               "shaped", "vetting", "directors", "board", "tree", "chat", "progress",
-              "custom_directors", "qa", "skeptic", "lookups")
+              "custom_directors", "qa", "skeptic", "lookups", "decisions")
 
 
 def plan_create(session_id: str, user: str, idea: str, directors: list | None = None) -> None:
