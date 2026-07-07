@@ -188,7 +188,7 @@ def test_build_evidence_emits_leaf_events(monkeypatch):
     lanes = ["lane A?", "lane B?", "lane C?"]
     monkeypatch.setattr(pipeline, "plan", lambda idea: list(lanes))
     monkeypatch.setattr(pipeline, "research_lane", lambda idea, ln: [])
-    monkeypatch.setattr(pipeline, "gate_claims", lambda claims: [])
+    monkeypatch.setattr(pipeline, "gate_claims", lambda claims, votes=None: [])
     monkeypatch.setattr(pipeline, "research_primary", lambda c: None)
     seen = []
     teardown.build_evidence("an idea", 3, on_progress=seen.append)

@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 # reuse the engine (prototype/ is a sibling of app/) and the app-side skill/persona layer (app/).
@@ -201,16 +202,26 @@ def prepare(idea: str, mock: bool = False, on_progress=None) -> dict:
         emit((f"✓ cited {_host(r.get('url',''))}" if r.get("mark") == "ok"
               else f"⚠ flagged {_host(r.get('url',''))} (vendor)"))
     emit(f"Graded {len(rows)} source" + ("" if len(rows) == 1 else "s"))
-    vetting, c_vet = intake.vet(idea, shaped, research_data, mock=mock)
+    # vet, premortem, and first_proposal all read the shaped idea + graded research and NONE reads
+    # another's output, so run them concurrently instead of serially (3 model round-trips → 1
+    # wall-clock). pipeline.bound() carries the provider/stack/ledger into each worker thread
+    # (threads don't inherit contextvars); progress lines are emitted after, in the original order.
+    from pipeline import bound  # noqa: PLC0415
+    emit("Vetting the idea, pressure-testing assumptions, and drafting your first offer")
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        f_vet = ex.submit(bound(lambda: intake.vet(idea, shaped, research_data, mock=mock)))
+        f_pm = ex.submit(bound(lambda: intake.premortem(idea, shaped, research_data, mock=mock)))
+        f_prop = ex.submit(bound(lambda: first_proposal(
+            thesis, research_data, founder=shaped.get("founder_edge"), mock=mock)))
+        vetting, c_vet = f_vet.result()
+        pm, c_pm = f_pm.result()
+        proposal, c_prop = f_prop.result()
     emit(f"Verdict: {vetting.get('verdict', 'pursue')}")
     emit("Pressure-testing the assumptions your plan rests on")
-    pm, c_pm = intake.premortem(idea, shaped, research_data, mock=mock)
     vetting["premortem"] = pm                          # rides along in the persisted vetting JSON
     for a in pm:
         emit(f"• assumption [{a['status']}]: {a['assumption']}")
     emit("Drafting your first offer")
-    proposal, c_prop = first_proposal(thesis, research_data, founder=shaped.get("founder_edge"),
-                                      mock=mock)
     return {"shaped": shaped, "research": research_data, "vetting": vetting, "proposal": proposal,
             "research_cost": research_data["cost"],
             "cost": round(research_data["cost"] + c_shape + c_vet + c_pm + c_prop, 4)}

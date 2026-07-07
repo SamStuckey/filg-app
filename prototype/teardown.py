@@ -121,7 +121,7 @@ def page_shell(title: str, desc: str, body: str) -> str:
 from spine import _label_triangulation, _row_host  # noqa: E402,F401 — engine helpers live in the spine now
 
 
-def build_evidence(idea: str, headlines: int, on_progress=None, on_phase=None, max_lanes=None):
+def build_evidence(idea: str, headlines: int, on_progress=None, on_phase=None, max_lanes=None, votes=None):
     from spine import run_engine  # lazy: --rebuild needs no API and no pipeline import
     # Surface the conductor's typed phase log as the live activity feed: when the caller wired a
     # progress stream but no explicit phase sink, forward each phase as a readable "⚙ <phase> · …" line
@@ -133,7 +133,8 @@ def build_evidence(idea: str, headlines: int, on_progress=None, on_phase=None, m
             if ev.cost:
                 line += f" · ${ev.cost:.3f}"
             on_progress(line)
-    return run_engine(idea, headlines, on_progress=on_progress, on_phase=on_phase, max_lanes=max_lanes)
+    return run_engine(idea, headlines, on_progress=on_progress, on_phase=on_phase,
+                      max_lanes=max_lanes, votes=votes)
 
 
 def write_prose(idea: str, rows) -> dict:
@@ -193,11 +194,12 @@ MOCK_RESULT = {
 
 
 def generate(idea: str, headlines: int = HEADLINES_TO_RESEARCH, mock: bool = False,
-             on_progress=None, max_lanes: int | None = None) -> dict:
+             on_progress=None, max_lanes: int | None = None, votes: int | None = None) -> dict:
     """Run one teardown and return {prose, rows, stats, cost}. `mock=True` returns canned data with
     no API calls, for local/frontend dev and for testing the metering without spend. `on_progress(line)`
     streams milestones (incl. `§LANES§`/`§LANEDONE§` leaf events) so the UI can paint the fan-out live.
-    `max_lanes` caps the research fan-out (the funnel's light skim vs the full deep run)."""
+    `max_lanes` caps the research fan-out (the funnel's light skim vs the full deep run). `votes` scales
+    the moat's grade vote count (1 on the throwaway skim, default 3 on the committed build)."""
     if mock:
         out = {**MOCK_RESULT, "prose": dict(MOCK_RESULT["prose"])}
         if max_lanes:
@@ -205,7 +207,8 @@ def generate(idea: str, headlines: int = HEADLINES_TO_RESEARCH, mock: bool = Fal
         return out
     from pipeline import LEDGER
     start = len(LEDGER.rows)
-    rows, stats, lanes = build_evidence(idea, headlines, on_progress=on_progress, max_lanes=max_lanes)
+    rows, stats, lanes = build_evidence(idea, headlines, on_progress=on_progress,
+                                        max_lanes=max_lanes, votes=votes)
     prose = write_prose(idea, rows)
     return {"prose": prose, "rows": rows, "stats": stats, "lanes": lanes,
             "cost": round(LEDGER.cost_slice(start), 4)}

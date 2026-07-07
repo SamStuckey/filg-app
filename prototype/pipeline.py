@@ -379,7 +379,12 @@ def judge_batch_voted(claims: list["Claim"], votes: int = JUDGE_VOTES) -> list[s
         return []
     if votes <= 1:
         return judge_batch(claims)
-    rounds = [judge_batch(claims) for _ in range(votes)]
+    # The votes are independent full-set judge calls — run them concurrently instead of serially.
+    # bound() re-binds the provider/stack/ledger inside each worker (threads don't inherit contextvars),
+    # so a BYOK run still votes on the user's key; ex.map preserves order (the tally is order-independent
+    # anyway). Result is identical to the serial [judge_batch(claims) for _ in range(votes)], ~votes× faster.
+    with ThreadPoolExecutor(max_workers=votes) as ex:
+        rounds = list(ex.map(bound(lambda _i: judge_batch(claims)), range(votes)))
     out: list[str] = []
     for i in range(len(claims)):
         tally: dict[str, int] = {}

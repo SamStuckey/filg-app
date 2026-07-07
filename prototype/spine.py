@@ -190,15 +190,19 @@ def run_author(generate, validate, feedback_fn=None, max_fix: int = 3):
 
 # ── the conductor ────────────────────────────────────────────────────────────
 def run_engine(idea: str, headlines: int, on_progress=None, on_phase=None, cost_cap: float | None = -1.0,
-               max_lanes: int | None = None):
+               max_lanes: int | None = None, votes: int | None = None):
     """Walk the engine phase DAG, delegating to the pipeline at each seam, and return
     `(rows, stats, lanes)` — byte-identical to the legacy build_evidence chain. `on_progress(line)`
     streams the `§LANES§`/`§LANEDONE§` leaf sentinels for the live UI; `on_phase(PhaseEvent)`
     streams the typed run log (verdict + cost per phase). `max_lanes` caps the research fan-out
-    (the funnel's light refine-stage skim researches fewer lanes than the deep run). Lazy import
+    (the funnel's light refine-stage skim researches fewer lanes than the deep run). `votes` sets how
+    many times the moat's grade is voted (default = pipeline.JUDGE_VOTES = 3): the committed deep build
+    keeps the full ×3 (invariant #1), the throwaway first-pass skim can drop to 1. Lazy import
     keeps `--rebuild` API-free and lets tests monkeypatch the pipeline functions."""
-    from pipeline import (LEDGER, bound, gate_claims, plan, research_lane,  # noqa: PLC0415
-                          research_primary)
+    from pipeline import (JUDGE_VOTES, LEDGER, bound, gate_claims, plan,  # noqa: PLC0415
+                          research_lane, research_primary)
+    if votes is None:
+        votes = JUDGE_VOTES
 
     def emit(line: str) -> None:
         if on_progress:
@@ -256,10 +260,10 @@ def run_engine(idea: str, headlines: int, on_progress=None, on_phase=None, cost_
 
     # P3 · grade (judge) — the source-credibility gate (the moat)
     s = _start()
-    verdicts = gate_claims(quant)  # one batched judge call for all claims (token win)
+    verdicts = gate_claims(quant, votes=votes)  # one batched judge call per vote (token win); votes-scaled
     cleared = [v for v in verdicts if not v.flagged]
     flagged = [v for v in verdicts if v.flagged]
-    log("grade", JUDGE, PASS, f"{len(cleared)} cleared / {len(flagged)} flagged", s)
+    log("grade", JUDGE, PASS, f"{len(cleared)} cleared / {len(flagged)} flagged (×{votes})", s)
 
     # P4 · re-search (research) — re-source the top flagged claims; label the rest (invariant #2).
     # Cost guard: if the run already blew past the cap, skip the optional fan-out and label everything.

@@ -30,7 +30,7 @@ def _install(monkeypatch):
                         lambda idea, ln: {"L0 market?": [C_OK, C_FLAG1],
                                           "L1 pricing?": [C_FLAG2, C_TEXT]}[ln])
 
-    def fake_gate(claims):
+    def fake_gate(claims, votes=None):
         out = []
         for c in claims:
             flag = c.text.startswith("FLAG")
@@ -97,6 +97,23 @@ def test_run_engine_phase_log(monkeypatch):
     assert all(e.verdict == spine.PASS for e in events)
     kinds = {e.id: e.kind for e in events}
     assert kinds["grade"] == spine.JUDGE and kinds["assemble"] == spine.DETERMINISTIC
+
+
+def test_votes_thread_through_to_the_gate(monkeypatch):
+    # The moat's vote count is stage-scaled: run_engine passes `votes` down to gate_claims (default 3
+    # when unset — the committed deep build; 1 on the throwaway skim). Guard the plumbing.
+    _install(monkeypatch)
+    seen = {}
+
+    def spy_gate(claims, votes=None):
+        seen["votes"] = votes
+        return [Verdict(c, "PRIMARY", "TRUST", False, "r") for c in claims]
+
+    monkeypatch.setattr(pipeline, "gate_claims", spy_gate)
+    spine.run_engine("an idea", headlines=1)
+    assert seen["votes"] == pipeline.JUDGE_VOTES        # default: full ×3 on the committed build
+    spine.run_engine("an idea", headlines=1, votes=1)
+    assert seen["votes"] == 1                           # skim: one vote
 
 
 def test_build_evidence_delegates_to_spine(monkeypatch):
