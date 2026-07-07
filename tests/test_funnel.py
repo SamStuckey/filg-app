@@ -524,7 +524,9 @@ def test_root_shell_and_assets_serve(client):
     # debounce, drawer width-resize/collapse, and the landing help chat
     for needle in ("gateProceed", "foldGateAnswers", "toggleGateQ", "setGateAns", "atRefinedGate",
                    "modalConfirm", "openCmtPop", "setChatBusy", "CHAT_BUSY",
-                   "initDrawerResize", "setDrawerWidth", "landingHelpSend", "landingHelpExit"):
+                   "initDrawerResize", "setDrawerWidth", "landingHelpSend", "landingHelpExit",
+                   # alertable concerns: unified pre-advance gate for questions + board objections
+                   "advanceGuard", "stepConcerns", "boardSeverity", "CONCERN_ACK", "boardTopSeverity"):
         assert needle in js, needle
     # the drawer resize grips render in the shell; the landing help chat has its reveal class
     assert page.text.count("class=hgrip") >= 3 and "data-drawer=left" in page.text

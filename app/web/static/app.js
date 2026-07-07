@@ -255,7 +255,7 @@ function closeModal(){ $('v2modal').hidden=true; $('v2modal').classList.remove('
 function modalConfirm(title,bodyHtml,goLabel,cancelLabel){return new Promise(res=>{
   let done=false;
   const finish=v=>{ if(done)return; done=true; MODAL_ONCLOSE=null; closeModal(); res(v); };
-  $('modal-body').innerHTML=`<p class=muted>${bodyHtml}</p>`;
+  $('modal-body').innerHTML=`<div class=mcbody>${bodyHtml}</div>`;   // a div (not <p>) so lists nest legally
   $('modal-acts').innerHTML=
     `<button type=button class=mc-cancel>${esc(cancelLabel||'Cancel')}</button>`+
     `<button type=button class="primary mc-go">${esc(goLabel||'OK')}</button>`;
@@ -551,7 +551,7 @@ async function dispatch(dec,fromNode,prompt){
     case 'commit':
       if(atRefinedGate())return gateProceed();   // the gate questions guard the roll-forward
       if(dec.confirm&&!(await chatConfirm(BIG_STEP_ASK,"Let's go")))return;
-      return commit(null,fromNode);
+      return advanceGuard(()=>commit(null,fromNode));   // + any serious board objection on this step
     case 'next': {   // the funnel's ONE next step — what it means depends on where you are
       if(WIP_LABEL||S.status==='researching'){ chatBot('Already on it — the next part is being written now.'); return; }
       if(S.done||S.stage==='done'){ chatBot("The plan's complete — pivot from any node to take it somewhere new."); return; }
@@ -775,28 +775,74 @@ function foldGateAnswers(id){
 }
 function atRefinedGate(){ const a=(S&&S.activeNode)||{};
   return a.kind==='refined' && ((a.questions||[]).length>0); }
-// The refined-card roll-forward, guarded by the gate. Unfolded answers → offer to fold them first;
-// unanswered questions → a confirm modal (the speed bump). Both the "I'm sold" button and a chat
-// "next"/"commit" at the refined stage funnel through here.
+
+// ── ALERTABLE CONCERNS (systemic, 2026-07-07) ────────────────────────────────
+// A "concern" is a surfaced-but-unresolved issue on the CURRENT step: an unanswered gate question,
+// or a serious board objection (the standing skeptic's dissent / non-starter — its whole job is to
+// object, so we grade the verdict). We NEVER block advancing — we surface every concern once, in a
+// confirm modal, before the roll-forward. Acknowledging ("Advance anyway") records the concern so we
+// don't re-nag: old objections that ride forward via board inheritance stay silent (the user already
+// decided). This unifies the gate-question speed bump with board objections under one gate.
+let CONCERN_ACK=new Set();   // concern keys the user chose to advance past — never re-alert
+function boardNotesOf(nid){ const {t}=nodesOf(S);
+  return (nid===t.active)?((S&&S.board)||[]):(((NODECACHE[nid]||{}).board)||[]); }
+// the skeptic verdict grade → severity. 'agree' = no objection; 'concern' = a fixable weakness (amber);
+// 'dissent'/'non-starter' = a serious objection (red).
+function boardSeverity(e){
+  const sv=((e&&e.skeptic&&e.skeptic.verdict)||'').toLowerCase();
+  if(sv==='dissent'||sv==='non-starter')return 'high';
+  if(sv==='concern')return 'med';
+  return null;
+}
+function boardConcernText(e){ return (e.skeptic&&(e.skeptic.take||e.skeptic.rationale))
+  ||e.conflicts||e.verdict||'The board raised an objection.'; }
+// the max board severity on a node's notes — drives the ⚠️ badge on the collapsed board line
+function boardTopSeverity(nid){ let s=null;
+  boardNotesOf(nid).forEach(e=>{ const sev=boardSeverity(e); if(sev==='high')s='high'; else if(sev==='med'&&s!=='high')s='med'; });
+  return s; }
+// every unresolved, unacknowledged concern on the active step
+function stepConcerns(){
+  const a=(S&&S.activeNode)||{}, nid=a.id||'', out=[];
+  if(a.kind==='refined'){ const ans=GATEANS[nid]||{};   // unanswered gate questions
+    (a.questions||[]).forEach((q,i)=>{ const key='q:'+nid+':'+i;
+      if(!((ans[i]||'')+'').trim()&&!CONCERN_ACK.has(key))
+        out.push({key,kind:'question',sev:'med',title:'Unanswered question',detail:q}); }); }
+  boardNotesOf(nid).forEach(e=>{ const sev=boardSeverity(e); if(!sev)return;   // serious board objections
+    const detail=boardConcernText(e), key='board:'+detail.slice(0,90);
+    if(!CONCERN_ACK.has(key))out.push({key,kind:'board',sev,
+      title:(e.skeptic&&(e.skeptic.name||'The Skeptic'))||'Board objection',detail}); });
+  return out;
+}
+// The one gate before any roll-forward: surface the step's concerns, let the user advance anyway or
+// go back. `proceed` is the actual advance (commit / next / …). Returns proceed()'s result, or nothing
+// if the user backed out.
+async function advanceGuard(proceed){
+  const cs=stepConcerns();
+  if(!cs.length)return proceed();
+  const items=cs.map(c=>
+    `<li class="concern ${c.sev}"><span class=cico aria-hidden=true>${c.kind==='question'?'❓':'⚠️'}</span>`+
+    `<div><b>${esc(c.title)}</b><div class=cdetail>${esc(c.detail)}</div></div></li>`).join('');
+  const hasQ=cs.some(c=>c.kind==='question');
+  const go=await modalConfirm('Before you advance',
+    `<p class=cintro>There ${cs.length>1?'are':'is'} <b>${cs.length}</b> unresolved concern${cs.length>1?'s':''} `+
+    `on this step. You can still advance — this is just so you've seen ${cs.length>1?'them':'it'}.</p>`+
+    `<ul class=concernlist>${items}</ul>`,
+    'Advance anyway', hasQ?'Let me address these':'Go back');
+  if(go){ cs.forEach(c=>CONCERN_ACK.add(c.key)); return proceed(); }   // acknowledged → never re-nag
+  if(hasQ)openAllGateQ((S&&S.activeNode&&S.activeNode.id)||'');        // send them to the questions
+  return;
+}
+// The refined-card roll-forward: fold any typed-but-unsubmitted answers first (a convenience), then
+// the unified concern gate (unanswered questions + board objections) guards the deep build.
 async function gateProceed(){
-  const a=(S&&S.activeNode)||{}, nid=a.id||'', qs=a.questions||[];
-  const answered=gateAnswered(nid);
-  if(qs.length){
-    if(answered){
-      const fold=await modalConfirm('Fold in your answers?',
-        `You've written ${answered} answer${answered>1?'s':''} to the gate question${answered>1?'s':''} but `+
-        `haven't folded ${answered>1?'them':'it'} in yet. Fold ${answered>1?'them':'it'} into the idea first so `+
-        `the deep build uses your input?`,'Fold them in','Build as-is');
-      if(fold)return foldGateAnswers(nid);
-    } else {
-      const go=await modalConfirm('Skip the questions?',
-        `There ${qs.length>1?'are':'is'} ${qs.length} clarifying question${qs.length>1?'s':''} that would sharpen `+
-        `this idea before the deep research pass. Build without answering ${qs.length>1?'them':'it'}?`,
-        'Build anyway','Let me answer');
-      if(!go){ openAllGateQ(nid); return; }
-    }
+  const a=(S&&S.activeNode)||{}, nid=a.id||'';
+  if((a.questions||[]).length && gateAnswered(nid)){
+    const fold=await modalConfirm('Fold in your answers?',
+      `You've written answers to the gate questions but haven't folded them in yet. Fold them into the `+
+      `idea first so the deep build uses your input?`,'Fold them in','Not now');
+    if(fold)return foldGateAnswers(nid);
   }
-  return commit();
+  return advanceGuard(()=>commit());
 }
 
 // ── Funnel actions ───────────────────────────────────────────────────────────
@@ -877,12 +923,14 @@ function commitFromBrainstorm(){
   const chosen=(stageOptions()||[]).filter(o=>SEL.has(o.id)).map(o=>o.direction.one_liner||o.direction.title);
   // the PICKS ride along, not just their text — without them the graph drew the checked option as
   // passed-over and a pivot-commit read as "nevermind" even though the build honored it (Sam's QA)
-  commit(chosen.join(' + '),null,[...SEL]);
+  return advanceGuard(()=>commit(chosen.join(' + '),null,[...SEL]));
 }
-async function keepGoing(){
-  const {t}=nodesOf(S);   // inline comments on this doc ride the roll-forward (backlog #8)
-  if(await run(`/api/plan/${SID}/next`,{feedback:cmtSteer(t.active).trim()},'Writing the next part'))
-    delete DOCCMTS[t.active];
+async function keepGoing(){   // advancing to the next part surfaces any unresolved concern on this step first
+  return advanceGuard(async ()=>{
+    const {t}=nodesOf(S);   // inline comments on this doc ride the roll-forward (backlog #8)
+    if(await run(`/api/plan/${SID}/next`,{feedback:cmtSteer(t.active).trim()},'Writing the next part'))
+      delete DOCCMTS[t.active];
+  });
 }
 async function keepGoingForced(){ await run(`/api/plan/${SID}/next`,{feedback:'',force:true},'Building it anyway'); }
 async function run(url,body,label){
@@ -1552,12 +1600,17 @@ function boardNotesHtml(id){
   const {t}=nodesOf(S);
   const list=(id===t.active)?((S&&S.board)||[]):(((NODECACHE[id]||{}).board)||[]);
   if(!list.length)return '';
-  const rows=list.slice().reverse().map(e=>
-    `<div class=bdrow><b>${esc(e.title||'Board review')}</b>${_vchip(e.verdict)}`+
-    (e.skeptic?`<div class="bdrow skept" style="border:none;padding-top:2px;margin-top:2px">🧐 ${esc((e.skeptic.take||e.skeptic.rationale||'').slice(0,180))}</div>`:'')+
-    `</div>`).join('');
-  return `<details class=nhist${HIST_OPEN.has(id+':b')?' open':''} ontoggle="histKeep('${id}:b',this)">`+
-    `<summary>🪑 board notes on this step (${list.length})</summary>${rows}</details>`;
+  const rows=list.slice().reverse().map(e=>{
+    const sev=boardSeverity(e);
+    return `<div class="bdrow${sev?' concerning '+sev:''}"><b>${esc(e.title||'Board review')}</b>${_vchip(e.verdict)}`+
+      (e.skeptic?`<div class="bdrow skept${sev==='high'?' hi':''}" style="border:none;padding-top:2px;margin-top:2px">`+
+        `${sev?'⚠️ ':'🧐 '}${esc((e.skeptic.take||e.skeptic.rationale||'').slice(0,180))}</div>`:'')+
+      `</div>`;}).join('');
+  // a serious/unresolved objection flags the COLLAPSED line so it's visible without opening (Sam, 2026-07-07)
+  const sev=boardTopSeverity(id);
+  const badge=sev?`<span class="alertdot ${sev}" title="The board raised an objection on this step">⚠️</span> `:'';
+  return `<details class="nhist${sev?' hasalert':''}${HIST_OPEN.has(id+':b')?' open':''}" ontoggle="histKeep('${id}:b',this)">`+
+    `<summary>${badge}🪑 board notes on this step (${list.length})</summary>${rows}</details>`;
 }
 // The active node's content while a background op runs on it — no CTAs (double-firing a merge or
 // commit mid-run is the failure this read-only view prevents), but everything readable, right away.
