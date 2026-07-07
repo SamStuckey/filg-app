@@ -1318,7 +1318,8 @@ function renderGraph(){
       const tuck=stubRootOf(n,onPath,m0)
         ?`<button type=button class=tuck title="Tuck this passed-over branch away" `+
          `onclick="event.stopPropagation();stubCollapse('${n.id}')">⊟</button>`:'';
-      inner=`<div class=nk><span aria-hidden=true>${KICON[n.kind]||'▤'}</span>${esc(n.kind||'part')}${tuck}</div>`+
+      const num=n.num?`<span class=gnum title="Box ${esc(n.num)}">${esc(n.num)}</span>`:'';
+      inner=`<div class=nk><span aria-hidden=true>${KICON[n.kind]||'▤'}</span>${esc(n.kind||'part')}${num}${tuck}</div>`+
         `<div class=nt>${esc(nodeLabel(n))}</div>`;
     }
     // mobile: an open node carries a plain × close anchored in its top-right CORNER (first in flow +
@@ -2632,10 +2633,12 @@ function decRemoveSteer(rm){
 let DEC_STEER='';
 function decRevisitModal(impact,steer){
   DEC_STEER=steer;
+  // checkbox hard-left; the row names the box by its graph number ("Refined idea 3a") and expands
+  // to the box's one-line snippet — enough to know WHICH step without leaving the modal
   const rows=impact.map(n=>
-    `<label class=decimp><input type=checkbox value="${n.id}"${n.onPath?' checked':''}>`+
-    `<span>${esc(n.label||n.kind||'a step')}</span>`+
-    `<span class=decw>${n.onPath?'on your path':'side branch'}</span></label>`).join('');
+    `<div class=decimp><input type=checkbox value="${n.id}"${n.onPath?' checked':''}>`+
+    `<details><summary>${esc(n.label||n.kind||'Step')}${n.num?' '+esc(n.num):''}</summary>`+
+    `<div class=decimpsub>${esc(n.snippet||'')}</div></details></div>`).join('');
   $('modal-body').innerHTML=
     `<p class=muted>That decision shaped these steps. Want to revisit any based on the change? Each `+
     `one you keep checked gets a fresh spread of directions pivoted from it — nothing is deleted.</p>`+

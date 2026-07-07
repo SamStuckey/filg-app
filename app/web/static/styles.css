@@ -749,9 +749,13 @@ ul.concernlist .concern .cdetail{color:var(--muted);font-size:13px;line-height:1
   font-style:italic;color:var(--fg)}
 .cmsg .cbtns .decwchip{border-radius:999px}
 .decimps{max-height:260px;overflow-y:auto;margin-top:4px}
-.decimp{display:flex;align-items:center;gap:8px;padding:7px 9px;border:1px solid var(--line);
-  border-radius:8px;margin-top:6px;font-size:13px;cursor:pointer}
-.decimp .decw{margin-left:auto}
+/* one revisit row: checkbox hard-left, "Refined idea 3a" beside it, expandable to the snippet */
+.decimp{display:flex;align-items:flex-start;gap:10px;padding:8px 10px;border:1px solid var(--line);
+  border-radius:8px;margin-top:6px;font-size:13px}
+.decimp input{flex:none;width:auto;margin:3px 0 0}   /* .modal input{width:100%} must not eat the row */
+.decimp details{flex:1;min-width:0}
+.decimp summary{cursor:pointer;font-weight:600}
+.decimpsub{color:var(--muted);font-size:12.5px;margin-top:4px}
 .decref{display:flex;align-items:center;gap:7px;border-left:3px solid var(--muted);padding:4px 8px}
 .decref.gone{opacity:.6}
 
@@ -763,3 +767,7 @@ ul.concernlist .concern .cdetail{color:var(--muted);font-size:13px;line-height:1
 .decopts .decopt b{font-weight:600;white-space:nowrap}
 .decopts .decopt:hover{border-color:var(--accent)}
 .cmsg.asked .decopts{display:none}
+
+/* the box number — how modals/logs refer to a node; rides the node's kind row */
+.gnode .gnum{margin-left:auto;font-size:9.5px;color:var(--muted);border:1px solid var(--line);
+  border-radius:5px;padding:0 4px;line-height:1.5}

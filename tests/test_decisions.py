@@ -130,7 +130,15 @@ def test_nodes_stamp_decisions_and_impact_names_them(client):
                      json={"text": "Cold calls are fine actually", "weight": "nice_to_have"})
     impact = r.json()["impact"]
     assert {i["id"] for i in impact} >= {refined["id"], section["id"]}
-    assert all(set(i) >= {"id", "kind", "label", "onPath"} for i in impact)
+    # each row names the box the way the graph does (num) and can summarize it (snippet)
+    assert all(set(i) >= {"id", "kind", "label", "num", "snippet", "onPath"} for i in impact)
+    ref_row = next(i for i in impact if i["id"] == refined["id"])
+    assert ref_row["num"] and ref_row["snippet"].startswith("the refined idea")
+    # the graph view carries the same box numbers (1 at the root; letters only at forks)
+    s = client.get(f"/api/plan/{sid}").json()
+    by_id = {n["id"]: n for n in s["tree"]["nodes"]}
+    assert all(n.get("num") for n in s["tree"]["nodes"])
+    assert ref_row["num"] == by_id[refined["id"]]["num"]
 
     # DELETE returns the same trail; the stamps stay on the nodes (history, not live pointers)
     r = client.request("DELETE", f"/api/plan/{sid}/decisions/{d['id']}")
@@ -213,5 +221,6 @@ def test_mock_advisor_acknowledges_decisions(client):
 def test_frontend_carries_the_decisions_surface(client):
     src = frontend(client)
     for needle in ("decListHtml", "decModal", "decRevisitModal", "decOfferChat", "decNoteHtml",
-                   "body.summary=true", ".decrow", "non_negotiable", "decPivotSelected"):
+                   "body.summary=true", ".decrow", "non_negotiable", "decPivotSelected",
+                   "gnum", "decimpsub"):
         assert needle in src, f"frontend lost {needle!r}"

@@ -82,8 +82,10 @@ def tree_view(tree: dict) -> dict:
     `kind` so the graph can render option/refined/section/fork nodes differently. `show` is on from the
     first render (even a single node) so the decision-graph surface is always there."""
     nodes = tree.get("nodes") or {}
+    nums = dtree.numbers(nodes)   # the box numbers — how the UI/modals refer to a node (1, 2, 3a…)
     return {"active": tree.get("active"),
             "nodes": [{"id": n["id"], "parent": n.get("parent"), "step": n.get("step", 0),
+                       "num": nums.get(n["id"]),
                        "kind": _kind(n), "title": n.get("title"), "feedback": n.get("feedback"),
                        # a refined node names the options it JOINED — the graph draws it as a merge
                        # of those branches, not a sibling branch off the brainstorm fork

@@ -223,6 +223,55 @@ def newest_first(nodes: dict):
     return reversed(list(nodes.values()))
 
 
+def _letters(i: int) -> str:
+    """0 → a, 1 → b, … 26 → aa (spreadsheet-column style, for absurdly wide forks)."""
+    s, i = "", i + 1
+    while i:
+        i, r = divmod(i - 1, 26)
+        s = chr(97 + r) + s
+    return s
+
+
+def _visual_parent(n: dict, nodes: dict) -> str | None:
+    """The node this one hangs beneath ON THE GRAPH. A JOIN (its `selected` names the branches it
+    merged) is drawn under its first merged pick, one level deeper — even though its structural
+    parent is the fork. Everything else hangs under its structural parent."""
+    for sid in (n.get("selected") or []):
+        if sid in nodes:
+            return sid
+    return n.get("parent")
+
+
+def numbers(nodes: dict) -> dict[str, str]:
+    """A human 'box number' per node: its VISUAL depth from the root (1-based, joins counted
+    beneath the pick they merged), plus a sibling letter when its parent forked — so a linear
+    funnel reads 1, 2, 3a/3b/3c (the fork's options), 4 (the join), 5… Joins never take a letter
+    against the options they chose between; two joins under the same fork letter among themselves.
+    The number is how the UI and any modal/log REFER to a box, so one owner computes it (here)
+    and every view inherits it. Cycle-safe; an orphaned subtree numbers from where its chain
+    breaks (still stable, still unique among siblings)."""
+    out = {}
+    for nid, n in nodes.items():
+        depth, seen, cur = 1, {nid}, n
+        while True:
+            pid = _visual_parent(cur, nodes)
+            if not pid or pid not in nodes or pid in seen:
+                break
+            seen.add(pid)
+            cur = nodes[pid]
+            depth += 1
+        letter = ""
+        parent = nodes.get(n.get("parent") or "")
+        if parent:
+            joins = bool(n.get("selected"))
+            sibs = [c for c in (parent.get("children") or [])
+                    if c in nodes and bool(nodes[c].get("selected")) == joins]
+            if len(sibs) > 1 and nid in sibs:
+                letter = _letters(sibs.index(nid))
+        out[nid] = f"{depth}{letter}"
+    return out
+
+
 # ── run epochs ────────────────────────────────────────────────────────────────
 def begin_run(tree: dict) -> str:
     """Stamp the tree with this run's epoch token. Any navigation that abandons in-flight work
@@ -267,4 +316,18 @@ if __name__ == "__main__":  # self-test: python -m engine.tree
     # corrupt parent cycle terminates
     a = new_node({}, None); b = new_node({}, a["id"]); a["parent"] = b["id"]
     assert len(chain({a["id"]: a, b["id"]: b}, b["id"])) == 2
+    # box numbers: depth on a linear path, sibling letters at a fork, cycle-safe
+    leaf2 = attach(t, new_node({"step": 2}, child["id"]), activate=False)
+    nums = numbers(t["nodes"])
+    assert nums[root["id"]] == "1" and nums[child["id"]] == "2"
+    assert nums[leaf["id"]] == "3a" and nums[leaf2["id"]] == "3b"
+    # a JOIN (selected names its picks) hangs beneath its first pick: depth 4, no letter against
+    # the options it chose between; its own child continues 5
+    join = attach(t, new_node({"selected": [leaf["id"]]}, child["id"]), activate=False)
+    after = attach(t, new_node({}, join["id"]), activate=False)
+    nums = numbers(t["nodes"])
+    assert nums[join["id"]] == "4" and nums[after["id"]] == "5"
+    assert nums[leaf["id"]] == "3a" and nums[leaf2["id"]] == "3b"   # options unchanged
+    assert _letters(0) == "a" and _letters(25) == "z" and _letters(26) == "aa"
+    assert numbers({a["id"]: a, b["id"]: b})   # the corrupt cycle still terminates
     print("tree.py self-test OK —", len(_KINDS), "kinds,", len(_ATTACHMENTS), "attachments")

@@ -64,17 +64,22 @@ def ordered(decision_list: list | None) -> list[dict]:
 
 def impact(session: dict, decision_id: str) -> list[dict]:
     """The nodes built while this decision was in force — the revisit modal's list. Reads the
-    `decisions` stamp each build op leaves on the nodes it creates. Committed-path standing rides
-    along so the frontend can rank what matters."""
+    `decisions` stamp each build op leaves on the nodes it creates. Each row carries the node's
+    box number (dtree.numbers — same numbers the graph shows) and its canonical one-line snippet
+    (context.snippet) so the modal can say 'Refined idea 3a' and expand to what that box IS."""
     from engine import tree as dtree  # noqa: PLC0415 — keep this module import-light
+    from app import context  # noqa: PLC0415 — the one snippet renderer (no import cycle: deferred)
     t = (session or {}).get("tree") or {}
     nodes = t.get("nodes") or {}
     on_path = {n["id"] for n in dtree.chain(nodes, t.get("active"))}
+    nums = dtree.numbers(nodes)
     out = []
     for n in nodes.values():
         if decision_id in (n.get("decisions") or []):
             out.append({"id": n["id"], "kind": dtree.kind(n),
                         "label": dtree.label(n, f"Part {int(n.get('step') or 0) + 1}"),
+                        "num": nums.get(n["id"]),
+                        "snippet": context.snippet(n),
                         "onPath": n["id"] in on_path})
     return out
 
