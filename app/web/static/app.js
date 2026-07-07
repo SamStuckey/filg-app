@@ -2555,8 +2555,6 @@ function renderSummary(){ const el=$('slist'); if(el)el.innerHTML=summaryHtml();
 // the ids in force — so editing/removing one can name the steps it shaped (the revisit modal)
 // and offer a pivot from each. Nothing pins itself: the chat only ever OFFERS.
 const DEC_WEIGHTS=['non_negotiable','firm','nice_to_have'];
-const DEC_HINT={non_negotiable:'a hard line — never crossed',firm:'a strong default — bent only with reason',
-  nice_to_have:'a preference — honored when it’s free to'};
 function decWLabel(w){return {non_negotiable:'non-negotiable',firm:'firm',nice_to_have:'nice to have'}[w]||'firm';}
 function decSorted(){const o={non_negotiable:0,firm:1,nice_to_have:2};
   return [...((S&&S.decisions)||[])].sort((a,b)=>(o[a.weight]??1)-(o[b.weight]??1));}
@@ -2656,11 +2654,12 @@ async function decPivotSelected(){
 // The in-chat offer (summary tab): a declarative message reads like an axiom → ask, never auto-pin.
 function decOfferChat(o,prompt){
   chatPush('bot','Pin as a standing decision? '+o.text);
+  // the restatement is a plain QUOTE — no color, no pre-picked weight; the operator decides
   const m=chatSay('bot','That reads like a standing decision — pin it and every step from here honors it. How settled is it?'+
-    `<div class="decoffer ${esc(o.weight)}"><span class=decdot></span>${esc(o.text)}</div>`+
-    `<div class=decopts>`+DEC_WEIGHTS.map(w=>`<button type=button class="decopt ${w}${w===o.weight?' on':''}" `+
-      `data-w="${w}"><span class=decdot></span><b>${decWLabel(w)}</b><span class=decopt-sub>${DEC_HINT[w]}</span></button>`).join('')+
-    `<button type=button class="decopt nah">No — just feedback<span class=decopt-sub>steer this step only, pin nothing</span></button></div>`);
+    `<div class=decoffer>“${esc(o.text)}”</div>`+
+    `<div class=decopts>`+DEC_WEIGHTS.map(w=>`<button type=button class="decopt ${w}" `+
+      `data-w="${w}"><span class=decdot></span><b>${decWLabel(w)}</b></button>`).join('')+
+    `<button type=button class="decopt nah">just feedback</button></div>`);
   if(!m)return;
   m.querySelectorAll('.decopt[data-w]').forEach(b=>b.onclick=async()=>{
     m.classList.add('asked');
@@ -2668,7 +2667,8 @@ function decOfferChat(o,prompt){
     if(!ok){ if(gateV2(d))return; chatErr((d&&d.error)||'Could not pin that.'); return; }
     if(S)S.decisions=d.decisions;
     chatStatus('🧭 Pinned ('+decWLabel(b.dataset.w)+'): '+o.text);
-    if(SMODE)renderSummary();
+    // a pin lands you ON the decisions index — pinned from any mode, the Summary display opens
+    if(MODE==='summary')renderSummary(); else setMode('summary');
   });
   m.querySelector('.nah').onclick=async()=>{
     m.classList.add('asked');
@@ -2676,9 +2676,10 @@ function decOfferChat(o,prompt){
     await routeDispatch(prompt||o.text);
   };
 }
-// Route + dispatch a prompt that skipped normal routing (a declined pin offer re-enters here).
+// Route + dispatch a prompt that skipped normal routing (a declined pin offer re-enters here) —
+// in the mode the user was actually in, so a research/board/help question still lands in its tool.
 async function routeDispatch(prompt){
-  const {ok,d}=await api('POST',`/api/plan/${SID}/route`,{prompt,mode:'build'});
+  const {ok,d}=await api('POST',`/api/plan/${SID}/route`,{prompt,mode:(MODE==='summary'?'build':MODE)});
   if(!ok){ if(gateV2(d))return; chatErr((d&&d.error)||'Could not route that.'); return; }
   if(d.fork){ PENDING_FORK=d.fork;
     chatBot(d.fork.clash||'That pulls against the committed idea — pick a path on the graph.');

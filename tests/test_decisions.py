@@ -68,9 +68,9 @@ def test_decisions_cap(client):
     assert r.status_code == 409
 
 
-# ── the summary-tab detection on /route ──────────────────────────────────────
+# ── detection on /route — every chat mode offers; work-talk never does ───────
 
-def test_route_summary_flag_offers_the_pin(client):
+def test_route_offers_the_pin_in_any_mode(client):
     sid = _brainstorm(client)["id"]
     # declarative preference typed in the Summary tab → an OFFER, no routed action
     r = client.post(f"/api/plan/{sid}/route",
@@ -82,10 +82,20 @@ def test_route_summary_flag_offers_the_pin(client):
     r = client.post(f"/api/plan/{sid}/route",
                     json={"prompt": "what should I charge for this?", "summary": True})
     assert "offer" not in r.json() and r.json()["decision"]["intent"] == "ask"
-    # the same declarative WITHOUT the summary flag routes normally (build mode is not nagged)
+    # a declarative BUSINESS statement offers from every mode (Sam, 2026-07-07) — build...
     r = client.post(f"/api/plan/{sid}/route",
                     json={"prompt": "i don't want to do cold call marketing"})
-    assert "offer" not in r.json()
+    assert r.json()["offer"]["weight"] == "non_negotiable"
+    # ...and the tool modes (research / board / help)
+    for mode in ("research", "board", "help"):
+        r = client.post(f"/api/plan/{sid}/route",
+                        json={"prompt": "I want to run this as a non-profit", "mode": mode})
+        assert r.json().get("offer"), f"no offer in {mode} mode"
+    # work-talk with a declarative marker is a STEER, never an offer — build feedback isn't nagged
+    r = client.post(f"/api/plan/{sid}/route", json={"prompt": "i want this section shorter"})
+    assert "offer" not in r.json() and r.json()["decision"]["intent"] == "steer"
+    r = client.post(f"/api/plan/{sid}/route", json={"prompt": "i want to build the plan now"})
+    assert "offer" not in r.json()   # a build verb routes, it doesn't pin
 
 
 # ── stamping + receipts + impact through the live funnel ─────────────────────

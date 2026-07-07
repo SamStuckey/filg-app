@@ -881,20 +881,23 @@ async def api_plan_route(sid: str, request: Request):
         return JSONResponse({"error": "Type something."}, status_code=400)
     mode = body.get("mode") or "build"
     node_id = (body.get("node") or "").strip() or None   # the node the user has open (browse context)
-    # the Summary tab: a declarative statement typed there is probably a standing decision, not a
-    # steer — detect it and OFFER the pin (the operator confirms in the chat; nothing saves itself)
+    # Standing-decision detection runs on EVERY chat message, in every mode (Sam, 2026-07-07): a
+    # declarative statement about the business gets a "pin it?" OFFER before any routing (the
+    # operator confirms in the chat; nothing saves itself; declining falls through to a normal
+    # route). The Summary tab is EAGER (the model reads most messages); everywhere else the
+    # deterministic declarative pre-filter gates the model call so steers/questions cost nothing.
     from_summary = bool(body.get("summary"))
     stage = s.get("stage") or ("building" if s.get("proposal") else "plan")
     rstage = {"brainstorm": "brainstorm", "merging": "merge", "refined": "refined",
               "building": "plan", "done": "plan"}.get(stage, "plan")
     def _work():
         with ops.run_slot(ops.slot_user(s), s.get("stack")):
-            if from_summary:
-                offer, d_cost = decisions_mod.detect(prompt, mock=ops.MOCK)
-                if offer:
-                    return None, None, offer, round(d_cost, 4), pipeline.LEDGER.tokens()
+            offer, d_cost = decisions_mod.detect(prompt, mock=ops.MOCK, eager=from_summary)
+            if offer:
+                return None, None, offer, round(d_cost, 4), pipeline.LEDGER.tokens()
             decision, cost = router.route(prompt, stage=rstage, mode=mode,
                                           context=_route_context(s, node_id), mock=ops.MOCK)
+            cost = round(cost + d_cost, 4)   # a ran-but-declined detect still costs its call
             fork = None
             if decision["intent"] == "steer" and rstage == "plan" and decision.get("steer"):
                 idea = planner._working_idea(s)

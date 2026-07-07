@@ -725,9 +725,9 @@ ul.concernlist .concern .cdetail{color:var(--muted);font-size:13px;line-height:1
   white-space:nowrap;flex:none}
 .decdot{width:9px;height:9px;border-radius:50%;background:var(--muted);flex:none;display:inline-block}
 /* the color code: non-negotiable = red, firm = amber, nice-to-have = green */
-.decrow.non_negotiable,.decoffer.non_negotiable,.decref.non_negotiable{border-left-color:var(--red)}
-.decrow.firm,.decoffer.firm,.decref.firm{border-left-color:var(--yellow)}
-.decrow.nice_to_have,.decoffer.nice_to_have,.decref.nice_to_have{border-left-color:var(--green)}
+.decrow.non_negotiable,.decref.non_negotiable{border-left-color:var(--red)}
+.decrow.firm,.decref.firm{border-left-color:var(--yellow)}
+.decrow.nice_to_have,.decref.nice_to_have{border-left-color:var(--green)}
 .non_negotiable .decdot{background:var(--red)}
 .firm .decdot{background:var(--yellow)}
 .nice_to_have .decdot{background:var(--green)}
@@ -744,8 +744,9 @@ ul.concernlist .concern .cdetail{color:var(--muted);font-size:13px;line-height:1
 .decwchip.non_negotiable{color:var(--red)}
 .decwchip.firm{color:var(--yellow)}
 .decwchip.nice_to_have{color:var(--green)}
-.decoffer{display:flex;align-items:center;gap:8px;border:1px solid var(--line);
-  border-left:3px solid var(--muted);border-radius:8px;padding:7px 10px;margin-top:7px;font-size:13px}
+/* the restated decision is a plain QUOTE — no color, no weight; the operator picks below */
+.decoffer{border-left:3px solid var(--line);padding:4px 10px;margin-top:8px;font-size:13.5px;
+  font-style:italic;color:var(--fg)}
 .cmsg .cbtns .decwchip{border-radius:999px}
 .decimps{max-height:260px;overflow-y:auto;margin-top:4px}
 .decimp{display:flex;align-items:center;gap:8px;padding:7px 9px;border:1px solid var(--line);
@@ -760,12 +761,5 @@ ul.concernlist .concern .cdetail{color:var(--muted);font-size:13px;line-height:1
   padding:9px 12px;border:1px solid var(--line);border-radius:9px;background:var(--card);
   color:var(--fg);font-size:13px;cursor:pointer}
 .decopts .decopt b{font-weight:600;white-space:nowrap}
-.decopt-sub{color:var(--muted);font-size:12px;margin-left:auto;text-align:right}
-.decopts .decopt.on{border-color:currentColor;box-shadow:0 0 0 1px currentColor inset}
-.decopts .decopt.non_negotiable.on{color:var(--red)}
-.decopts .decopt.firm.on{color:var(--yellow)}
-.decopts .decopt.nice_to_have.on{color:var(--green)}
-.decopts .decopt.on b,.decopts .decopt.on .decopt-sub{color:var(--fg)}
-.decopts .decopt.on .decopt-sub{color:var(--muted)}
 .decopts .decopt:hover{border-color:var(--accent)}
 .cmsg.asked .decopts{display:none}

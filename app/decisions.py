@@ -91,6 +91,14 @@ _DECLARE = re.compile(
     r"must (be|stay|not|never)|absolutely (no|not))\b", re.I)
 _HARD = re.compile(r"\b(never|won'?t|will not|refuse|non[- ]?negotiable|absolutely (no|not)|hard no|"
                    r"no way|don'?t want|do not want|can'?t stand|hate|must not)\b", re.I)
+# Work-talk — an instruction about the CURRENT draft/step/funnel, not a standing business axiom.
+# The declarative markers alone can't tell "I want to run a non-profit" (a decision) from "I want
+# this section shorter" (a steer); this exclusion keeps the offer out of ordinary build feedback.
+_WORKTALK = re.compile(
+    r"\b(this (section|part|step|draft|page|plan)|the (section|part|draft|wording|tone)|"
+    r"redraft|rewrite|re-?word|shorten|shorter|longer|punchier|paragraph|"
+    r"build (it|this|the plan)|keep going|next (step|part)|start over|start fresh|"
+    r"pivot|merge|commit|pick (option|direction))\b", re.I)
 _SOFT = re.compile(r"\b(prefer|ideally|would be nice|nice to have|'?d like|lean(ing)? toward|"
                    r"if possible|would rather|'?d rather)\b", re.I)
 
@@ -107,24 +115,30 @@ def _heuristic(prompt: str) -> dict | None:
     p = (prompt or "").strip()
     if len(p) < 8 or "?" in p:
         return None
-    if not _DECLARE.search(p):
+    if _WORKTALK.search(p) or not _DECLARE.search(p):
         return None
     return {"text": p[:MAX_TEXT], "why": "", "weight": _guess_weight(p)}
 
 
-def detect(prompt: str, mock: bool = False) -> tuple[dict | None, float]:
-    """Classify a summary-tab message as a candidate standing decision. Returns
-    ({text, why, weight} or None, cost). The offer is a QUESTION to the operator — nothing is
-    pinned until they confirm — so a false positive costs one chat bubble, not a laundered axiom."""
-    if mock:
-        return _heuristic(prompt), 0.0
+def detect(prompt: str, mock: bool = False, eager: bool = True) -> tuple[dict | None, float]:
+    """Classify a chat message as a candidate standing decision. Returns
+    ({text, why, weight} or None, cost). `eager=True` is the Summary tab: the model reads most
+    messages (regex is only the parse-failure fallback). `eager=False` is every other chat mode
+    (build/research/board/help), where this runs on EVERY prompt — the deterministic declarative
+    pre-filter gates the model call, so ordinary steers and questions cost nothing extra. The offer
+    is a QUESTION to the operator — nothing is pinned until they confirm — so a false positive
+    costs one chat bubble, not a laundered axiom."""
     quick = _heuristic(prompt)
+    if mock:
+        return quick, 0.0
+    if not eager and quick is None:
+        return None, 0.0   # outside the summary tab, no declarative smell → no model call
     if quick is None and ("?" in prompt or len(prompt.strip()) < 8):
         return None, 0.0   # a question is never a decision — skip the model call
     from engine.pipeline import LEDGER, call, extract_json, HAIKU  # noqa: PLC0415 — real mode only
     start = len(LEDGER.rows)
     out = call("decision_detect", HAIKU, max_tokens=200, cache=True, prompt=(
-        "A solo operator building a business plan typed a message into the plan-summary tab. Decide "
+        "A solo operator building a business plan typed a chat message. Decide "
         "whether it DECLARES a standing decision — an axiom, non-negotiable, or settled preference "
         "that should constrain every future step (e.g. 'no cold-call marketing', 'this stays a "
         "non-profit', 'I'd prefer local clients'). A question, a one-off edit request, or an "
@@ -163,6 +177,10 @@ if __name__ == "__main__":  # self-test (mock, no API)
     assert detect("ideally I'd prefer local clients", mock=True)[0]["weight"] == "nice_to_have"
     assert detect("what should I charge?", mock=True)[0] is None
     assert detect("make the pricing section shorter", mock=True)[0] is None
+    # work-talk never offers, even with a declarative marker — it's a steer, not an axiom
+    assert detect("i want this section shorter", mock=True)[0] is None
+    assert detect("i want to build the plan now", mock=True)[0] is None
+    assert detect("i want a punchier tone", mock=True)[0] is None
     # impact walks the node stamps
     sess = {"tree": {"active": "n2", "nodes": {
         "n1": {"id": "n1", "kind": "refined", "parent": None, "children": ["n2"],
