@@ -243,6 +243,7 @@ ul.qs li{margin:4px 0}
    edge collapses it; when collapsed, the same tab sticks out of the screen's left edge to reopen */
 .mrail-in,#mrail{display:none;align-items:center;justify-content:center;width:20px;height:54px;
   padding:0;border:0;cursor:pointer;background:#555;color:#fff;font-size:18px;line-height:1}
+.nfold{display:none}
 @media (max-width:820px){
   .workspace{height:100vh;height:100dvh}
   .right{min-width:0}
@@ -274,6 +275,10 @@ ul.qs li{margin:4px 0}
   .ctarow{gap:8px}
   .ctarow .stage-cta{flex:1 1 40%;min-width:0;padding:8px 10px;font-size:13.5px}
   .stage-cta .ctasub{font-size:10.5px}
+  /* an open node's collapse tab: sticky top-right, one tap back to the compact node + camera */
+  .nfold{display:flex;position:sticky;top:-14px;margin:-6px -10px 0 auto;z-index:3;
+    align-items:center;justify-content:center;width:40px;height:26px;border:0;padding:0;
+    cursor:pointer;background:#555;color:#fff;border-radius:0 0 8px 8px;font-size:16px;line-height:1}
 }
 .jokecard{border:1px solid var(--line);border-radius:12px;padding:16px;margin-top:16px;text-align:left}
 
