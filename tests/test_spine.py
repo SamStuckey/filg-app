@@ -116,6 +116,48 @@ def test_votes_thread_through_to_the_gate(monkeypatch):
     assert seen["votes"] == 1                           # skim: one vote
 
 
+def test_sink_exposes_fetched_claims(monkeypatch):
+    # T2: run_engine populates `sink['claims']` with the fetched (Claim, lane) pairs so the merge skim
+    # can persist them for a later re-grade. Only quantitative claims (the ones that reach the gate).
+    _install(monkeypatch)
+    sink = {}
+    spine.run_engine("an idea", headlines=1, sink=sink)
+    got = {(c.text, lane) for c, lane in sink["claims"]}
+    assert got == {("2.5M businesses", "L0 market?"), ("FLAG 62% missed calls", "L0 market?"),
+                   ("FLAG 80% prefer us", "L1 pricing?")}          # the non-quant claim is excluded
+    assert all(c.quantitative for c, _ in sink["claims"])
+
+
+def test_regrade_engine_reuses_claims_without_web_fanout(monkeypatch):
+    # T2 reuse path: regrade already-fetched claims — NO plan, NO research_lane (the web fan-out).
+    _install(monkeypatch)
+
+    def boom(*a, **k):
+        raise AssertionError("the web fan-out ran on the reuse path")
+
+    monkeypatch.setattr(pipeline, "plan", boom)
+    monkeypatch.setattr(pipeline, "research_lane", boom)
+    claim_lanes = [(C_OK, "L0 market?"), (C_FLAG1, "L0 market?"), (C_FLAG2, "L1 pricing?")]
+    rows, stats = spine.regrade_engine(claim_lanes, headlines=1)
+    assert stats == {"checked": 3, "cleared": 2, "flagged": 1}     # same grades as the full run
+    assert rows[0]["text"] == "2.5M businesses" and rows[0]["mark"] == "ok"
+    assert rows[1]["url"] == "https://primary.gov/p"               # flagged claim re-sourced by the chase
+
+
+def test_regrade_votes_the_moat_at_full_strength(monkeypatch):
+    # The reuse path must keep the committed deliverable ×3-voted (invariant #1), not reuse a 1-vote skim.
+    _install(monkeypatch)
+    seen = {}
+
+    def spy_gate(claims, votes=None):
+        seen["votes"] = votes
+        return [Verdict(c, "PRIMARY", "TRUST", False, "r") for c in claims]
+
+    monkeypatch.setattr(pipeline, "gate_claims", spy_gate)
+    spine.regrade_engine([(C_OK, "L0 market?")], headlines=0)
+    assert seen["votes"] == pipeline.JUDGE_VOTES                   # full ×3 on what ships
+
+
 def test_build_evidence_delegates_to_spine(monkeypatch):
     # The public entry point keeps its signature and returns the conductor's output unchanged.
     _install(monkeypatch)

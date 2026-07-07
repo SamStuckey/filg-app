@@ -131,10 +131,12 @@ def wod_forward(node: dict) -> tuple[dict, float]:
     return child, 0.0
 
 
-def research(idea: str, mock: bool = False, on_progress=None) -> dict:
-    """Step 0 — run the teardown engine once. Returns {prose, rows, stats, cost}. `on_progress` streams
-    the fan-out milestones (incl. the `§LANES§`/`§LANEDONE§` leaf events) up to the caller."""
-    return teardown.generate(idea, mock=mock, on_progress=on_progress)
+def research(idea: str, mock: bool = False, on_progress=None, prior_claims: list | None = None) -> dict:
+    """Step 0 — run the teardown engine once. Returns {prose, rows, stats, cost, claims}. `on_progress`
+    streams the fan-out milestones (incl. the `§LANES§`/`§LANEDONE§` leaf events) up to the caller.
+    `prior_claims` (T2) = the merge skim's fetched claims carried forward: when the deep-build thesis is
+    unchanged, re-grade them at full strength instead of re-running the web fan-out."""
+    return teardown.generate(idea, mock=mock, on_progress=on_progress, prior_claims=prior_claims)
 
 
 def _working_idea(session: dict) -> str:
@@ -170,12 +172,18 @@ def _own_lanes(lanes: list[str]) -> list[dict]:
     return owned
 
 
-def prepare(idea: str, mock: bool = False, on_progress=None) -> dict:
+def prepare(idea: str, mock: bool = False, on_progress=None, prior: dict | None = None) -> dict:
     """Full pre-build pass for a new session: intake (shape the grab-bag into one thesis) → research
     the thesis → vet it (kill-gate) → draft section 0. Returns everything the session needs to start
     building, plus a `cost` total. The raw `idea` is kept by the caller for display; everything
     downstream runs on the focused `shaped['thesis']`. `on_progress(line)` (optional) is called at each
-    real milestone, including a receipt per graded source, so the UI can spew live progress."""
+    real milestone, including a receipt per graded source, so the UI can spew live progress.
+
+    `prior` (T2 reuse path) is the refined node's already-merged payload
+    `{thesis, founder_edge, claims}`: when the deep build is committing the SAME refined idea the merge
+    skim already researched, skip the re-shape AND the web re-fan — build `shaped` from the merged
+    values and re-grade the carried claims at full strength (the moat stays ×3 on the committed
+    deliverable). The web fan-out ran once at merge; this halves the deep build's web wait."""
     def emit(line: str) -> None:
         if on_progress:
             try:
@@ -183,11 +191,24 @@ def prepare(idea: str, mock: bool = False, on_progress=None) -> dict:
             except Exception:  # noqa: BLE001 — progress is best-effort, never break the run
                 pass
 
-    emit("Focusing your idea into one sharp thesis")
-    shaped, c_shape = intake.shape(idea, mock=mock)
-    thesis = shaped["thesis"]
-    emit("Planning the research fan-out")
-    research_data = research(thesis, mock=mock, on_progress=on_progress)
+    reuse = bool(prior and prior.get("claims"))
+    if reuse:
+        # Same thesis as the skim → the merge already did intake + the web fan-out. Rebuild `shaped`
+        # from the refined node (downstream only reads thesis + founder_edge) instead of re-shaping.
+        emit("Same idea you just refined — reusing the first-pass research (no re-fetch)")
+        shaped = {"coherent": True, "thesis": prior["thesis"],
+                  "founder_edge": prior.get("founder_edge") or "",
+                  "wedges_considered": [], "clarifying_question": None}
+        c_shape = 0.0
+        thesis = shaped["thesis"]
+        research_data = research(thesis, mock=mock, on_progress=on_progress,
+                                 prior_claims=prior["claims"])
+    else:
+        emit("Focusing your idea into one sharp thesis")
+        shaped, c_shape = intake.shape(idea, mock=mock)
+        thesis = shaped["thesis"]
+        emit("Planning the research fan-out")
+        research_data = research(thesis, mock=mock, on_progress=on_progress)
     owned = _own_lanes(research_data.get("lanes") or [])
     research_data["owned_lanes"] = owned                # who researched what — surfaced in the UI
     if mock and owned:   # real mode streams the leaf events live from build_evidence as each lane returns;
@@ -291,7 +312,9 @@ def propose(idea: str, section_key: str, research_data: dict, history: list,
         return call(f"plan_{section_key}", SONNET, max_tokens=800,
                     system=skills.system("synth_section"), cache=True,
                     prompt=base_prompt + (f"\n\n{fb}" if fb else ""))
-    draft, _residual = spine.run_author(_gen, voice_lint.lint, max_fix=3)
+    # max_fix=2 (T3): a per-section draft is non-final (the operator redrafts/steers it anyway), so cap
+    # the VOICE reprompt loop one lower than the final assembled artifacts (generate_full keeps 3).
+    draft, _residual = spine.run_author(_gen, voice_lint.lint, max_fix=2)
     return draft, round(LEDGER.cost_slice(start), 4)
 
 

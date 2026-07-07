@@ -1002,12 +1002,14 @@ def _run_merge(sid: str, option_ids: list, user: str, tok: str | None = None,
 
 
 def _deep_build(sid: str, thesis: str, user: str, tok: str | None = None,
-                picks: list | None = None) -> None:
+                picks: list | None = None, prior: dict | None = None) -> None:
     """Background: the COMMIT step — the one deep research run + first section draft, attached to the
     tree under the active (refined) node so the funnel history is preserved. Same engine as the legacy
     welcome run, but it grows the existing tree instead of reseeding a fresh root. `picks` = option
     ids a direct brainstorm-commit chose: recorded as `selected` on the built node so the graph draws
-    the join through them (the choice is part of the story, not just its text)."""
+    the join through them (the choice is part of the story, not just its text). `prior` (T2) = the
+    refined node's carried merge-skim payload; when the committed thesis is unchanged, prepare reuses
+    those already-fetched claims (re-graded at full strength) instead of re-running the web fan-out."""
     try:
         s0 = store.plan_get(sid) or {}
         base_cost, base_tokens = s0.get("cost") or 0, s0.get("tokens") or 0
@@ -1015,7 +1017,7 @@ def _deep_build(sid: str, thesis: str, user: str, tok: str | None = None,
         prov = _provider_for(user)
         stk = tiers.clamp_stack(s0.get("stack"), tier=_tier(user), byok=bool(prov and not prov.bills_filg))
         with provider.use(prov), provider.use_stack(stk), pipeline.run_ledger():
-            prep = planner.prepare(thesis, mock=MOCK,
+            prep = planner.prepare(thesis, mock=MOCK, prior=prior,
                                    on_progress=_bg_progress(sid, base_cost, base_tokens, progress))
             toks = pipeline.LEDGER.tokens()
         _meter_bg(user, prov, prep["cost"], toks, is_run=True, research_cost=prep["research_cost"])
@@ -1365,10 +1367,20 @@ async def api_plan_commit(sid: str, request: Request):
                       "idea to build from yet)."}, status_code=400)
     if build_from.get("id") and build_from["id"] != tree.get("active"):
         tree["active"] = build_from["id"]    # the jump happens only when the build actually starts
+    # T2 reuse: if we're building the EXACT refined node the merge skim already researched (same
+    # thesis, skim claims present), carry those claims into the deep build so it re-grades them at full
+    # strength instead of re-running the web fan-out. A steered/explicit-thesis or direct-picks commit
+    # (thesis ≠ the refined node's, or no refined node) falls through to a full re-research.
+    prior = None
+    if _kind(build_from) == "refined":
+        skim = build_from.get("research") or {}
+        if skim.get("claims") and (build_from.get("thesis") or "").strip() == thesis.strip():
+            prior = {"thesis": build_from.get("thesis"), "founder_edge": build_from.get("founder_edge"),
+                     "claims": skim["claims"]}
     tok = uuid.uuid4().hex[:8]
     tree["_run"] = tok                       # this run's epoch — a pivot mid-run invalidates it
     store.plan_save(sid, status="researching", stage="researching", tree=tree)
-    threading.Thread(target=_deep_build, args=(sid, thesis, s.get("user"), tok, picks),
+    threading.Thread(target=_deep_build, args=(sid, thesis, s.get("user"), tok, picks, prior),
                      daemon=True).start()
     return {"id": sid}
 

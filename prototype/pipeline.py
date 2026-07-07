@@ -450,6 +450,17 @@ class Claim:
     promotes_category: str | None
     as_of: int | None = None   # the year the stat refers to (for staleness labeling); None if unstated
 
+    def to_dict(self) -> dict:
+        """JSON-safe dict so a run's fetched claims can be persisted (e.g. carried on a refined node)
+        and re-graded later without re-fetching from the web."""
+        return {"text": self.text, "source_url": self.source_url, "quantitative": self.quantitative,
+                "promotes_category": self.promotes_category, "as_of": self.as_of}
+
+    @staticmethod
+    def from_dict(d: dict) -> "Claim":
+        return Claim(d.get("text", ""), d.get("source_url", ""), bool(d.get("quantitative", True)),
+                     d.get("promotes_category"), d.get("as_of"))
+
 
 RESEARCH_ATTEMPTS = 2   # one reprompt if the first reply has no parseable, gradeable claims
 

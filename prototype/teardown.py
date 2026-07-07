@@ -121,7 +121,8 @@ def page_shell(title: str, desc: str, body: str) -> str:
 from spine import _label_triangulation, _row_host  # noqa: E402,F401 — engine helpers live in the spine now
 
 
-def build_evidence(idea: str, headlines: int, on_progress=None, on_phase=None, max_lanes=None, votes=None):
+def build_evidence(idea: str, headlines: int, on_progress=None, on_phase=None, max_lanes=None,
+                   votes=None, sink=None):
     from spine import run_engine  # lazy: --rebuild needs no API and no pipeline import
     # Surface the conductor's typed phase log as the live activity feed: when the caller wired a
     # progress stream but no explicit phase sink, forward each phase as a readable "⚙ <phase> · …" line
@@ -134,7 +135,7 @@ def build_evidence(idea: str, headlines: int, on_progress=None, on_phase=None, m
                 line += f" · ${ev.cost:.3f}"
             on_progress(line)
     return run_engine(idea, headlines, on_progress=on_progress, on_phase=on_phase,
-                      max_lanes=max_lanes, votes=votes)
+                      max_lanes=max_lanes, votes=votes, sink=sink)
 
 
 def write_prose(idea: str, rows) -> dict:
@@ -150,10 +151,12 @@ def write_prose(idea: str, rows) -> dict:
         "Be concrete and specific. Do NOT invent statistics, only the evidence section carries numbers.\n\n"
         f"IDEA:\n{idea}\n\nGATE-CLEARED EVIDENCE (context only):\n{cleared_block}"
     )
-    # VOICE author seam: generate → voice-lint → reprompt until clean (bounded).
+    # VOICE author seam: generate → voice-lint → reprompt until clean (bounded). max_fix=2 (T3): the
+    # teardown offer summary is a non-final draft (runs on every research pass incl. the throwaway
+    # skim); the final artifact set (generate_full) keeps the full 3.
     out, _residual = spine.run_author(
         lambda fb: call("teardown_synth", SONNET, max_tokens=700, prompt=base + (f"\n\n{fb}" if fb else "")),
-        voice_lint.lint)
+        voice_lint.lint, max_fix=2)
     data = extract_json(out)
     data = data if isinstance(data, dict) else {}
     return {"title": data.get("title") or "Cited Offer Teardown",
@@ -194,24 +197,39 @@ MOCK_RESULT = {
 
 
 def generate(idea: str, headlines: int = HEADLINES_TO_RESEARCH, mock: bool = False,
-             on_progress=None, max_lanes: int | None = None, votes: int | None = None) -> dict:
-    """Run one teardown and return {prose, rows, stats, cost}. `mock=True` returns canned data with
-    no API calls, for local/frontend dev and for testing the metering without spend. `on_progress(line)`
-    streams milestones (incl. `§LANES§`/`§LANEDONE§` leaf events) so the UI can paint the fan-out live.
-    `max_lanes` caps the research fan-out (the funnel's light skim vs the full deep run). `votes` scales
-    the moat's grade vote count (1 on the throwaway skim, default 3 on the committed build)."""
+             on_progress=None, max_lanes: int | None = None, votes: int | None = None,
+             prior_claims: list | None = None) -> dict:
+    """Run one teardown and return {prose, rows, stats, cost, claims}. `mock=True` returns canned data
+    with no API calls, for local/frontend dev and for testing the metering without spend.
+    `on_progress(line)` streams milestones (incl. `§LANES§`/`§LANEDONE§` leaf events) so the UI can
+    paint the fan-out live. `max_lanes` caps the research fan-out (the funnel's light skim vs the full
+    deep run). `votes` scales the moat's grade vote count (1 on the throwaway skim, default 3 on the
+    committed build). `claims` in the result is the fetched (Claim-dict, lane) list, serialized so a
+    later run can re-grade WITHOUT re-fetching. `prior_claims` (T2 reuse path) = that carried list; when
+    given, the web fan-out is SKIPPED and the claims are re-graded (at full `votes`) + re-source-chased,
+    roughly halving the deep build's web wait when the thesis is unchanged from the skim."""
     if mock:
-        out = {**MOCK_RESULT, "prose": dict(MOCK_RESULT["prose"])}
+        out = {**MOCK_RESULT, "prose": dict(MOCK_RESULT["prose"]), "claims": []}
         if max_lanes:
             out["lanes"] = list(MOCK_RESULT["lanes"])[:max_lanes]   # mock paints the capped fan-out too
         return out
-    from pipeline import LEDGER
+    from pipeline import Claim, LEDGER
+    from spine import regrade_engine
     start = len(LEDGER.rows)
-    rows, stats, lanes = build_evidence(idea, headlines, on_progress=on_progress,
-                                        max_lanes=max_lanes, votes=votes)
+    if prior_claims:
+        # Reuse path: re-grade the skim's already-fetched claims at full strength; no plan, no re-fan.
+        claim_lanes = [(Claim.from_dict(c), c.get("lane", "")) for c in prior_claims]
+        rows, stats = regrade_engine(claim_lanes, headlines, on_progress=on_progress, votes=votes)
+        lanes = list(dict.fromkeys(ln for _c, ln in claim_lanes if ln))   # distinct carried lanes
+        sink = {"claims": claim_lanes}
+    else:
+        sink = {}
+        rows, stats, lanes = build_evidence(idea, headlines, on_progress=on_progress,
+                                            max_lanes=max_lanes, votes=votes, sink=sink)
     prose = write_prose(idea, rows)
+    claims_out = [{**c.to_dict(), "lane": ln} for c, ln in sink.get("claims", [])]
     return {"prose": prose, "rows": rows, "stats": stats, "lanes": lanes,
-            "cost": round(LEDGER.cost_slice(start), 4)}
+            "claims": claims_out, "cost": round(LEDGER.cost_slice(start), 4)}
 
 
 MOCK_FULL = {
@@ -250,7 +268,9 @@ def generate_full(idea: str, headlines: int = HEADLINES_TO_RESEARCH, mock: bool 
         "claim only if you append '(unverified vendor claim)' right after it. Never present a flagged "
         "number as established fact.\n\n"
         f"IDEA:\n{idea}\n\nCITED RESEARCH:\n{cited}\n\nFLAGGED (vendor) CLAIMS:\n{flagged}")
-    # VOICE author seam: generate → voice-lint → reprompt until clean (bounded).
+    # VOICE author seam: generate → voice-lint → reprompt until clean. This is the FINAL assembled
+    # artifact set (the paid deliverable), so it keeps the full max_fix=3 (default) — non-final section
+    # drafts drop to 2 (T3).
     artifacts, _residual = spine.run_author(
         lambda fb: call("synth_full", SONNET, max_tokens=3500, prompt=base + (f"\n\n{fb}" if fb else "")),
         voice_lint.lint)

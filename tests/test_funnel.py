@@ -170,6 +170,64 @@ def test_build_receipts_persist_on_the_node(client):
     assert r.status_code == 200 and r.json()["log"]
 
 
+def test_commit_reuses_the_skim_claims_when_thesis_unchanged(client, monkeypatch):
+    # T2: committing the SAME refined idea the skim researched carries its fetched claims into the deep
+    # build (prepare gets `prior`) so it re-grades instead of re-running the web fan-out. (Mock merge
+    # fetches no real claims, so inject a skim claim onto the refined node to fire the reuse predicate.)
+    import app.main as m
+    s = _brainstorm(client)
+    sid = s["id"]
+    client.post(f"/api/plan/{sid}/merge", json={"options": [o["id"] for o in s["activeNode"]["options"]]})
+    s = wait_status(client, sid)
+    refined_id = s["activeNode"]["id"]
+    full = m.store.plan_get(sid)
+    tree = full["tree"]
+    node = tree["nodes"][refined_id]
+    node["research"] = dict(node.get("research") or {})
+    node["research"]["claims"] = [{"text": "~2.5M US home-service firms", "source_url":
+                                   "https://census.gov", "quantitative": True, "lane": "market?"}]
+    m.store.plan_save(sid, tree=tree)
+
+    seen = {}
+    real_prepare = m.planner.prepare
+
+    def spy(idea, mock=False, on_progress=None, prior=None):
+        seen["prior"] = prior
+        return real_prepare(idea, mock=mock, on_progress=on_progress, prior=prior)
+
+    monkeypatch.setattr(m.planner, "prepare", spy)
+    client.post(f"/api/plan/{sid}/commit", json={})
+    wait_status(client, sid)
+    assert seen["prior"] and seen["prior"]["claims"][0]["source_url"] == "https://census.gov"
+    assert seen["prior"]["thesis"] == node["thesis"]      # reuse only when the thesis is unchanged
+
+
+def test_commit_from_body_thesis_does_not_reuse(client, monkeypatch):
+    # A steered commit (explicit body thesis ≠ the refined node's) must NOT reuse the skim — it forces a
+    # full re-research on the new thesis. Guards the equality gate on the reuse predicate.
+    import app.main as m
+    s = _brainstorm(client)
+    sid = s["id"]
+    client.post(f"/api/plan/{sid}/merge", json={"options": [o["id"] for o in s["activeNode"]["options"]]})
+    s = wait_status(client, sid)
+    refined_id = s["activeNode"]["id"]
+    full = m.store.plan_get(sid)
+    tree = full["tree"]
+    tree["nodes"][refined_id].setdefault("research", {})["claims"] = [
+        {"text": "x", "source_url": "https://census.gov", "quantitative": True, "lane": "market?"}]
+    m.store.plan_save(sid, tree=tree)
+
+    seen = {}
+    real_prepare = m.planner.prepare
+    monkeypatch.setattr(m.planner, "prepare",
+                        lambda idea, mock=False, on_progress=None, prior=None:
+                        seen.update(prior=prior) or real_prepare(idea, mock=mock, on_progress=on_progress))
+    client.post(f"/api/plan/{sid}/commit",
+                json={"thesis": "A totally different steered thesis the skim never researched"})
+    wait_status(client, sid)
+    assert seen["prior"] is None                          # steered thesis → no reuse, full research
+
+
 def test_commit_from_body_thesis(client):
     s = _brainstorm(client)
     sid = s["id"]
