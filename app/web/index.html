@@ -11,7 +11,6 @@ __FILG_HEAD__
     <div class=left-top>
       <button type=button class=logo onclick="v2newPlan()">FILG</button>
       <div class=lt-right>
-        <button type=button class="ghost small mctl" onclick="mToggle()" aria-label="Collapse the chat drawer" title="Collapse — see the graph">⟨</button>
         <button id=stackchip-w class="ghost stackchip" type=button onclick="stackModal()" title="Pick your model crew"></button>
         <button id=tierchip class="ghost stackchip tierchip" type=button hidden onclick="pricingModal()" title="Your plan + this month's allowance"></button>
         <span class=meter id=meter title="tokens + $ this session">0 tok · $0.00</span>
@@ -78,6 +77,7 @@ __FILG_HEAD__
       <button type=button class=send id=ws-send onclick="sendPrompt()">Send →</button>
       <div class=err id=ws-err></div>
     </div>
+    <button type=button class=mrail-in onclick="mToggle()" aria-label="Collapse the chat drawer" title="Collapse">&#8249;</button>
   </aside>
   <!-- Research EXPANDED: the stack slides out into its own left-anchored drawer (v1-style column)
        and the chat gets the full leftmost drawer back. -->
@@ -85,8 +85,8 @@ __FILG_HEAD__
     <div class=rpane-head><span>Graded research</span>
       <span class=bacts>
         <button type=button class="ghost small" onclick="collapseResearch()" title="Tuck the research back into the chat drawer">⇤ Tuck in</button>
-        <button type=button class="ghost small mctl" onclick="mToggle()" aria-label="Collapse the research drawer" title="Collapse — see the graph">⟨</button>
       </span></div>
+    <button type=button class=mrail-in onclick="mToggle()" aria-label="Collapse the drawer" title="Collapse">&#8249;</button>
     <div class=rlist id=rlist2></div>
   </aside>
   <aside class=rdrawer id=bdrawer aria-hidden=true>
@@ -95,12 +95,12 @@ __FILG_HEAD__
         <button type=button class="ghost small" onclick="forgeModal()" title="Forge a custom director">⚒ Forge</button>
         <button type=button class="ghost small" onclick="stressGo()" title="Adversarial assumption stress-test">🧪 Stress-test</button>
         <button type=button class="ghost small" onclick="collapseBoard()" title="Tuck the board back into the chat drawer">⇤ Tuck in</button>
-        <button type=button class="ghost small mctl" onclick="mToggle()" aria-label="Collapse the board drawer" title="Collapse — see the graph">⟨</button>
       </span></div>
+    <button type=button class=mrail-in onclick="mToggle()" aria-label="Collapse the drawer" title="Collapse">&#8249;</button>
     <div class=bseats id=bseats2 title="Who's seated — click to bench/seat for the next convene"></div>
     <div class=rlist id=blist2></div>
   </aside>
-  <button id=mexpand type=button onclick="mToggle()" aria-label="Open the chat drawer" title="Open the drawer">💬</button>
+  <button id=mrail type=button onclick="mToggle()" aria-label="Open the drawer" title="Open">&#8250;</button>
   <main class=right id=right>
     <!-- The decision graph IS the right side. Documents and steps live INSIDE the nodes: the camera
          zooms into the node that's ready (its content expands in place), zooms out when you type

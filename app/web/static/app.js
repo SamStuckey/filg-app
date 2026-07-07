@@ -1030,7 +1030,11 @@ function renderGraph(){
     selected:WIP_PENDING.join||undefined};   // the node being born — loading lives HERE
   const wip=WIP_PENDING?'_wip':null;
   const rrect=$('right').getBoundingClientRect();
-  const FW=focusW(rrect), FH=rrect.height-120;   // open-doc box: panel-fit, margin on every side
+  // open-doc box: desktop = panel-fit with margins; mobile = FILL the available screen (a guessed
+  // panel width overflowed the phone — Sam's QA, 2026-07-06)
+  const MOB=window.matchMedia&&window.matchMedia('(max-width:820px)').matches;
+  const FW=MOB?Math.max(200,rrect.width-12):focusW(rrect);
+  const FH=rrect.height-(MOB?96:120);
   const {pos,kids,joins,tp}=layoutGraph(m,wip,active,FOCUS?{fw:FW,fh:FH}:null);
   LAYOUT={pos,kids,tp,m};   // the minimap, fit-view, and keyboard nav all read the LAST layout
   const qhits=GQUERY?new Set(Object.keys(m).filter(id=>nodeMatches(m[id],GQUERY))):null;

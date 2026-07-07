@@ -239,7 +239,10 @@ ul.qs li{margin:4px 0}
    tree animates unobstructed. An expanded section (research/board ⇥) REPLACES the chat
    drawer; ⇤ Tuck in returns to the split chat drawer. dvh tracks the browser bar — the old
    stacked layout overflowed the 100%/overflow:hidden workspace and cut the bottom off. ── */
-.mctl,#mexpand{display:none}
+/* the open/close TABS follow v1's drawer-rail/sd-rail pattern: a 20×54 tab on the drawer's outer
+   edge collapses it; when collapsed, the same tab sticks out of the screen's left edge to reopen */
+.mrail-in,#mrail{display:none;align-items:center;justify-content:center;width:20px;height:54px;
+  padding:0;border:0;cursor:pointer;background:#555;color:#fff;font-size:18px;line-height:1}
 @media (max-width:820px){
   .workspace{height:100vh;height:100dvh}
   .right{min-width:0}
@@ -256,16 +259,15 @@ ul.qs li{margin:4px 0}
     padding-bottom:calc(14px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;
     border-right:1px solid var(--line);background:var(--bg);box-shadow:10px 0 30px rgba(0,0,0,.35)}
   .workspace.mclosed .rdrawer.open{transform:translateX(-103%)}
-  .mctl{display:inline-flex}
-  #mexpand{position:fixed;left:12px;bottom:calc(16px + env(safe-area-inset-bottom,0px));z-index:23;
-    display:none;width:46px;height:46px;border-radius:50%;border:1px solid var(--line);
-    background:var(--card);color:var(--fg);font-size:19px;box-shadow:0 4px 18px rgba(0,0,0,.35)}
-  .workspace.mclosed #mexpand{display:block}
-  .workspace.full #mexpand{display:none}
+  .mrail-in{display:flex;position:absolute;right:0;top:50%;transform:translateY(-50%);z-index:12;
+    border-radius:8px 0 0 8px}
+  .workspace.mclosed #mrail{display:flex;position:fixed;left:0;top:50%;transform:translateY(-50%);
+    z-index:23;border-radius:0 8px 8px 0}
+  .workspace.full #mrail{display:none}
   /* the landing keeps the whole screen (there's no graph yet) and scrolls itself */
   .workspace.full .left{position:fixed;inset:0;width:auto;max-height:none;transform:none;
     overflow-y:auto;border-right:none;box-shadow:none}
-  .workspace.full .mctl{display:none}
+  .workspace.full .mrail-in{display:none}
   .toasts{z-index:40}
 }
 .jokecard{border:1px solid var(--line);border-radius:12px;padding:16px;margin-top:16px;text-align:left}
@@ -484,9 +486,9 @@ ul.qs li{margin:4px 0}
 
 /* auth + pricing modal furniture (ported from v1's modal, restyled plain) */
 .modal.wide{width:min(700px,94vw)}
-.authgate{margin:6px 0 2px}
-.authgate .gbtn{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;margin-bottom:8px;
-  background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:10px 12px;font-weight:700}
+.authgate{margin:6px 0 2px;display:flex;gap:8px}   /* the sign-in choices share one row, resized to fit */
+.authgate .gbtn{display:flex;align-items:center;justify-content:center;gap:8px;flex:1 1 0;min-width:0;
+  background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:10px 8px;font-weight:700}
 .authgate .gbtn:hover{border-color:var(--fg)}
 .tiergrid{display:flex;gap:10px;margin-top:8px;flex-wrap:wrap}
 .tiercard{border:1px solid var(--line);border-radius:10px;padding:14px;flex:1;min-width:180px;background:var(--card)}
