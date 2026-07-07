@@ -20,7 +20,7 @@ Two packages with a hard boundary, plus deploy artifacts:
 |---|---|
 | `engine/` | **The decision engine — use-case-agnostic.** Research fan-out + the source-credibility gate (`pipeline.py`), the deterministic conductor (`spine.py`), the graded-evidence entry point (`evidence.py`), the decision tree — nodes, kinds, attachments (`tree.py`), providers/BYOK (`provider.py`), the model catalog, the VOICE linter, metering (`usage.py`). Knows nothing about business plans; `tests/test_engine_neutrality.py` enforces it. |
 | `app/` | **The business-planning product.** FastAPI routes (`main.py`) over layered modules: `ops.py` (how an op runs: slots, guards, metering), `views.py` (session → frontend shaping), `exports.py` (free text exports), `access.py` (entitlements), plus the funnel (`brainstorm`/`intake`/`planner`), advisors (`personas`/`board`/`advisor`), persistence (`store.py`) and billing. `app/domain/` is the use-case plug: the section spec, canned copy, node vocabulary, research framing, help facts. `app/web/` is the SPA. |
-| `scripts/` | Dev CLI (`dev.py`), the seeded Playwright monkey (`monkey.py`), the weekly teardown publisher (`teardown_publish.py`), standalone measurement harnesses. |
+| `scripts/` | Dev CLI (`dev.py`), the seeded Playwright monkey (`monkey.py`), the weekly teardown publisher (`teardown_publish.py`), the live BYOK path check (`verify_openrouter.py`). |
 | `landing/` · `teardowns/` | The static marketing site + the published teardown issues. |
 | `tests/` | 350+ pytest tests (mock mode, no spend) — wire-shape goldens, the engine-neutrality beacon, contract tests. |
 

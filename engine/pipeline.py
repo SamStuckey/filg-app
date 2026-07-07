@@ -17,8 +17,7 @@ Owns:
                         primary/neutral re-cite for flagged claims.
 
 The deterministic control flow that SEQUENCES these lives in spine.py; the graded-evidence
-entry point apps call is evidence.py. The old standalone measurement CLI lives in
-scripts/pipeline_live_run.py.
+entry point apps call is evidence.py.
 """
 
 from __future__ import annotations
