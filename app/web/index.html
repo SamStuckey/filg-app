@@ -79,6 +79,7 @@ __FILG_HEAD__
       <div class=err id=ws-err></div>
     </div>
     <button type=button class=mrail-in onclick="mToggle()" aria-label="Collapse the chat drawer" title="Collapse">&#8249;</button>
+    <div class=hgrip data-drawer=left title="Drag to resize the drawer"></div>
   </aside>
   <!-- Research EXPANDED: the stack slides out into its own left-anchored drawer (v1-style column)
        and the chat gets the full leftmost drawer back. -->
@@ -89,6 +90,7 @@ __FILG_HEAD__
       </span></div>
     <button type=button class=mrail-in onclick="mToggle()" aria-label="Collapse the drawer" title="Collapse">&#8249;</button>
     <div class=rlist id=rlist2></div>
+    <div class=hgrip data-drawer=rdrawer title="Drag to resize"></div>
   </aside>
   <aside class=rdrawer id=bdrawer aria-hidden=true>
     <div class=rpane-head><span>Board room</span>
@@ -100,6 +102,7 @@ __FILG_HEAD__
     <button type=button class=mrail-in onclick="mToggle()" aria-label="Collapse the drawer" title="Collapse">&#8249;</button>
     <div class=bseats id=bseats2 title="Who's seated — click to bench/seat for the next convene"></div>
     <div class=rlist id=blist2></div>
+    <div class=hgrip data-drawer=bdrawer title="Drag to resize"></div>
   </aside>
   <button id=mrail type=button onclick="mToggle()" aria-label="Open the drawer" title="Open">&#8250;</button>
   <main class=right id=right>

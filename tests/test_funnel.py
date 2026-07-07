@@ -520,3 +520,13 @@ def test_root_shell_and_assets_serve(client):
                    "enterSummary", "exitSummary", "summaryHtml",
                    "openAccount", "acctExport", "acctPrompt"):
         assert needle in js, needle
+    # the 2026-07-07 UX wave: gate-question answers + confirm gate, click-a-line comments, chat-send
+    # debounce, drawer width-resize/collapse, and the landing help chat
+    for needle in ("gateProceed", "foldGateAnswers", "toggleGateQ", "setGateAns", "atRefinedGate",
+                   "modalConfirm", "openCmtPop", "setChatBusy", "CHAT_BUSY",
+                   "initDrawerResize", "setDrawerWidth", "landingHelpSend", "landingHelpExit"):
+        assert needle in js, needle
+    # the drawer resize grips render in the shell; the landing help chat has its reveal class
+    assert page.text.count("class=hgrip") >= 3 and "data-drawer=left" in page.text
+    css = client.get("/static/styles.css").text
+    assert ".hgrip" in css and "helpchat" in css and "chatbusy" in css

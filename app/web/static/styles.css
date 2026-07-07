@@ -23,11 +23,21 @@ textarea:focus{border-color:var(--accent)}
   transition:max-height .55s cubic-bezier(.4,0,.2,1),opacity .3s ease,padding .55s ease;padding:0 20px}
 .hero h1{font-size:30px;margin:0 0 12px;font-weight:700}
 #landing-sub{color:var(--muted);margin:0 0 22px;font-size:15px}
+/* once a plan exists the hero is collapsed — but as a 0-height flex child it still ate a 12px gap
+   on EACH side, doubling the empty space above the section header (SUMMARY / GRADED RESEARCH / …).
+   Drop it from the flow entirely off the landing so the header sits tight under the FILG bar. */
+.workspace:not(.full) .hero{display:none}
 .workspace.full .left{width:100%;min-width:100%;border-right:none}
 .workspace.full .hero{max-height:52vh;opacity:1;padding:9vh 20px 8px}
 .workspace.full .chatlog,.workspace.full .modechips{display:none}
 .workspace.full #ws-wrap{max-width:640px;margin:0 auto;width:100%}
 .workspace.full #ws-box{min-height:92px;font-size:16px}
+/* the landing HELP CHAT: a help question on the landing expands into a conversation (not a build) —
+   collapse the big headline and reveal the chat log between it and the box (Sam, 2026-07-07) */
+.workspace.full.helpchat .hero{max-height:0;opacity:0;padding:0}
+.workspace.full.helpchat .chatlog{display:flex;flex:1 1 auto;min-height:0;overflow-y:auto;
+  max-width:640px;margin:0 auto;width:100%}
+.workspace.full.helpchat #ws-box{min-height:70px}
 .workspace.full .right{flex:0 0 0;opacity:0;padding:0;pointer-events:none}
 .qmark{display:none}
 .workspace.full .qmark{display:flex;align-items:center;justify-content:center;bottom:66px}   /* riding the textarea, clear of the Start button */
@@ -46,10 +56,10 @@ textarea:focus{border-color:var(--accent)}
 
 /* ── Workspace split ── */
 .workspace{display:flex;height:100%;overflow:hidden}
-.left{width:360px;min-width:300px;border-right:1px solid var(--line);padding:14px;display:flex;
+.left{width:var(--left-w,360px);min-width:300px;border-right:1px solid var(--line);padding:14px;display:flex;
   flex-direction:column;gap:12px;overflow:hidden;position:relative;z-index:10;
-  transition:width .55s cubic-bezier(.4,0,.2,1),min-width .55s cubic-bezier(.4,0,.2,1)}   /* the chatlog scrolls, the box stays pinned; full mode animates into the sidebar */
-@media (min-width:1100px){.left{width:33.333vw}}   /* a third of the screen on big displays */
+  transition:width .55s cubic-bezier(.4,0,.2,1),min-width .55s cubic-bezier(.4,0,.2,1)}   /* the chatlog scrolls, the box stays pinned; full mode animates into the sidebar; --left-w = the drag-resized width */
+@media (min-width:1100px){.left{width:var(--left-w,33.333vw)}}   /* a third of the screen on big displays */
 .left-top{display:flex;justify-content:space-between;align-items:center}
 .logo{background:none;border:none;font-weight:800;font-size:18px;color:var(--accent)}
 .modechips{display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap}
@@ -127,6 +137,14 @@ textarea:focus{border-color:var(--accent)}
 @keyframes gspin{to{transform:rotate(360deg)}}
 #ws-send.busy::after{content:'';display:inline-block;width:1.2em;text-align:left;animation:ell 1.2s steps(1) infinite}
 @keyframes ell{0%{content:''}25%{content:'.'}50%{content:'..'}75%{content:'...'}}
+/* a chat send in flight DEBOUNCES the focused-node CTAs: dimmed + click-blocked + a spinner over the
+   row, so feedback-then-race-click-"next step" can't fire on stale state (cleared when the reply lands) */
+body.chatbusy .nbody .ctarow{position:relative;pointer-events:none}
+body.chatbusy .nbody .ctarow .stage-cta{opacity:.5}
+body.chatbusy .nbody .ctarow::after{content:'';position:absolute;left:50%;top:50%;width:18px;height:18px;
+  transform:translate(-50%,-50%);border-radius:50%;border:2px solid color-mix(in srgb,var(--accent) 30%,transparent);
+  border-top-color:var(--accent);animation:gspin .8s linear infinite;z-index:3;pointer-events:none;
+  background:var(--card);box-shadow:0 0 0 7px var(--card)}
 
 /* ── Zoomed-in node: the document/step expands IN PLACE inside the node ── */
 #gview.ease{transition:transform .6s cubic-bezier(.22,.8,.3,1)}
@@ -203,6 +221,22 @@ textarea:focus{border-color:var(--accent)}
 .gate b{color:var(--fg)}
 ul.qs{margin:6px 0 4px;padding-left:20px}
 ul.qs li{margin:4px 0}
+/* interactive gate questions: a clickable row that expands to an answer box (§v2 #14) */
+ul.qs.qint{list-style:none;padding:0;margin:8px 0 4px}
+ul.qs.qint li.qrow{margin:6px 0;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+li.qrow.answered{border-color:color-mix(in srgb,var(--green) 55%,var(--line))}
+.qtoggle{display:flex;gap:8px;align-items:flex-start;width:100%;text-align:left;background:none;
+  border:none;color:var(--fg);font:inherit;font-size:14px;padding:9px 11px;cursor:pointer}
+.qtoggle:hover{background:color-mix(in srgb,var(--accent) 6%,transparent)}
+.qmarker{flex:none;width:18px;height:18px;border-radius:50%;border:1px solid var(--line);
+  display:inline-flex;align-items:center;justify-content:center;font-size:12px;color:var(--muted);margin-top:1px}
+li.qrow.answered .qmarker{border-color:var(--green);color:var(--green)}
+.qtext{flex:1}
+.qans{max-height:0;overflow:hidden;transition:max-height .2s ease;padding:0 11px}
+li.qrow.open .qans{max-height:180px;padding:0 11px 10px}
+.qans textarea{width:100%;box-sizing:border-box;font:inherit;font-size:13.5px;resize:vertical;
+  border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--fg);padding:6px 8px}
+.qfold:disabled{opacity:.45;cursor:default}
 .kept li{color:var(--green)} .dropped li{color:var(--muted)}
 .dropped li .why{opacity:.8}
 .verdict{display:inline-block;font-size:12px;font-weight:700;text-transform:uppercase;padding:2px 10px;
@@ -304,6 +338,10 @@ ul.qs li{margin:4px 0}
 .cmts .cmtn{flex:1}
 .cmts .cmtx{border:none;background:none;color:var(--muted);font-size:15px;cursor:pointer;padding:0 4px}
 .cmts .cmtx:hover{color:var(--red)}
+/* click-a-line / highlight-to-comment affordance: a rendered doc block lifts on hover (v1 parity) */
+.draft p,.draft li,.draft h1,.draft h2,.draft h3,.draft h4,.draft blockquote{border-radius:4px;transition:background .12s}
+.draft p:hover,.draft li:hover,.draft h1:hover,.draft h2:hover,.draft h3:hover,.draft h4:hover,.draft blockquote:hover{
+  background:color-mix(in srgb,var(--accent) 8%,transparent);cursor:pointer}
 
 /* ── #12: chapter labels grouping the section tabs in the reader (display only) ── */
 .dchap{align-self:center;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
@@ -313,11 +351,14 @@ ul.qs li{margin:4px 0}
 /* ── v2 research mode: ONE chat, three displays. The list lives IN the chat drawer (full → the
    history is covered; split → top half research, bottom half chat) or slides out into its own
    left-anchored drawer (expanded). All transitions are flex/opacity so the chat "slides". ── */
-.rpane{display:flex;flex-direction:column;min-height:0;flex:0 1 0%;opacity:0;overflow:hidden;
+/* INACTIVE panes are display:none, not just 0-height — a 0-height flex child still eats a 12px gap on
+   each side, and THREE stacked inactive panes (rpane+hpane before spane) piled ~36px of dead space
+   above the section header. The active pane lights display:flex via its mode rule below. */
+.rpane{display:none;flex-direction:column;min-height:0;flex:0 1 0%;opacity:0;overflow:hidden;
   transition:flex .45s ease,opacity .3s ease;pointer-events:none}
 /* research, board, and help share the .rpane machinery; the MODE rules are id-scoped so only the
    active surface lights (a bare .rpane selector would raise every pane at once) */
-.left.rfull #rpane,.left.rsplit #rpane,.left.bfull #bpane,.left.bsplit #bpane,.left.hsplit #hpane{opacity:1;pointer-events:auto}
+.left.rfull #rpane,.left.rsplit #rpane,.left.bfull #bpane,.left.bsplit #bpane,.left.hsplit #hpane{display:flex;opacity:1;pointer-events:auto}
 .left.rfull #rpane,.left.bfull #bpane{flex:1 1 auto}
 .left.rfull .chatlog,.left.bfull .chatlog{flex:0 1 0%;min-height:0;opacity:0;pointer-events:none}
 .left.rsplit #rpane,.left.bsplit #bpane{flex:0 0 46%;border-bottom:1px dashed var(--line);padding-bottom:6px;margin-bottom:4px}
@@ -334,6 +375,10 @@ ul.qs li{margin:4px 0}
 .chatlog{transition:flex .45s ease,opacity .3s ease}
 .rpane-head{display:flex;justify-content:space-between;align-items:center;font-size:11px;font-weight:700;
   text-transform:uppercase;letter-spacing:.06em;color:var(--muted);padding:6px 2px 6px;flex:0 0 auto}
+/* pull the active section pane up under the FILG bar so the buffer above the header ≈ the buffer
+   below it (the header's own 6px padding is the visible gap), instead of the doubled negative space */
+.left.rsplit #rpane,.left.bsplit #bpane,.left.hsplit #hpane,.left.ssplit #spane,
+.left.rfull #rpane,.left.bfull #bpane{margin-top:-8px}
 .rpane-head .ghost.small{font-size:12px;padding:3px 9px}
 .rlist{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:6px;padding:2px 2px 8px}
 .rlist .thinking{font-size:13px}
@@ -344,13 +389,14 @@ ul.qs li{margin:4px 0}
 .rrow a{color:var(--accent);font-size:12px;margin-left:6px;text-decoration:none}
 .rrow .rtier{font-size:11px;color:var(--muted);margin-left:6px;text-transform:uppercase;letter-spacing:.04em}
 .rrow.flagged .rtier{color:var(--yellow)}
-.rdrawer{flex:0 0 0%;width:0;min-width:0;overflow:hidden;opacity:0;pointer-events:none;
+.rdrawer{flex:0 0 0%;width:0;min-width:0;overflow:hidden;opacity:0;pointer-events:none;position:relative;
   border-right:1px solid var(--line);background:var(--bg);display:flex;flex-direction:column;
   padding:14px 0 14px;transition:flex .45s ease,opacity .3s ease}
 /* an OPEN expanded drawer matches the chat drawer's width — chat (1/3) + stack (1/3) ≈ 2/3 of the
-   screen, the graph keeps the rest (Sam, 2026-07-06) */
-.rdrawer.open{flex:0 0 360px;width:360px;opacity:1;pointer-events:auto;padding:14px}
-@media (min-width:1100px){.rdrawer.open{flex:0 0 33.333vw;width:33.333vw}}
+   screen, the graph keeps the rest (Sam, 2026-07-06); --rd-w = the drag-resized width (only bites
+   when .open, so closing still zeroes the width) */
+.rdrawer.open{flex:0 0 var(--rd-w,360px);width:var(--rd-w,360px);opacity:1;pointer-events:auto;padding:14px}
+@media (min-width:1100px){.rdrawer.open{flex:0 0 var(--rd-w,33.333vw);width:var(--rd-w,33.333vw)}}
 .workspace.full .rpane,.workspace.full .rdrawer{display:none}   /* no research surface on the landing */
 
 /* ── Graph chrome (2026-07-05): search-glow · fit/zoom controls · minimap · stubs · wayfinding ── */
@@ -452,12 +498,19 @@ ul.qs li{margin:4px 0}
 .vgrip:hover::after,.vgrip.dragging::after{background:var(--accent)}
 .left.rfull .vgrip,.left.bfull .vgrip{display:none}   /* resize belongs to the SPLIT boundary only */
 .rpane.resizing{transition:none}   /* a live drag needs 1:1 tracking, not the .45s ease */
+/* the drawer WIDTH is draggable too (Sam, 2026-07-07): a thin grip on the right edge of the chat
+   drawer AND the expanded research/board drawer. Desktop only (mobile drawers are full-height sheets). */
+.hgrip{display:none;position:absolute;top:0;right:0;width:7px;height:100%;cursor:col-resize;z-index:11;
+  touch-action:none;user-select:none}
+.hgrip::after{content:"";position:absolute;top:0;right:0;width:2px;height:100%;background:transparent;transition:background .15s}
+.hgrip:hover::after,.hgrip.dragging::after{background:var(--accent)}
+.left.resizing,.rdrawer.resizing{transition:none}   /* 1:1 tracking during a width drag */
 
 /* ── The gating wave: summary display · auth/pricing modals · tier chip · the account surface ── */
 /* Summary is the 4th display state of the chat drawer (the hsplit mechanism, green-tinted). */
 .mchip[data-mode=summary].on{border-color:var(--green);color:var(--green)}
 .promptwrap.summary textarea{background:color-mix(in srgb,var(--green) 8%,var(--card));border-color:var(--green)}
-.left.ssplit #spane{opacity:1;pointer-events:auto;flex:0 1 auto;max-height:46%;
+.left.ssplit #spane{display:flex;opacity:1;pointer-events:auto;flex:0 1 auto;max-height:46%;
   border-bottom:1px dashed var(--line);padding-bottom:6px;margin-bottom:4px}
 .sumcard{border:1px solid var(--line);border-radius:10px;background:var(--card);padding:12px 14px;margin-bottom:8px}
 .sumcard .verdict{margin-right:6px}   /* reuses the standard verdict chip styling */
@@ -527,6 +580,27 @@ ul.qs li{margin:4px 0}
 @media (prefers-reduced-motion:reduce){
   *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;
     transition-duration:.01ms!important;scroll-behavior:auto!important}
+}
+
+/* ── Desktop (≥821px): the chat drawer collapses on ANY screen now, not just mobile, and both the
+   chat drawer and the expanded research/board drawer are width-draggable. ── */
+@media (min-width:821px){
+  /* the right-edge width grips ride only on desktop; the expanded drawer shows its grip when open */
+  .left>.hgrip{display:block}
+  .rdrawer.open>.hgrip{display:block}
+  /* the ‹ tab folds the chat drawer off the left edge; a › rail brings it back; the graph takes the
+     freed width. The collapse is a CHAT-drawer control — the expanded panes fold via ⇤ Tuck in. */
+  .left>.mrail-in{display:flex;position:absolute;right:0;top:50%;transform:translateY(-50%);z-index:13;
+    width:16px;height:46px;border-radius:7px 0 0 7px;background:color-mix(in srgb,var(--line) 85%,var(--bg));
+    color:var(--muted);box-shadow:-2px 0 6px rgba(0,0,0,.10)}
+  .left>.mrail-in:hover{color:var(--fg);background:var(--line)}
+  .rdrawer .mrail-in{display:none}
+  .workspace.mclosed:not(.full) .left{width:0;min-width:0;padding-left:0;padding-right:0;
+    border-right:none;opacity:0;pointer-events:none;overflow:hidden}
+  .workspace.mclosed:not(.full) #mrail{display:flex;position:fixed;left:0;top:50%;transform:translateY(-50%);
+    z-index:23;width:18px;height:46px;border-radius:0 7px 7px 0;background:var(--line);color:var(--fg)}
+  .workspace.mclosed:not(.full) #mrail:hover{background:var(--accent);color:#fff}
+  .workspace.full .mrail-in,.workspace.full #mrail{display:none}
 }
 
 /* ── Mobile overrides live LAST so they win over base rules by source order ── */
