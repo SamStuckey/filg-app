@@ -25,13 +25,10 @@ currently holds a labeled PLACEHOLDER seed only — swap it for real method). Th
 from __future__ import annotations
 
 import os
-import sys
 from pathlib import Path
 
 _APP = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # …/app on path → `from rag import`
-if _APP not in sys.path:
-    sys.path.insert(0, _APP)
-from rag import embed, ingest, search, store   # noqa: E402
+from . import embed, ingest, search, store   # noqa: E402
 
 METHOD_COLLECTION = "method"
 DEFAULT_METHOD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "corpus", "method")
@@ -55,7 +52,7 @@ def method_grounding(query: str, k: int = DEFAULT_K, *, collection: str = METHOD
         return "", [], 0.0
     start = None
     if not mock:
-        from pipeline import LEDGER   # meter the rerank spend; heavy import, real mode only
+        from engine.pipeline import LEDGER   # meter the rerank spend; heavy import, real mode only
         start = len(LEDGER.rows)
     hits = search.retrieve(query, k, collection=collection, mock=mock, key=key, model=model)
     if not hits:
@@ -74,7 +71,7 @@ def method_grounding(query: str, k: int = DEFAULT_K, *, collection: str = METHOD
              'and cite as [method: "<source title>"]; ignore any point that does not apply):\n' + lines)
     if mock:
         return block, sources, 0.0
-    from pipeline import LEDGER
+    from engine.pipeline import LEDGER
     return block, sources, round(LEDGER.cost_slice(start), 4)
 
 

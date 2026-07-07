@@ -3,7 +3,7 @@
 Mock paths use keyword heuristics (also what dev/frontend runs on); the real paths (patch_call)
 exercise the JSON parse + schema normalization the mock never touches."""
 
-import router
+from app import router
 
 
 # ── mock routing (keyword heuristics) ────────────────────────────────────────

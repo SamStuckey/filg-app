@@ -1,33 +1,29 @@
 #!/usr/bin/env python3
 """
-FILG MVP backend — the thin app that runs the engine for a stranger.
+FILG's route surface — the FastAPI app over the layered backend (see app/README.md).
 
-Flow: plain-text idea in → async label-don't-chase run (the engine) → graded artifact out, gated by
-the free-tier cap + daily kill switch (prototype/usage.py). Reuses the engine wholesale; nothing
-about the pipeline is reimplemented here.
+This module holds ROUTES, WALLS, and BACKGROUND WORKERS only. The logic lives in its layers:
+ops.py (how an engine op runs — slots, guards, metering), access.py (entitlements + provider
+selection), views.py (session → frontend shaping), exports.py (free text exports), domain/
+(the use-case plug), and the engine package (research, grading, the decision tree).
 
-Auth + billing are real (Supabase JWT + Stripe $39/mo), but degrade gracefully: with no Supabase /
-Stripe env set the app still runs free-tier-only on the email typed in the body (mock/dev). Paid is
-always gated on a verified user with a live subscription (app/auth.py + app/billing.py). Jobs +
-results + subscription state persist in SQLite (app/store.py); swap for Postgres + a real queue and
-this stays the same shape.
+The funnel: /api/brainstorm (anonymous spread) → /merge (converge + light skim) → /refine →
+/commit (THE WALL: account + key/subscription; the deep build) → /next /back /redraft /goto
+(the staged tree build) — plus chat routing, the board, research lookups, exports, billing.
 
 Run:
-  pip install fastapi uvicorn
-  FILG_MOCK=1 uvicorn app.main:app --reload        # free, no API/auth/billing (dev/frontend)
-  uvicorn app.main:app                              # real runs (~$0.40 each, metered)
-Env: FILG_MOCK, FILG_FREE_RUNS, FILG_DAILY_BUDGET, FILG_PAID_EMAILS (csv comp override),
-     SUPABASE_URL/SUPABASE_PUBLISHABLE_KEY (auth via JWKS), STRIPE_*/FILG_PUBLIC_URL.
+  FILG_MOCK=1 uvicorn app.main:app --reload        # dev: canned results, no spend
+  uvicorn app.main:app                              # real runs, metered
+Env: FILG_MOCK, FILG_FREE_RUNS, FILG_DAILY_BUDGET, FILG_ANTHROPIC_API_KEY (hosted key),
+     FILG_KEY_SECRET (BYOK store), SUPABASE_URL/SUPABASE_PUBLISHABLE_KEY (auth),
+     STRIPE_*/FILG_PUBLIC_URL (billing), FILG_ORPHAN_TTL_HOURS.
 """
 
 from __future__ import annotations
 
 import io
 import json
-import contextlib
 import os
-import re
-import sys
 import threading
 import time
 import traceback
@@ -41,72 +37,39 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool  # long engine calls must not block the event loop
 
-# import the engine + guardrail (prototype/) and the app-side skill/persona/board layer (app/).
+# the engine package (research/grading/metering) + the app-side skill/persona/board layer.
 _APP_DIR = Path(__file__).resolve().parent
-sys.path.insert(0, str(_APP_DIR.parent / "prototype"))
-sys.path.insert(0, str(_APP_DIR))  # app/ → bare sibling imports (personas, intake, board, skills)
-import teardown  # noqa: E402
-import usage     # noqa: E402
-import personas  # noqa: E402 — advisor/director registry (shared by ask-an-expert + the board)
-import board     # noqa: E402 — Board of Directors orchestration
-import director_forge  # noqa: E402 — forge a custom Board director from a description (distill→draft→QA)
-import gibberish  # noqa: E402 — pre-LLM "is this even an idea?" gate (saves a run, hands back a roast)
-import intake     # noqa: E402 — shape + vet (the kill-gate); /revet re-runs it after added substance
-import brainstorm # noqa: E402 — diverge/merge: the top of the funnel (1-3 directions → one refined idea)
-import router     # noqa: E402 — the single prompt box (intent routing) + the pivot-fork integration gate
-import plan_pdf   # noqa: E402 — styled PDF generation (synthesis + fpdf2 render)
-import advisor    # noqa: E402 — "chat with your plan" (grounded advisory layer)
-import context    # noqa: E402 — THE CONTEXT ENGINE: every model-facing view of session state
-import skeptic    # noqa: E402 — adversarial assumption-checking on the live research path
-import skill_registry as skills  # noqa: E402 — the skill bodies (help/system blocks)
-import provider   # noqa: E402 — BYOK: per-run LLM provider (FILG's key vs a user's OpenRouter key)
-import pipeline   # noqa: E402 — engine: per-run cost ledger (run_ledger) for safe concurrency
-import model_catalog  # noqa: E402 — model ids/prices/slugs + cached Models API availability
+from engine import usage     # noqa: E402
+from app import personas  # noqa: E402 — advisor/director registry (shared by ask-an-expert + the board)
+from app import board     # noqa: E402 — Board of Directors orchestration
+from app import director_forge  # noqa: E402 — forge a custom Board director from a description (distill→draft→QA)
+from app import gibberish  # noqa: E402 — pre-LLM "is this even an idea?" gate (saves a run, hands back a roast)
+from app import intake     # noqa: E402 — shape + vet (the kill-gate); /revet re-runs it after added substance
+from app import brainstorm # noqa: E402 — diverge/merge: the top of the funnel (1-3 directions → one refined idea)
+from app import router     # noqa: E402 — the single prompt box (intent routing) + the pivot-fork integration gate
+from app import plan_pdf   # noqa: E402 — styled PDF generation (synthesis + fpdf2 render)
+from app import advisor    # noqa: E402 — "chat with your plan" (grounded advisory layer)
+from app import context    # noqa: E402 — THE CONTEXT ENGINE: every model-facing view of session state
+from app import skeptic    # noqa: E402 — adversarial assumption-checking on the live research path
+from engine import provider   # noqa: E402 — BYOK: per-run LLM provider (FILG's key vs a user's OpenRouter key)
+from engine import pipeline   # noqa: E402 — engine: per-run cost ledger (run_ledger) for safe concurrency
+from engine import model_catalog  # noqa: E402 — model ids/prices/slugs + cached Models API availability
+from engine import tree as dtree  # noqa: E402 — the decision tree: node wiring, kinds, attachments, run epochs
 
-from . import auth, billing, keys, planner, render, store, tiers  # noqa: E402 — persistence, auth, billing, keys, tiers, share-page HTML
+from . import auth, billing, exports, keys, ops, planner, render, store, tiers, views  # noqa: E402
+from .domain import help as domain_help  # noqa: E402 — generated help copy (pricing facts) — persistence, auth, billing, keys, tiers, share-page HTML
 # Entitlement/provider/metering decisions live in access.py (the pure service layer). Re-exported here
 # so the route bodies call them as bare names and `main._budget` etc. stay importable by tests.
-from .access import (  # noqa: E402,F401
-    _is_byok, _acct, _tier, _is_subscriber, _period, _budget, _feature_ok, _has_pdf_access,
-    _key_provider_kind, _build_provider, _on_filg_key, _provider_for,
-    _meter, _meter_tokens, _needs_key)
+from .access import (  # noqa: E402,F401 — entitlement/provider/metering (the pure service layer)
+    _acct, _tier, _is_subscriber, _budget, _feature_ok, _has_pdf_access,
+    _key_provider_kind, _build_provider, _provider_for, _meter, _needs_key)
 
-MOCK = os.environ.get("FILG_MOCK") == "1"
-# "First query on us" + subscriptions: when FILG has its own hosted Anthropic key, a keyless user gets a
-# free welcome run (metered by usage.py) and subscribers run on it. The key is FILG_ANTHROPIC_API_KEY
-# (preferred, so it doesn't collide with a dev's own ANTHROPIC_API_KEY / Claude Code login), else
-# ANTHROPIC_API_KEY. No hosted key → fully BYOK (the user must bring their own key from the first submit).
-HOSTED_FREE = bool(provider.hosted_key())
 # One startup line so a local run never has to guess its wiring (the #1 source of confusing 500s is a
 # hosted key that didn't reach the process env).
-print(f"[filg] mock={'ON (canned, no spend)' if MOCK else 'off (REAL runs)'}"
-      f" · hosted key={'wired' if HOSTED_FREE else 'MISSING (free/anon runs will fail in real mode)'}"
+print(f"[filg] mock={'ON (canned, no spend)' if ops.MOCK else 'off (REAL runs)'}"
+      f" · hosted key={'wired' if ops.HOSTED_FREE else 'MISSING (free/anon runs will fail in real mode)'}"
       f" · BYOK store={'on' if keys.enabled() else 'off (no FILG_KEY_SECRET)'}"
       f" · auth={'on' if auth.AUTH_ENABLED else ('dev as ' + os.environ.get('FILG_DEV_EMAIL', '(anonymous)'))}")
-
-
-def _plan_key(s: dict) -> str | None:
-    """The per-branch unlock key for a plan: "{sid}:{active-leaf-node-id}". A new branch built from an
-    earlier decision-tree node finishes on a NEW leaf id → a new key → its own $7 unlock. Legacy
-    (pre-tree) plans collapse to "{sid}:flat"."""
-    sid = s.get("id")
-    if not sid:
-        return None
-    tree = s.get("tree") if isinstance(s.get("tree"), dict) else None
-    leaf = (tree or {}).get("active")
-    return f"{sid}:{leaf or 'flat'}"
-
-
-def _fold_usage(sid: str, s: dict, cost: float, toks: int, **extra) -> tuple[float, int]:
-    """Fold one AI op's cost + token count into the session's running totals (persisting any `extra`
-    columns in the same write). The client reads the cumulative `cost`/`tokens` off the session and
-    ticks an in-memory, per-session usage meter (resets on reload; never tracked on the account).
-    Returns the new cumulative (cost, tokens) so side ops that don't return plan-state can echo them."""
-    new_cost = round((s.get("cost") or 0) + cost, 4)
-    new_tokens = (s.get("tokens") or 0) + int(toks or 0)
-    store.plan_save(sid, cost=new_cost, tokens=new_tokens, **extra)
-    _meter_tokens(s.get("user"), toks)   # subscriber fair-use meter tracks tokens too (cost via _meter)
-    return new_cost, new_tokens
 
 
 def _key_wall(session: dict):
@@ -185,205 +148,6 @@ def _orphan_sweep_loop() -> None:
 
 threading.Thread(target=_orphan_sweep_loop, daemon=True).start()
 
-# Per-user concurrency: a flat cap on simultaneous AI operations per user (cost is isolated per run
-# via pipeline.run_ledger, so concurrent runs don't mis-bill each other). Not a monetization tier —
-# just a correctness/cost guard so one user can't fan out unbounded work.
-CONCURRENCY_CAP = 3
-_inflight: dict[str, int] = {}
-_inflight_lock = threading.Lock()
-
-
-class BusyError(Exception):
-    """Raised when a user is already at the concurrent-operation limit."""
-    def __init__(self, cap: int):
-        self.cap = cap
-        super().__init__(f"at concurrency limit ({cap})")
-
-
-class BudgetError(Exception):
-    """Raised when a subscriber has spent their monthly fair-use allowance on FILG's key. Carries the
-    budget snapshot so the response can name the reset date. Caught centrally in `_engine_error`."""
-    def __init__(self, budget: dict):
-        self.budget = budget or {}
-        super().__init__("monthly fair-use allowance reached")
-
-
-class DailyCapError(Exception):
-    """Raised when the daily free-pool kill switch is tripped and a non-subscriber op would run on
-    FILG's hosted key. Invariant #3: the funnel FEEDS the meter so it must also READ it — degrade to
-    the key prompt, never spend past the pool. Caught centrally in `_engine_error` (402 + needKey)."""
-    def __init__(self):
-        super().__init__("Today's free pool is tapped. Add your own API key to keep going.")
-
-
-def _concurrency_cap(user: str) -> int:
-    return CONCURRENCY_CAP
-
-
-def _slot_user(s: dict) -> str:
-    """The concurrency-bucket identity for a session's op: the owner, or a per-plan anonymous key.
-    The anonymous taste has no email — keying its slot on the bare "" made EVERY anonymous visitor
-    share one 3-slot bucket (three strangers brainstorming → the fourth 429s). Per-plan keys keep the
-    cap per visitor-ish; total anonymous spend stays bounded by the daily kill switch."""
-    return (s.get("user") or "").strip() or f"anon:{s.get('id')}"
-
-
-@contextlib.contextmanager
-def _run_slot(user: str, stack: str | None = None):
-    """Reserve a concurrency slot for `user`, bind their provider + model stack + a fresh per-run cost
-    ledger, then release the slot on exit. Raises BusyError if they're already at their plan's limit.
-    The premium stack is clamped off FILG's free key so a free run can't spend Opus on FILG's dime.
-    `user` may be a `_slot_user` anonymous key — it resolves like a keyless free identity."""
-    cap = _concurrency_cap(user)
-    tier = _tier(user)
-    if tier and not _is_byok(user):   # allowance spent AND no own key to fall back to → block (fair-use)
-        b = _budget(user, tier)
-        if b and b["over"]:
-            raise BudgetError(b)
-    with _inflight_lock:
-        if _inflight.get(user, 0) >= cap:
-            raise BusyError(cap)
-        _inflight[user] = _inflight.get(user, 0) + 1
-    try:
-        prov = _provider_for(user)
-        # The daily kill switch guards every free op on FILG's key — the v2 funnel feeds the meter, so
-        # it must also read it (metered-but-uncapped is an invariant-#3 breach). Degrade, don't block:
-        # 402 + needKey routes the user to their own key, same as the v1 taste path.
-        if (prov is not None and getattr(prov, "bills_filg", False) and not MOCK
-                and not _is_subscriber(user) and usage.kill_switch_tripped()):
-            raise DailyCapError()   # the finally below releases the slot
-        # Stack ceiling: BYOK (own key) → any stack; a subscriber → up to their tier's ceiling (Opus for
-        # Pro/Studio, ON FILG's key); free taste on FILG's key → the Opus-free default (invariant #3).
-        is_byok = bool(prov and not prov.bills_filg)
-        stk = tiers.clamp_stack(stack, tier=tier, byok=is_byok)
-        with provider.use(prov), provider.use_stack(stk), pipeline.run_ledger():
-            yield
-    finally:
-        with _inflight_lock:
-            n = _inflight.get(user, 0) - 1
-            if n > 0:
-                _inflight[user] = n
-            else:
-                _inflight.pop(user, None)
-
-
-def _busy_response(e: BusyError) -> JSONResponse:
-    plural = "s" if e.cap != 1 else ""
-    return JSONResponse(
-        {"error": f"You already have {e.cap} operation{plural} running. Let one finish, then try again.",
-         "busy": True}, status_code=429)
-
-
-def _budget_response(e: BudgetError) -> JSONResponse:
-    """402 when a subscriber has used their monthly allowance. The off-ramps, in the order we pitch
-    them: upgrade to the next tier for more monthly credits, add your own key as a BYOK fallback
-    (overflow runs on it, free), or wait for the renewal reset. `upgradeTier` names the next rung
-    (absent at the top of the ladder)."""
-    b = e.budget or {}
-    nxt = tiers.next_tier(b.get("tier"))
-    up = f"Upgrade to {tiers.label(nxt)} for more monthly credits, or add" if nxt else "Add"
-    return JSONResponse(
-        {"error": f"You've used this month's allowance on our key. {up} your own API key as a "
-                  "fallback — or your allowance resets when your subscription renews.",
-         "fairUse": True, "needKey": True, "resetAt": b.get("reset_at"), "tier": b.get("tier"),
-         **({"upgradeTier": nxt} if nxt else {})},
-        status_code=402)
-
-
-def _humanize_error(e: Exception) -> tuple[str, bool]:
-    """Turn a raw provider exception into a message the user can act on. Returns (message, needKey).
-    The most common live failure is a bad/expired BYOK key — OpenRouter answers 401 'User not found',
-    which is meaningless to a user; we translate it into 'update your key'. Full traces still go to the
-    Render logs (the callers print them); only this friendly string reaches the browser."""
-    s = str(e)
-    low = s.lower()
-    name = type(e).__name__.lower()
-    is_key = ("authentication" in name or "permissiondenied" in name
-              or "code: 401" in low or "'code': 401" in low or " 401 " in f" {low} "
-              or "user not found" in low or "invalid api key" in low or "incorrect api key" in low
-              or "no auth credentials" in low or ("expired" in low and "key" in low))
-    if is_key:
-        return ("Your API key was rejected — it looks expired or invalid. Update your key "
-                "with the 🔑 button up top, then try again."), True
-    if ("credit balance" in low or "insufficient" in low or "billing" in low or "quota" in low
-            or "402" in low):
-        return ("That key works, but the account is out of credits or has no billing set up. Add "
-                "credits/billing with your provider (Anthropic: console.anthropic.com · OpenRouter: "
-                "openrouter.ai), then try again."), False
-    if "not_found" in low or "model" in low and "404" in low:
-        return ("That model isn't available on this key/account. Pick a different model crew, or "
-                "check your provider account's model access."), False
-    if "429" in low or "rate limit" in low or "overloaded" in low:
-        return "The model is busy right now. Give it a few seconds and try again.", False
-    return "Something went wrong on our side. Try again in a moment.", False
-
-
-def _engine_error(e: Exception, status_code: int = 500):
-    """Standard JSON error for an engine route — humanized message + a needKey flag the frontend uses
-    to reopen the key modal. A subscriber's fair-use BudgetError is surfaced as a 402 (every route
-    already routes unexpected exceptions here, so no per-route wiring is needed). The full trace goes
-    to stdout (Render logs / local terminal); the client only sees the friendly string."""
-    if not isinstance(e, BudgetError):
-        traceback.print_exc()
-    if isinstance(e, BudgetError):
-        return _budget_response(e)
-    if isinstance(e, DailyCapError):
-        return JSONResponse({"error": str(e), "needKey": True}, status_code=402)
-    msg, need_key = _humanize_error(e)
-    body = {"error": msg}
-    if need_key:
-        body["needKey"] = True
-    return JSONResponse(body, status_code=status_code)
-
-
-def _run_job(job_id: str, idea: str, user: str, mode: str) -> None:
-    try:
-        with pipeline.run_ledger():
-            res = (teardown.generate_full if mode == "full" else teardown.generate)(idea, mock=MOCK)
-        usage.record_run(user, res["cost"])
-        store.finish(job_id, res, mode)
-    except Exception as e:  # noqa: BLE001 — surface failures to the client, don't crash the worker
-        traceback.print_exc()  # full trace → Render stdout logs (client only sees str(e))
-        store.fail(job_id, _humanize_error(e)[0])
-
-
-@app.post("/api/run")
-async def api_run(request: Request):
-    body = await request.json()
-    idea = (body.get("idea") or "").strip()
-    if len(idea) < 12:
-        return JSONResponse({"error": "Tell me a bit more about the idea."}, status_code=400)
-
-    # Identity: a verified Supabase user wins; otherwise fall back to the email typed in the body.
-    authed = auth.user_from_request(request)
-    # Legacy teardown endpoint: in the auth-on regime it takes a verified account (an open POST with
-    # any typed email would be unauthenticated spend on the hosted key). Dev/auth-off keeps the old
-    # body-email behavior.
-    if auth.AUTH_ENABLED and not (authed and authed["email"]):
-        return JSONResponse({"error": "Sign in first.", "needAccount": True}, status_code=401)
-    user = authed["email"] if authed and authed["email"] else (body.get("email") or "").strip().lower()
-    if "@" not in user:
-        return JSONResponse({"error": "Enter an email so we can send your result."}, status_code=400)
-
-    allowed, reason = usage.can_run(user, is_paid=False)
-    if not allowed:
-        return JSONResponse({"error": reason}, status_code=402)
-
-    mode = "teardown"
-    job_id = uuid.uuid4().hex[:12]
-    store.create(job_id, idea, user, mode)
-    threading.Thread(target=_run_job, args=(job_id, idea, user, mode), daemon=True).start()
-    return {"job_id": job_id, "mode": mode}
-
-
-@app.get("/api/run/{job_id}")
-async def api_status(job_id: str):
-    job = store.get(job_id)
-    if not job:
-        return JSONResponse({"error": "unknown job"}, status_code=404)
-    return {"status": job["status"], "result": job.get("result"), "error": job.get("error")}
-
-
 @app.get("/api/me")
 async def api_me(request: Request):
     """Tell the frontend who it is and whether the polished PDF is already unlocked."""
@@ -419,12 +183,12 @@ async def api_buy_pdf(sid: str, request: Request):
     if not s or not _owns(request, s):
         return JSONResponse({"error": "unknown session"}, status_code=404)
     # Already accessible (comped or already unlocked), or there are credits left → no payment needed.
-    if _has_pdf_access(authed["email"], _plan_key(s)) or billing.credits_left(authed["email"]) > 0:
+    if _has_pdf_access(authed["email"], ops.plan_key(s)) or billing.credits_left(authed["email"]) > 0:
         return JSONResponse({"error": "You can download this plan already.", "unlocked": True},
                             status_code=409)
     try:
         url = billing.create_pdf_checkout_url(authed["email"], user_id=authed["id"], plan_id=sid,
-                                              plan_key=_plan_key(s))
+                                              plan_key=ops.plan_key(s))
     except billing.StripeError as e:
         return JSONResponse({"error": str(e)}, status_code=502)
     return {"url": url}
@@ -488,15 +252,15 @@ async def api_plan_nudges(sid: str, request: Request):
         return {"chips": []}
     idea = planner._working_idea(s)
     try:
-        with _run_slot(_slot_user(s), s.get("stack")):
-            chips, cost = planner.nudges(idea, section, draft, mock=MOCK)
+        with ops.run_slot(ops.slot_user(s), s.get("stack")):
+            chips, cost = planner.nudges(idea, section, draft, mock=ops.MOCK)
             toks = pipeline.LEDGER.tokens()
-    except BusyError as be:
-        return _busy_response(be)
-    except Exception as e:  # noqa: BLE001
+    except ops.BusyError as be:
+        return ops.busy_response(be)
+    except Exception:  # noqa: BLE001
         traceback.print_exc()
         return {"chips": []}   # nudges are a nicety — never block the modal on them
-    nc, nt = _fold_usage(sid, s, cost, toks)
+    nc, nt = ops.fold_usage(sid, s, cost, toks)
     return {"chips": chips, "cost": nc, "tokens": nt}
 
 
@@ -506,16 +270,16 @@ def _validate_key(provider_name: str, api_key: str) -> tuple[bool, str]:
         return False, "Unsupported provider."
     if len(api_key) < 8:
         return False, "That doesn't look like an API key."
-    if MOCK:
+    if ops.MOCK:
         return True, "ok (mock)"
     try:
-        import provider as prov_mod
-        import pipeline
+        from engine import provider as prov_mod
+        from engine import pipeline
         with prov_mod.use(_build_provider(provider_name, api_key)):
             out = pipeline.call("key_validate", pipeline.HAIKU, "Reply with: OK", max_tokens=5)
         return (True, "ok") if out else (False, "The key didn't return a response.")
     except Exception as e:  # noqa: BLE001
-        msg, _ = _humanize_error(e)
+        msg, _ = ops.humanize_error(e)
         if msg.startswith("Something went wrong"):
             # validation is the user debugging their OWN key — surface a trimmed real reason
             raw = " ".join(str(e).split())[:180]
@@ -596,7 +360,7 @@ async def api_stripe_webhook(request: Request):
 
 @app.get("/healthz")
 async def healthz():
-    return {"ok": True, "mock": MOCK, "auth_enabled": auth.AUTH_ENABLED,
+    return {"ok": True, "mock": ops.MOCK, "auth_enabled": auth.AUTH_ENABLED,
             "pdf_billing": billing.PDF_BILLING_ENABLED, "sub_enabled": billing.PDF_BILLING_ENABLED,
             "models": model_catalog.snapshot()["slots"], **usage.snapshot()}
 
@@ -611,15 +375,6 @@ async def api_models(request: Request):
     return model_catalog.snapshot(check_availability=check)
 
 
-@app.get("/r/{job_id}", response_class=HTMLResponse)
-async def share(job_id: str):
-    job = store.get(job_id)
-    if not job or job.get("status") != "done":
-        return HTMLResponse(render.not_found("This result isn't ready yet, failed, or doesn't exist."),
-                            status_code=404)
-    return render.result_page(job)
-
-
 @app.get("/p/{sid}", response_class=HTMLResponse)
 async def share_plan(sid: str):
     """Public, read-only view of a plan the owner explicitly shared (private by default). Carries the
@@ -632,29 +387,7 @@ async def share_plan(sid: str):
     inner = markdown.markdown(planner.bundle_markdown(idea, s.get("files") or {}), extensions=["extra"])
     title = ((s.get("shaped") or {}).get("thesis") or s["idea"] or "Shared business plan")[:120]
     rows = ((s.get("research") or {}).get("rows") or [])
-    return HTMLResponse(render.shared_plan_page(title, inner, receipts=rows, path=_share_path(s)))
-
-
-def _share_path(s: dict) -> list[dict]:
-    """The committed decision path (root → active) as public-safe steps: kind + label + the operator's
-    pivot/steer note. This is the provenance trail — what the plan decided and why, not just the output.
-    Reads the STORED tree (nodes = dict keyed by id; kind derived via _kind), not the frontend view."""
-    tree = s.get("tree") or {}
-    nodes = tree.get("nodes") or {}
-    chain, cur = [], tree.get("active")
-    while cur is not None and cur in nodes:
-        chain.append(nodes[cur])
-        cur = nodes[cur].get("parent")
-    chain.reverse()
-    out = []
-    for n in chain:
-        kind = _kind(n)
-        label = (n.get("title")
-                 or {"idea": "The idea", "brainstorm": "Directions explored", "refined": "Refined idea",
-                     "fork": "Fork"}.get(kind, f"Part {int(n.get('step') or 0) + 1}"))
-        out.append({"kind": kind or "section", "label": label,
-                    "note": (n.get("feedback") or "").strip()})
-    return out
+    return HTMLResponse(render.shared_plan_page(title, inner, receipts=rows, path=views.share_path(s)))
 
 
 # ── Interactive plan builder (idea → decision tree → downloadable file tree) ──
@@ -680,115 +413,9 @@ def _owns(request: Request, session: dict) -> bool:
     return bool(authed and (authed["email"] or "").strip().lower() == owner)
 
 
-def _plan_state(s: dict) -> dict:
-    """Shape a session row for the frontend."""
-    return {
-        "id": s["id"], "status": s["status"], "idea": s["idea"], "error": s.get("error"),
-        "research": s.get("research"),
-        "shaped": s.get("shaped"), "vetting": s.get("vetting"),
-        "directors": s.get("directors") or [], "board": s.get("board") or [],
-        "customDirectors": [{"key": p["key"], "name": p["name"], "first": p.get("first"),
-                             "blurb": p.get("blurb"), "domains": p.get("domains") or []}
-                            for p in (s.get("custom_directors") or [])],   # custom-forged board chips
-        "files": [{"path": p, "content": c} for p, c in (s.get("files") or {}).items()],
-        "sections": [{"file": x["file"], "title": x["title"], "sub": x["sub"]}
-                     for x in planner.SECTIONS],
-        "step": s.get("step", 0), "total": planner.N, "proposal": s.get("proposal"),
-        "done": s["status"] == "done", "shared": bool(s.get("shared")),
-        "owned": bool((s.get("user") or "").strip()),   # anonymous taste vs claimed-by-an-account
-        "qa": s.get("qa"),   # final QA-pass report {notes, fixed} on the finished plan
-
-        "tree": _tree_view(s["tree"]) if s.get("tree") else None,
-        "stage": s.get("stage"),                      # funnel position: brainstorm | refined | building | done
-        "activeNode": _active_node_view(s),           # the active node's funnel payload (option cards / refined idea / fork)
-        "chat": s.get("chat") or [], "chatStarters": advisor.STARTERS,
-        "lookups": s.get("lookups") or [],   # persisted chat-lookup claims — the research stack survives a reload
-        # the stress-test's durable state (status + result only; live progress rides its poll route)
-        "skeptic": ({"status": (s.get("skeptic") or {}).get("status"),
-                     "result": (s.get("skeptic") or {}).get("result")} if s.get("skeptic") else None),
-        "progress": s.get("progress") or [],
-        "cost": s.get("cost") or 0, "tokens": s.get("tokens") or 0,   # live session usage meter
-        "stack": s.get("stack") or provider.DEFAULT_STACK,            # chosen model stack
-        # PDF access for THIS active branch + the account's remaining credits. The button shows
-        # Download when this plan is already unlocked OR there are credits to spend; else Unlock ($7=3).
-        # A new branch built from an earlier node is a fresh plan_key → locked until claimed.
-        "pdfUnlocked": _has_pdf_access((s.get("user") or "").strip(), _plan_key(s), verified=True),
-        "pdfCredits": store.credits_left((s.get("user") or "").strip()),
-    }
-
-
-# ── Branching decision tree — node wiring around planner's pure tree functions ─
-def _new_node(content: dict, parent: str | None) -> dict:
-    """Wrap pure node content (from planner) with the tree bookkeeping main.py owns."""
-    return {"id": uuid.uuid4().hex[:8], "parent": parent, "children": [], **content}
-
-
-_kind = context.kind   # one owner for "what kind is this node" — the context engine
-
-
-def _tree_view(tree: dict) -> dict:
-    """Trim the stored node tree to what the frontend needs to draw + navigate it. Carries each node's
-    `kind` so the graph can render option/refined/section/fork nodes differently. `show` is on from the
-    first render (even a single node) so the decision-graph surface is always there."""
-    nodes = tree.get("nodes") or {}
-    return {"active": tree.get("active"),
-            "nodes": [{"id": n["id"], "parent": n.get("parent"), "step": n.get("step", 0),
-                       "kind": _kind(n), "title": n.get("title"), "feedback": n.get("feedback"),
-                       # a refined node names the options it JOINED — the graph draws it as a merge
-                       # of those branches, not a sibling branch off the brainstorm fork
-                       **({"selected": n.get("selected")} if n.get("selected") else {})}
-                      for n in nodes.values()],
-            "show": bool(nodes)}
-
-
-def _active_node_view(s: dict) -> dict | None:
-    """The active node's full funnel payload, so the frontend can render the current stage (the option
-    cards, the refined idea, a pending fork) without a second fetch. Section nodes carry no extra
-    payload (the existing `proposal`/`sections` fields already cover them)."""
-    t = s.get("tree") or {}
-    a = (t.get("nodes") or {}).get(t.get("active"))
-    if not a:
-        return None
-    k = _kind(a)
-    view = {"id": a["id"], "kind": k, "title": a.get("title"),
-            "log": a.get("log") or []}   # persisted build receipts, so a reload restores them (§v2 #10)
-    if k == "brainstorm":
-        view["spread"] = a.get("spread")
-        view["feedback"] = a.get("feedback")   # the pivot ask this spread answers (if any)
-        view["set_aside"] = a.get("set_aside")  # declined-out-loud part of the ask — shown, not hidden
-        view["options"] = [{"id": c, "direction": ((t["nodes"].get(c) or {}).get("direction"))}
-                           for c in a.get("children", []) if _kind(t["nodes"].get(c) or {}) == "option"]
-    elif k == "option":
-        view["direction"] = a.get("direction")
-    elif k == "refined":
-        for f in ("thesis", "founder_edge", "mold", "kept", "dropped", "research", "selected",
-                  "questions", "feedback"):
-            view[f] = a.get(f)
-    elif k == "fork":
-        view["question"] = a.get("question")
-        view["options"] = a.get("options")
-    return view
-
-
-def _mirror(tree: dict) -> dict:
-    """Flat session fields (step/files/proposal/history/board/status) for the active node, so the
-    existing _plan_state + frontend renders keep working off the active branch unchanged. A funnel node
-    (brainstorm/option/refined/fork) isn't a plan section, so it mirrors to neutral 'building' state with
-    no proposal — the funnel payload rides on _active_node_view instead."""
-    a = tree["nodes"][tree["active"]]
-    if _kind(a) != "section":
-        # funnel nodes carry no plan state, but chat convenes stored on them still surface
-        return {"step": 0, "files": {}, "history": [], "board": a.get("board") or [],
-                "proposal": None, "qa": None, "status": "building"}
-    done = a["step"] >= planner.N
-    return {"step": a["step"], "files": a["files"], "history": a["history"], "board": a["board"],
-            "proposal": (None if done else {"section": a["section"], "title": a["title"],
-                                            "draft": a["draft"], "change": a.get("change")}),
-            "qa": a.get("qa") if done else None,   # the final QA-pass report, surfaced on the finished branch
-            "status": "done" if done else "building",
-            # the funnel stage must land on 'done' too, or the frontend keeps offering the next
-            # chapter forever ('Part 8 of 7' + Keep going — the off-ramp bug, 2026-07-04)
-            **({"stage": "done"} if done else {})}
+# Node bookkeeping (id/parent/children) and kind resolution each have one owner.
+_new_node = dtree.new_node
+_kind = context.kind
 
 
 def _regrade_setup(s: dict, node: dict, cost: float) -> tuple[dict | None, float]:
@@ -800,101 +427,37 @@ def _regrade_setup(s: dict, node: dict, cost: float) -> tuple[dict | None, float
         return None, cost
     try:
         vetting, vc = intake.vet(planner._working_idea(s), s.get("shaped") or {}, s.get("research"),
-                                 mock=MOCK, angle=(node.get("draft") or ""))
+                                 mock=ops.MOCK, angle=(node.get("draft") or ""))
     except Exception:  # noqa: BLE001
         return None, cost
     return vetting, round(cost + vc, 4)
 
 
-def _ensure_tree(s: dict) -> dict:
-    """Return the session's node tree, lazily seeding a single-node tree from legacy flat state for
-    plans created before branching existed (so resumed in-progress plans still go Next/Back)."""
-    t = s.get("tree")
-    if t and t.get("nodes"):
-        return t
-    p = s.get("proposal") or {}
-    step = s.get("step", 0) or 0
-    sec = next((x for x in planner.SECTIONS if x["key"] == p.get("section")), None)
-    node = _new_node({"step": step, "section": (sec or {}).get("key"),
-                      "title": (sec or {}).get("title", "Plan complete"),
-                      "sub": (sec or {}).get("sub", ""), "draft": p.get("draft"),
-                      "files": s.get("files") or {}, "history": s.get("history") or [],
-                      "board": s.get("board") or [], "feedback": None}, None)
-    return {"nodes": {node["id"]: node}, "active": node["id"]}
-
-
-def _plan_research(session_id: str, idea: str, user: str) -> None:
-    try:
-        progress: list[str] = []
-        def on_progress(line: str) -> None:  # write each real milestone/receipt + the running usage so
-            progress.append(line)            # the UI spews it live AND the session meter ticks during research
-            store.plan_save(session_id, progress=list(progress),
-                            tokens=pipeline.LEDGER.tokens(), cost=round(pipeline.LEDGER.cost(), 4))
-        prov = _provider_for(user)   # user's own key if they have one, else FILG's hosted key
-        sess0 = store.plan_get(session_id) or {}
-        # Stack ceiling: BYOK → any; subscriber → up to their tier; free taste on FILG's key → Opus-free default.
-        stk = tiers.clamp_stack(sess0.get("stack"), tier=_tier(user),
-                                byok=bool(prov and not prov.bills_filg))
-        with provider.use(prov), provider.use_stack(stk), pipeline.run_ledger():
-            prep = planner.prepare(idea, mock=MOCK, on_progress=on_progress)  # intake → research → vet → draft
-            toks = pipeline.LEDGER.tokens()   # the welcome run's token usage → seeds the session meter
-        if prov is not None and prov.bills_filg:   # runs on FILG's hosted key → meter it (invariant #3)
-            if _is_subscriber(user):               # subscriber → count against their monthly fair-use cap
-                usage.record_monthly(_acct(user), _period(user), prep["cost"], toks)
-            else:                                  # free taste → per-user counter (alias-deduped) + daily
-                usage.record_run(auth.normalize_email(user), prep["research_cost"])  # free run + daily total
-                usage.record_spend(prep["cost"] - prep["research_cost"])  # intake + vet + first draft → daily
-        root = _new_node(planner.root_node(prep["proposal"]), None)  # seed the decision tree's root
-        root["log"] = _op_log(progress, 0)
-        tree = {"nodes": {root["id"]: root}, "active": root["id"]}
-        store.plan_save(session_id, status="building", research=prep["research"], step=0,
-                        proposal=prep["proposal"], shaped=prep["shaped"], vetting=prep["vetting"],
-                        cost=prep["cost"], tokens=toks, tree=tree, progress=progress)
-    except Exception as e:  # noqa: BLE001
-        traceback.print_exc()  # full trace → Render stdout logs (client only sees str(e))
-        store.plan_save(session_id, status="error", error=_humanize_error(e)[0])
-
-
 # ── The diverge/converge funnel (brainstorm → merge → commit), layered on the same node tree ──
-_MAX_BOARD_HISTORY = 12   # per-node board entries (section reviews + chat convenes) stay bounded
-_MAX_NODE_LOG = 40        # per-node build-log lines (receipts + 🔎 lane details) stay bounded
+# Per-node history bounds (board=12, log=40) live in the attachment registry (app/domain/nodes.py).
+_op_log = dtree.op_log   # one op's progress slice, sentinel-free + bounded, persisted on its node
 
 
-def _op_log(progress: list, start: int) -> list:
-    """This op's slice of the progress stream, persisted on the node it built — the durable
-    'how this was built' record (backlog §v2 #10; the client stash alone died on reload). The
-    §LANES§/§LANEDONE§ sentinels only drive the live leaflet animation, so they're dropped;
-    the readable receipts and the 🔎 per-lane details stay."""
-    return [ln for ln in progress[start:] if not str(ln).startswith("§")][-_MAX_NODE_LOG:]
-
-
-def _inherit_board(nodes: dict, node: dict) -> None:
-    """A freshly created node carries its parent's accumulated board history forward (per-section
-    reviews + chat convenes), so a convene during the funnel still steers + exports after commit."""
-    p = nodes.get(node.get("parent") or "")
-    if p and p.get("board"):
-        node["board"] = list(p["board"])[-_MAX_BOARD_HISTORY:]
-
-
-def _diverge_tree(diverge: dict, parent: str | None = None,
-                  board: list | None = None) -> tuple[dict, str]:
-    """A `brainstorm` fork node with one `option` child per direction. Returns (nodes_by_id,
-    brainstorm_node_id). The active pointer sits on the brainstorm node (the fork being decided).
-    `board` seeds the fork (and its options) with the pivot point's board history."""
-    b = _new_node({"kind": "brainstorm", "step": 0, "title": "A few directions",
-                   "spread": diverge.get("spread"), "draft": None, "files": {}, "history": [],
-                   # a declared set-aside (part of the ask the engine declined, with its reason) is
-                   # SURFACED, never silent — it rides the node so every view can show it
-                   "set_aside": diverge.get("set_aside"),
-                   "board": list(board or [])}, parent)
-    nodes = {b["id"]: b}
+def _attach_spread(tree: dict, diverge: dict, parent: str | None,
+                   board: list | None = None) -> str:
+    """Attach a `brainstorm` fork node + one `option` child per direction into `tree`, and land
+    the active pointer on the fork (the node being decided). Returns the fork's id. `board` seeds
+    the fork and its options with the pivot point's board history (a spread's options branch from
+    the FORK, so they inherit through it)."""
+    b = dtree.attach(tree, _new_node(
+        {"kind": "brainstorm", "step": 0, "title": "A few directions",
+         "spread": diverge.get("spread"), "draft": None, "files": {}, "history": [],
+         # a declared set-aside (part of the ask the engine declined, with its reason) is
+         # SURFACED, never silent — it rides the node so every view can show it
+         "set_aside": diverge.get("set_aside"),
+         "board": dtree.clip("board", board or [])}, parent))
     for d in (diverge.get("directions") or []):
-        o = _new_node({"kind": "option", "step": 0, "title": d.get("title") or "Direction",
-                       "direction": d, "draft": d.get("one_liner"), "files": {}, "history": [],
-                       "board": list(board or [])}, b["id"])
-        b["children"].append(o["id"])
-        nodes[o["id"]] = o
-    return nodes, b["id"]
+        dtree.attach(tree, _new_node(
+            {"kind": "option", "step": 0, "title": d.get("title") or "Direction",
+             "direction": d, "draft": d.get("one_liner"), "files": {}, "history": []},
+            b["id"]), activate=False, inherit=True)
+    tree["active"] = b["id"]
+    return b["id"]
 
 
 def _refined_node(m: dict, selected: list, parent: str | None, feedback: str | None = None) -> dict:
@@ -910,33 +473,6 @@ def _refined_node(m: dict, selected: list, parent: str | None, feedback: str | N
                       "board": []}, parent)
 
 
-def _meter_bg(user: str, prov, cost: float, toks: int, *, is_run: bool = False,
-              research_cost: float = 0.0) -> None:
-    """Meter a background funnel op that ran on FILG's hosted key. A subscriber's usage counts against
-    their monthly cap; a free user's daily kill-switch is always fed (record_spend); only a COMMIT (the
-    deep research run) counts as a metered free 'run'. Ops on a user's own key aren't FILG's spend."""
-    if prov is None or not getattr(prov, "bills_filg", False):
-        return
-    if _is_subscriber(user):
-        usage.record_monthly(_acct(user), _period(user), cost, toks)
-        return
-    if is_run:
-        usage.record_run(auth.normalize_email(user), research_cost)
-        usage.record_spend(round(cost - research_cost, 4))
-    else:
-        usage.record_spend(cost)
-
-
-def _bg_progress(sid: str, base_cost: float, base_tokens: int, progress: list):
-    """A progress sink for a background funnel op: append the line + persist the running (base + this
-    run's) cost/tokens so the session meter ticks live during the op."""
-    def on_progress(line: str) -> None:
-        progress.append(line)
-        store.plan_save(sid, progress=list(progress), tokens=base_tokens + pipeline.LEDGER.tokens(),
-                        cost=round(base_cost + pipeline.LEDGER.cost(), 4))
-    return on_progress
-
-
 def _fresh_tree_or_abandon(sid: str, tok: str | None):
     """Run-epoch check for a finishing background run: re-read the session and return
     (session, tree) to attach into — the FRESH tree, so nothing written mid-run is clobbered.
@@ -945,7 +481,7 @@ def _fresh_tree_or_abandon(sid: str, tok: str | None):
     metered; only the RESULT is discarded — the user's newer state always wins."""
     s1 = store.plan_get(sid) or {}
     tree = s1.get("tree") or {}
-    if tok and tree.get("_run") != tok:
+    if not dtree.run_is_current(tree, tok):
         prog = list(s1.get("progress") or []) + ["✂ run abandoned — you moved on before it finished"]
         store.plan_save(sid, progress=prog)
         return None
@@ -972,13 +508,11 @@ def _run_merge(sid: str, option_ids: list, user: str, tok: str | None = None,
             idea_in = (f"{s0['idea']}\n\nTHE MERGED THESIS SO FAR (refine THIS, do not start over):\n"
                        f"{prev}\n\nTHE OPERATOR'S CLARIFICATION — it outweighs everything above; fold "
                        f"it in and do not re-ask what it answers:\n{note}")
-        prov = _provider_for(user)
-        stk = tiers.clamp_stack(s0.get("stack"), tier=_tier(user), byok=bool(prov and not prov.bills_filg))
-        with provider.use(prov), provider.use_stack(stk), pipeline.run_ledger():
-            m, cost = brainstorm.merge(idea_in, directions, mock=MOCK,
-                                       on_progress=_bg_progress(sid, base_cost, base_tokens, progress))
+        with ops.bind_session_run(user, s0.get("stack")) as prov:
+            m, cost = brainstorm.merge(idea_in, directions, mock=ops.MOCK,
+                                       on_progress=ops.bg_progress(sid, base_cost, base_tokens, progress))
             toks = pipeline.LEDGER.tokens()
-        _meter_bg(user, prov, cost, toks)
+        ops.meter_bg(user, prov, cost, toks)
         fresh = _fresh_tree_or_abandon(sid, tok)
         if fresh is None:
             return                                # the user pivoted mid-run — their newer state wins
@@ -989,16 +523,12 @@ def _run_merge(sid: str, option_ids: list, user: str, tok: str | None = None,
         parent = (refine_of if refine_of and nodes.get(refine_of) else tree.get("active"))
         refined = _refined_node(m, [] if refine_of else option_ids, parent, feedback=note)
         refined["log"] = _op_log(progress, len(s0.get("progress") or []))
-        _inherit_board(nodes, refined)
-        nodes[refined["id"]] = refined
-        if parent and nodes.get(parent):
-            nodes[parent].setdefault("children", []).append(refined["id"])
-        tree["active"] = refined["id"]
+        dtree.attach(tree, refined, inherit=True)
         store.plan_save(sid, status="building", stage="refined", tree=tree, progress=progress,
                         cost=round(base_cost + cost, 4), tokens=base_tokens + toks)
     except Exception as e:  # noqa: BLE001
         traceback.print_exc()
-        store.plan_save(sid, status="error", error=_humanize_error(e)[0])
+        store.plan_save(sid, status="error", error=ops.humanize_error(e)[0])
 
 
 def _deep_build(sid: str, thesis: str, user: str, tok: str | None = None,
@@ -1014,35 +544,28 @@ def _deep_build(sid: str, thesis: str, user: str, tok: str | None = None,
         s0 = store.plan_get(sid) or {}
         base_cost, base_tokens = s0.get("cost") or 0, s0.get("tokens") or 0
         progress = list(s0.get("progress") or [])
-        prov = _provider_for(user)
-        stk = tiers.clamp_stack(s0.get("stack"), tier=_tier(user), byok=bool(prov and not prov.bills_filg))
-        with provider.use(prov), provider.use_stack(stk), pipeline.run_ledger():
-            prep = planner.prepare(thesis, mock=MOCK, prior=prior,
-                                   on_progress=_bg_progress(sid, base_cost, base_tokens, progress))
+        with ops.bind_session_run(user, s0.get("stack")) as prov:
+            prep = planner.prepare(thesis, mock=ops.MOCK, prior=prior,
+                                   on_progress=ops.bg_progress(sid, base_cost, base_tokens, progress))
             toks = pipeline.LEDGER.tokens()
-        _meter_bg(user, prov, prep["cost"], toks, is_run=True, research_cost=prep["research_cost"])
+        ops.meter_bg(user, prov, prep["cost"], toks, is_run=True, research_cost=prep["research_cost"])
         fresh = _fresh_tree_or_abandon(sid, tok)
         if fresh is None:
             return                                # the user pivoted mid-run — their newer state wins
         _s1, tree = fresh
         nodes = tree.get("nodes") or {}
-        parent = tree.get("active")
-        root = _new_node(planner.root_node(prep["proposal"]), parent)   # a plain section node (kind absent)
+        root = _new_node(planner.root_node(prep["proposal"]), tree.get("active"))  # a plain section node (kind absent)
         if picks:
             root["selected"] = [i for i in picks if i in nodes]   # the join the graph rides through
         root["log"] = _op_log(progress, len(s0.get("progress") or []))
-        _inherit_board(nodes, root)
-        nodes[root["id"]] = root
-        if parent and nodes.get(parent):
-            nodes[parent].setdefault("children", []).append(root["id"])
-        tree["active"] = root["id"]
+        dtree.attach(tree, root, inherit=True)
         store.plan_save(sid, status="building", stage="building", research=prep["research"], step=0,
                         proposal=prep["proposal"], shaped=prep["shaped"], vetting=prep["vetting"],
                         tree=tree, progress=progress, cost=round(base_cost + prep["cost"], 4),
                         tokens=base_tokens + toks)
     except Exception as e:  # noqa: BLE001
         traceback.print_exc()
-        store.plan_save(sid, status="error", error=_humanize_error(e)[0])
+        store.plan_save(sid, status="error", error=ops.humanize_error(e)[0])
 
 
 # ── The context engine (app/context.py) owns every model-facing view of session state. These
@@ -1055,71 +578,6 @@ _route_context = context.screen
 
 def _path_snippets(nodes: dict, at_id: str | None) -> list[str]:   # legacy signature shim
     return context.path({"tree": {"nodes": nodes}}, at_id)
-
-
-@app.post("/api/plan/start")
-async def api_plan_start(request: Request):
-    body = await request.json()
-    idea = (body.get("idea") or "").strip()
-    if len(idea) < 12:
-        return JSONResponse({"error": "Tell me a bit more about the idea."}, status_code=400)
-    if gibberish.looks_like_gibberish(idea):  # total nonsense → roast them for free (no run, no LLM)
-        return JSONResponse({"gibberish": True, **gibberish.roast(idea)})
-    user, verified = _identity(request, body.get("email"))
-    if "@" not in user:
-        return JSONResponse({"error": "Enter an email so we can save your plan."}, status_code=400)
-    # The legacy one-shot welcome taste retired with v1 (2026-07-06): in the auth-on regime this
-    # route requires a verified account AND a key/subscription, same as every other deep-build verb.
-    # (The new funnel's free taste is /api/brainstorm → /merge; this route jumps straight to the
-    # deep research run, so an open POST here would be an unauthenticated spend hole on our key.)
-    if auth.AUTH_ENABLED:
-        if not verified:
-            return JSONResponse(
-                {"error": "Create a free account to build a plan — it saves to your account.",
-                 "needAccount": True}, status_code=401)
-        if _needs_key(user):
-            return JSONResponse(
-                {"error": "Keep building free on your own API key (OpenRouter or Anthropic), or "
-                          "subscribe to run on ours.", "needKey": True}, status_code=402)
-    taste_id = auth.normalize_email(user)   # dedupe the free taste across +suffix / gmail-dot aliases
-    if _is_byok(user):
-        pass   # has a key → unlimited plans on their own spend
-    elif _is_subscriber(user):
-        # Subscriber: runs on FILG's key, bounded by the monthly fair-use cap. Over it → offer the
-        # two off-ramps (own key, or wait for the renewal reset) instead of building on our dime.
-        b = _budget(user)
-        if b and b["over"]:
-            return JSONResponse(
-                {"error": "You've used this month's plan allowance on our key. Add your own API key to "
-                          "keep building free, or your allowance resets when your subscription renews.",
-                 "fairUse": True, "needKey": True, "resetAt": b.get("reset_at")}, status_code=402)
-        # else: runs on FILG's hosted key → _plan_research meters it against the monthly cap
-    elif keys.enabled():
-        # BYOK on, no key: the FIRST query is on us when FILG has a hosted key (metered + kill-switch).
-        # Once the free taste is used (or the daily budget is hit), degrade to a key prompt, not a wall.
-        if not HOSTED_FREE:
-            return JSONResponse(
-                {"error": "Add your API key to build your plan — an OpenRouter key (any model) or your "
-                          "own Anthropic key (Claude direct), usually pennies a plan.",
-                 "needKey": True}, status_code=402)
-        allowed, _reason = usage.can_run(taste_id, is_paid=False)   # per-user free cap + daily kill switch
-        if not allowed:
-            return JSONResponse(
-                {"error": "Your free plan is used up (or today's free pool is tapped). Add your own "
-                          "API key to keep building — usually pennies a plan.",
-                 "needKey": True}, status_code=402)
-        # else: first query on the house → runs on FILG's hosted key; _plan_research meters it
-    else:
-        # BYOK off (no FILG_KEY_SECRET — dev/local): keep the legacy free-cap behavior so dev works.
-        allowed, reason = usage.can_run(taste_id, is_paid=False)
-        if not allowed:
-            return JSONResponse({"error": reason}, status_code=402)
-    directors = [k for k in (body.get("directors") or []) if k in personas.KEYS]  # optional board
-    sid = uuid.uuid4().hex[:12]
-    store.plan_create(sid, user, idea, directors=directors)
-    store.plan_save(sid, stack=provider.stack_name(body.get("stack")))  # honor the crew picked at intake
-    threading.Thread(target=_plan_research, args=(sid, idea, user), daemon=True).start()
-    return {"id": sid}
 
 
 @app.post("/api/brainstorm")
@@ -1139,27 +597,26 @@ async def api_brainstorm(request: Request):
     store.plan_create(sid, user, idea, directors=directors)
     store.plan_save(sid, stack=provider.stack_name(body.get("stack")))
     def _work():   # off the event loop: other requests (node reads, polls) stay live while this thinks
-        with _run_slot(user or f"anon:{sid}", body.get("stack")):
-            d, cost = brainstorm.diverge(idea, mock=MOCK)
+        with ops.run_slot(user or f"anon:{sid}", body.get("stack")):
+            d, cost = brainstorm.diverge(idea, mock=ops.MOCK)
             return d, cost, pipeline.LEDGER.tokens()
     try:
         d, cost, toks = await run_in_threadpool(_work)
-    except BusyError as be:
-        return _busy_response(be)
+    except ops.BusyError as be:
+        return ops.busy_response(be)
     except Exception as e:  # noqa: BLE001
-        return _engine_error(e)
-    _meter_bg(user, _provider_for(user), cost, toks)
+        return ops.engine_error(e)
+    ops.meter_bg(user, _provider_for(user), cost, toks)
     # The tree roots at a BASE `idea` node (the raw prompt). Every spread — including later pivots and
     # step-one rebuilds — branches beneath it, so alternate takes always share a common ancestor and
     # no branch is ever orphaned.
     base = _new_node({"kind": "idea", "step": 0, "title": "Your idea", "draft": idea,
                       "files": {}, "history": [], "board": []}, None)
-    nodes, bid = _diverge_tree(d, base["id"])
-    base["children"].append(bid)
-    nodes[base["id"]] = base
-    store.plan_save(sid, status="building", stage="brainstorm", tree={"nodes": nodes, "active": bid},
+    tree = dtree.seed(base)
+    _attach_spread(tree, d, base["id"])
+    store.plan_save(sid, status="building", stage="brainstorm", tree=tree,
                     cost=round(cost, 4), tokens=toks)
-    return _plan_state(store.plan_get(sid))
+    return views.plan_state(store.plan_get(sid))
 
 
 @app.post("/api/plan/{sid}/rebrainstorm")
@@ -1197,31 +654,27 @@ async def api_plan_rebrainstorm(sid: str, request: Request):
         div_input = (f"{idea}\n\nCOMMITTED PATH (root \u2192 the pivot point; treat each item as "
                      f"chosen context):\n{path_block}")
     def _work():
-        with _run_slot(_slot_user(s), s.get("stack")):
-            d, cost = brainstorm.diverge(div_input, mock=MOCK)
+        with ops.run_slot(ops.slot_user(s), s.get("stack")):
+            d, cost = brainstorm.diverge(div_input, mock=ops.MOCK)
             return d, cost, pipeline.LEDGER.tokens()
     try:
         d, cost, toks = await run_in_threadpool(_work)
-    except BusyError as be:
-        return _busy_response(be)
+    except ops.BusyError as be:
+        return ops.busy_response(be)
     except Exception as e:  # noqa: BLE001
-        return _engine_error(e)
-    _meter_bg(s.get("user"), _provider_for(s.get("user")), cost, toks)
+        return ops.engine_error(e)
+    ops.meter_bg(s.get("user"), _provider_for(s.get("user")), cost, toks)
     # every node is branchable: the new spread is a CHILD of the pivot node itself, always
     parent = at.get("id")
     # permanent evidence line — pivots are core IP, every hop must be verifiable in the server log
     print(f"[pivot] sid={sid} node_in={(body.get('node') or None)!r} resolved={at.get('id')}/"
           f"{_kind(at) if at else None} parent={parent} feedback={feedback[:80]!r}")
-    new_nodes, bid = _diverge_tree(d, parent, board=(at or {}).get("board"))
-    new_nodes[bid]["feedback"] = feedback or idea[:120]   # the pivot ask, visible on the fork forever
-    nodes.update(new_nodes)
-    if parent and nodes.get(parent):
-        nodes[parent].setdefault("children", []).append(bid)
     tree["nodes"] = nodes
-    tree["active"] = bid
-    tree["_run"] = uuid.uuid4().hex[:8]      # pivoting abandons any run still in flight — you moved on
-    _fold_usage(sid, s, cost, toks, tree=tree, stage="brainstorm", **_mirror(tree))
-    return _plan_state(store.plan_get(sid))
+    bid = _attach_spread(tree, d, parent, board=(at or {}).get("board"))
+    nodes[bid]["feedback"] = feedback or idea[:120]   # the pivot ask, visible on the fork forever
+    dtree.begin_run(tree)                    # pivoting abandons any run still in flight — you moved on
+    ops.fold_usage(sid, s, cost, toks, tree=tree, stage="brainstorm", **views.mirror(tree))
+    return views.plan_state(store.plan_get(sid))
 
 
 @app.post("/api/plan/{sid}/merge")
@@ -1240,13 +693,10 @@ async def api_plan_merge(sid: str, request: Request):
     # The merge is the free taste's one web-touching step and runs in a background thread WITHOUT
     # _run_slot — so the daily kill switch must be read here, before the spawn (invariant #3: the
     # funnel feeds the meter, it must also read it). Subscribers are bounded by their monthly cap.
-    prov = _provider_for(s.get("user"))
-    if (prov is not None and getattr(prov, "bills_filg", False) and not MOCK
-            and not _is_subscriber(s.get("user")) and usage.kill_switch_tripped()):
-        return _engine_error(DailyCapError(), 402)
-    tok = uuid.uuid4().hex[:8]
+    if ops.free_pool_tapped(s.get("user")):
+        return ops.engine_error(ops.DailyCapError(), 402)
     tree = s.get("tree") or {"nodes": {}, "active": None}
-    tree["_run"] = tok                       # this run's epoch — a pivot mid-run invalidates it
+    tok = dtree.begin_run(tree)              # this run's epoch — a pivot mid-run invalidates it
     store.plan_save(sid, status="researching", stage="merging", tree=tree)
     threading.Thread(target=_run_merge, args=(sid, valid, s.get("user"), tok), daemon=True).start()
     return {"id": sid}
@@ -1279,12 +729,9 @@ async def api_plan_refine(sid: str, request: Request):
     while cur and not sel:
         sel = [i for i in (cur.get("selected") or []) if _kind(nodes.get(i) or {}) == "option"]
         cur = nodes.get(cur.get("parent")) if cur.get("parent") else None
-    prov = _provider_for(s.get("user"))
-    if (prov is not None and getattr(prov, "bills_filg", False) and not MOCK
-            and not _is_subscriber(s.get("user")) and usage.kill_switch_tripped()):
-        return _engine_error(DailyCapError(), 402)
-    tok = uuid.uuid4().hex[:8]
-    tree["_run"] = tok                       # this run's epoch — a pivot mid-run invalidates it
+    if ops.free_pool_tapped(s.get("user")):
+        return ops.engine_error(ops.DailyCapError(), 402)
+    tok = dtree.begin_run(tree)              # this run's epoch — a pivot mid-run invalidates it
     store.plan_save(sid, status="researching", stage="merging", tree=tree)
     threading.Thread(target=_run_merge, args=(sid, sel, s.get("user"), tok),
                      kwargs={"refine_of": at.get("id"), "note": note}, daemon=True).start()
@@ -1377,8 +824,7 @@ async def api_plan_commit(sid: str, request: Request):
         if skim.get("claims") and (build_from.get("thesis") or "").strip() == thesis.strip():
             prior = {"thesis": build_from.get("thesis"), "founder_edge": build_from.get("founder_edge"),
                      "claims": skim["claims"]}
-    tok = uuid.uuid4().hex[:8]
-    tree["_run"] = tok                       # this run's epoch — a pivot mid-run invalidates it
+    tok = dtree.begin_run(tree)              # this run's epoch — a pivot mid-run invalidates it
     store.plan_save(sid, status="researching", stage="researching", tree=tree)
     threading.Thread(target=_deep_build, args=(sid, thesis, s.get("user"), tok, picks, prior),
                      daemon=True).start()
@@ -1404,14 +850,14 @@ async def api_plan_route(sid: str, request: Request):
     rstage = {"brainstorm": "brainstorm", "merging": "merge", "refined": "refined",
               "building": "plan", "done": "plan"}.get(stage, "plan")
     def _work():
-        with _run_slot(_slot_user(s), s.get("stack")):
+        with ops.run_slot(ops.slot_user(s), s.get("stack")):
             decision, cost = router.route(prompt, stage=rstage, mode=mode,
-                                          context=_route_context(s, node_id), mock=MOCK)
+                                          context=_route_context(s, node_id), mock=ops.MOCK)
             fork = None
             if decision["intent"] == "steer" and rstage == "plan" and decision.get("steer"):
                 idea = planner._working_idea(s)
                 ic, ic_cost = router.check_integration(
-                    decision["steer"], idea, planner.bundle_markdown(idea, s.get("files") or {}), mock=MOCK)
+                    decision["steer"], idea, planner.bundle_markdown(idea, s.get("files") or {}), mock=ops.MOCK)
                 cost = round(cost + ic_cost, 4)
                 if not ic["integrable"]:
                     fork = {"clash": ic["clash"], "skeptic_say": ic["skeptic_say"],
@@ -1419,11 +865,11 @@ async def api_plan_route(sid: str, request: Request):
             return decision, fork, cost, pipeline.LEDGER.tokens()
     try:
         decision, fork, cost, toks = await run_in_threadpool(_work)
-    except BusyError as be:
-        return _busy_response(be)
+    except ops.BusyError as be:
+        return ops.busy_response(be)
     except Exception as e:  # noqa: BLE001
-        return _engine_error(e)
-    _fold_usage(sid, s, cost, toks)
+        return ops.engine_error(e)
+    ops.fold_usage(sid, s, cost, toks)
     out = {"decision": decision, "cost": cost, "tokens": toks}
     if fork:
         out["fork"] = fork
@@ -1454,24 +900,24 @@ async def api_plan_lookup(sid: str, request: Request):
         return JSONResponse({"error": "Ask a research question."}, status_code=400)
     if len(question) > 500:
         return JSONResponse({"error": "Keep it under 500 characters."}, status_code=400)
-    if MOCK:
+    if ops.MOCK:
         claims = [dict(c) for c in _MOCK_LOOKUP]
         _save_lookups(sid, s, claims)
         return {"claims": claims, "cost": 0, "tokens": 0}
 
     def _work():
-        with _run_slot(s.get("user"), s.get("stack")):
+        with ops.run_slot(s.get("user"), s.get("stack")):
             claims = pipeline.research_lane(planner._working_idea(s), question)
             verdicts = pipeline.gate_claims(claims)
             return verdicts, round(pipeline.LEDGER.cost(), 4), pipeline.LEDGER.tokens()
     try:
         verdicts, cost, toks = await run_in_threadpool(_work)
-    except BusyError as be:
-        return _busy_response(be)
+    except ops.BusyError as be:
+        return ops.busy_response(be)
     except Exception as e:  # noqa: BLE001
-        return _engine_error(e)
+        return ops.engine_error(e)
     _meter(s.get("user"), cost)
-    nc, nt = _fold_usage(sid, s, cost, toks)
+    nc, nt = ops.fold_usage(sid, s, cost, toks)
     claims = [{"text": v.claim.text, "url": v.claim.source_url, "tier": v.tier,
                "flagged": bool(v.flagged), "reason": v.reason or ""} for v in verdicts]
     _save_lookups(sid, s, claims)
@@ -1567,7 +1013,7 @@ async def api_plans(request: Request):
         unlocked = False
         if done:
             full = store.plan_get(p["id"]) or {}
-            unlocked = _has_pdf_access(authed["email"], _plan_key(full), verified=True)
+            unlocked = _has_pdf_access(authed["email"], ops.plan_key(full), verified=True)
         plans.append({"id": p["id"], "idea": p["idea"], "status": p["status"], "step": p["step"],
                       "created_at": p["created_at"], "updated_at": p.get("updated_at") or p["created_at"],
                       "done": done, "shared": bool(p.get("shared")), "pdf_unlocked": unlocked})
@@ -1579,54 +1025,12 @@ _FEATURE_WORDS = {"director_forge": "Director Forge", "custom_directors": "custo
                   "skeptic": "the assumption stress-test"}
 
 
-def _help_pricing() -> str:
-    """The PRICING FACTS block for the help prompt, GENERATED from tiers.py + billing.py — the single
-    sources of truth — so help can never drift from the live ladder again. (The 2026-07-06 QA caught
-    help quoting the dead '$13 one-time, no subscription' model from a hardcoded prompt.)"""
-    price = billing.PDF_PRICE_CENTS / 100
-    lines = [
-        "PRICING FACTS (answer any cost/subscription question ONLY from these, never from memory):",
-        "- Getting started is free, no account: your idea spreads into directions and merges into a "
-        "refined, first-pass-researched idea on the house. Building the full plan (the deep research "
-        "step) is where an account comes in — sign up, then either bring your own key or subscribe. "
-        "A plan without an account is cleaned up after about 48 hours.",
-        "- Free on your own API key (OpenRouter or Anthropic, BYOK): unlimited use, every model crew, "
-        "every feature. Model usage bills to their key, typically well under a dollar per plan.",
-        f"- Raw export (.zip/.md) is always free. The polished investor-grade PDF: free WITH a small "
-        f"'Built with FILG' watermark on your own key, or a one-time ${price:g} unlocks THAT plan's "
-        "clean (watermark-free) PDF — re-downloading it is free, a new plan pays its own unlock. "
-        "Every subscription includes unlimited clean PDFs.",
-    ]
-    cat = tiers.catalog()
-    up = ("upgrade for a bigger allowance, add your own key as a fallback, or wait for the renewal"
-          if len(cat) > 1 else "add your own key as a fallback, or wait for the renewal")
-    lines.append(
-        "- The monthly subscription runs on FILG's hosted key (no API key needed) and unlocks every "
-        "feature and every model crew. It has a monthly usage allowance that resets with the "
-        f"billing period; hitting it means {up}:")
-    for t in cat:
-        lines.append(f"  * {t['label']}: ${t['price']:g}/mo — all features and model crews, "
-                     f"unlimited clean PDFs, ~${t['cap_cents'] / 100:g}/mo of included model usage.")
-    return "\n".join(lines)
-
-
-def _help_system() -> str:
-    """The help system block: the `help` SKILL (app/skills/help/SKILL.md — how-to, money-answer rules,
-    the not-authoritative-on-pricing/legal disclaimer) + the PRICING FACTS generated from the live
-    ladder. Skill = judgment and rules; generated block = numbers. Neither can drift alone."""
-    return skills.system("help") + "\n\n" + _help_pricing()
-
-_HELP_MOCK = ("This is mock help (no key bound). In the real app: type your idea on the home page, then "
-              "use 'I'm with you' to lock each part and build the next, or 'Not feeling it' to redo a part. "
-              "It runs on your own API key.")
-
-
 @app.post("/api/help")
 async def api_help(request: Request):
     """A standard website-style help chat for using the product. Runs on the user's own key (BYOK),
     same as every other engine call; no plan/session required."""
-    if MOCK:
-        return {"reply": _HELP_MOCK}
+    if ops.MOCK:
+        return {"reply": domain_help.MOCK_REPLY}
     authed = auth.user_from_request(request)
     user = authed["email"] if authed else None
     prov = _provider_for(user)   # the user's own key, else FILG's hosted free key (if configured)
@@ -1648,12 +1052,12 @@ async def api_help(request: Request):
         convo += f"\n{who}: {str(m.get('content', ''))[:600]}"
     try:
         with provider.use(prov), provider.use_stack(provider.DEFAULT_STACK), pipeline.run_ledger():
-            reply = pipeline.call("help", pipeline.SONNET, max_tokens=400, system=_help_system(), cache=True,
+            reply = pipeline.call("help", pipeline.SONNET, max_tokens=400, system=domain_help.system(), cache=True,
                                   prompt=f"Conversation so far:{convo or ' (none)'}\n\nUser: {message}\n\n"
                                          "Reply as the FILG help assistant.")
             _meter(user, round(pipeline.LEDGER.cost(), 4))   # FILG-key help → daily + a subscriber's monthly cap
     except Exception as e:  # noqa: BLE001
-        return _engine_error(e)
+        return ops.engine_error(e)
     return {"reply": (reply or "").strip() or "Sorry, I couldn't generate a reply, try rephrasing."}
 
 
@@ -1664,7 +1068,7 @@ async def api_plan_get(sid: str, request: Request):
         return JSONResponse({"error": "unknown session"}, status_code=404)
     if request.query_params.get("touch"):   # explicit open (not a status poll) → bump recency for the profile sort
         store.plan_touch(sid)
-    return _plan_state(s)
+    return views.plan_state(s)
 
 
 @app.post("/api/plan/{sid}/claim")
@@ -1679,35 +1083,7 @@ async def api_plan_claim(sid: str, request: Request):
         return JSONResponse({"error": "unknown session"}, status_code=404)
     if not store.plan_claim(sid, authed["email"]):
         return JSONResponse({"error": "unknown session"}, status_code=404)   # owned by someone else — don't leak
-    return _plan_state(store.plan_get(sid))
-
-
-@app.post("/api/plan/{sid}/respond")
-async def api_plan_respond(sid: str, request: Request):
-    s = store.plan_get(sid)
-    if not s or not _owns(request, s):
-        return JSONResponse({"error": "unknown session"}, status_code=404)
-    if (wall := _account_wall(request, s) or _key_wall(s)):
-        return wall
-    if s["status"] != "building":
-        return JSONResponse({"error": f"session is {s['status']}"}, status_code=409)
-    body = await request.json()
-    choice = body.get("choice")
-    if choice not in planner.CHOICES:
-        return JSONResponse({"error": "pick yes_and / not_quite / okay_but"}, status_code=400)
-    try:
-        with _run_slot(s.get("user"), s.get("stack")):
-            # If a board is set it vets each finalized section and its takeaway steers the next draft
-            # (planner.advance runs the board inline). cost includes any board review.
-            upd = planner.advance(s, choice, body.get("note"), mock=MOCK,
-                                  directors=s.get("directors") or None)
-    except BusyError as be:
-        return _busy_response(be)
-    except Exception as e:  # noqa: BLE001
-        return _engine_error(e)
-    _meter(s.get("user"), round((upd.get("cost", 0) or 0) - (s.get("cost") or 0), 4))  # draft + board review
-    store.plan_save(sid, **upd)
-    return _plan_state(store.plan_get(sid))
+    return views.plan_state(store.plan_get(sid))
 
 
 @app.post("/api/plan/{sid}/next")
@@ -1725,33 +1101,30 @@ async def api_plan_next(sid: str, request: Request):
     killed = (s.get("vetting") or {}).get("verdict") == "kill"
     if killed and not force:   # soft gate: a non-forced advance still gets the advisement (off-ramp = /revet)
         return _kill_gate(s)
-    tree = _ensure_tree(s)
+    tree = views.ensure_tree(s)
     active = tree["nodes"][tree["active"]]
     if active["step"] >= planner.N:
         return JSONResponse({"error": "This plan is already complete."}, status_code=409)
     def _work():
-        with _run_slot(s.get("user"), s.get("stack")):
+        with ops.run_slot(s.get("user"), s.get("stack")):
             if killed:   # forced past the gate with no substance → waste-of-time mode (comedic, skips research → ~$0)
                 child, cost = planner.wod_forward(active)
             else:
                 child, cost = planner.forward(planner._working_idea(s), s["research"], active, feedback,
                                               directors=s.get("directors") or None,
-                                              founder=planner._founder(s), mock=MOCK,
+                                              founder=planner._founder(s), mock=ops.MOCK,
                                               extra_personas=s.get("custom_directors"))
             return child, cost, pipeline.LEDGER.tokens()
     try:
         child, cost, toks = await run_in_threadpool(_work)
-    except BusyError as be:
-        return _busy_response(be)
+    except ops.BusyError as be:
+        return ops.busy_response(be)
     except Exception as e:  # noqa: BLE001
-        return _engine_error(e)
-    node = _new_node(child, active["id"])
-    tree["nodes"][node["id"]] = node
-    active.setdefault("children", []).append(node["id"])
-    tree["active"] = node["id"]
+        return ops.engine_error(e)
+    dtree.attach(tree, _new_node(child, active["id"]))
     _meter(s.get("user"), cost)
-    _fold_usage(sid, s, cost, toks, tree=tree, **_mirror(tree))
-    return _plan_state(store.plan_get(sid))
+    ops.fold_usage(sid, s, cost, toks, tree=tree, **views.mirror(tree))
+    return views.plan_state(store.plan_get(sid))
 
 
 @app.post("/api/plan/{sid}/revet")
@@ -1770,26 +1143,26 @@ async def api_plan_revet(sid: str, request: Request):
         return JSONResponse(
             {"error": "Give me a bit more — a real skill or asset, and who'd pay for it."}, status_code=400)
     try:
-        with _run_slot(s.get("user"), s.get("stack")):
-            shaped, vetting, cost = intake.revet(s["idea"], more, s.get("research"), mock=MOCK)
+        with ops.run_slot(s.get("user"), s.get("stack")):
+            shaped, vetting, cost = intake.revet(s["idea"], more, s.get("research"), mock=ops.MOCK)
             proposal = None
             if vetting["verdict"] != "kill":   # cleared → redraft part 1 from the now-substantive thesis
                 proposal, c2 = planner.first_proposal(
-                    shaped["thesis"], s["research"], founder=shaped.get("founder_edge"), mock=MOCK)
+                    shaped["thesis"], s["research"], founder=shaped.get("founder_edge"), mock=ops.MOCK)
                 cost = round(cost + c2, 4)
             toks = pipeline.LEDGER.tokens()
-    except BusyError as be:
-        return _busy_response(be)
+    except ops.BusyError as be:
+        return ops.busy_response(be)
     except Exception as e:  # noqa: BLE001
-        return _engine_error(e)
+        return ops.engine_error(e)
     updates = {"shaped": shaped, "vetting": vetting}
     if proposal is not None:
         root = _new_node(planner.root_node(proposal), None)   # no branches exist yet on a kill, so reseed
-        tree = {"nodes": {root["id"]: root}, "active": root["id"]}
-        updates.update({"proposal": proposal, "step": 0, "tree": tree, **_mirror(tree)})
+        tree = dtree.seed(root)
+        updates.update({"proposal": proposal, "step": 0, "tree": tree, **views.mirror(tree)})
     _meter(s.get("user"), cost)
-    _fold_usage(sid, s, cost, toks, **updates)
-    return _plan_state(store.plan_get(sid))
+    ops.fold_usage(sid, s, cost, toks, **updates)
+    return views.plan_state(store.plan_get(sid))
 
 
 @app.post("/api/plan/{sid}/back")
@@ -1808,33 +1181,29 @@ async def api_plan_back(sid: str, request: Request):
         return JSONResponse(
             {"error": "Add a quick note on what to change — feedback's required to go back a step."},
             status_code=400)
-    tree = _ensure_tree(s)
+    tree = views.ensure_tree(s)
     active = tree["nodes"][tree["active"]]
     if not active.get("parent"):
         return JSONResponse({"error": "You're on the first part — nothing to go back to."},
                             status_code=400)
     prev = tree["nodes"][active["parent"]]   # the previous step's node — the one we re-draft
     try:
-        with _run_slot(s.get("user"), s.get("stack")):
+        with ops.run_slot(s.get("user"), s.get("stack")):
             sib, cost = planner.rebranch(planner._working_idea(s), s["research"], prev, feedback,
-                                         founder=planner._founder(s), mock=MOCK)
+                                         founder=planner._founder(s), mock=ops.MOCK)
             regrade, cost = _regrade_setup(s, sib, cost)   # back onto the setup → re-grade the verdict
             toks = pipeline.LEDGER.tokens()
-    except BusyError as be:
-        return _busy_response(be)
+    except ops.BusyError as be:
+        return ops.busy_response(be)
     except Exception as e:  # noqa: BLE001
-        return _engine_error(e)
-    node = _new_node(sib, prev.get("parent"))   # sibling of `prev` → branches from prev's parent
-    tree["nodes"][node["id"]] = node
-    if prev.get("parent"):
-        tree["nodes"][prev["parent"]].setdefault("children", []).append(node["id"])
-    tree["active"] = node["id"]
+        return ops.engine_error(e)
+    dtree.attach(tree, _new_node(sib, prev.get("parent")))   # sibling of `prev` → branches from prev's parent
     _meter(s.get("user"), cost)
-    updates = dict(tree=tree, **_mirror(tree))
+    updates = dict(tree=tree, **views.mirror(tree))
     if regrade:
         updates["vetting"] = regrade
-    _fold_usage(sid, s, cost, toks, **updates)
-    return _plan_state(store.plan_get(sid))
+    ops.fold_usage(sid, s, cost, toks, **updates)
+    return views.plan_state(store.plan_get(sid))
 
 
 @app.post("/api/plan/{sid}/redraft")
@@ -1853,33 +1222,29 @@ async def api_plan_redraft(sid: str, request: Request):
         return JSONResponse(
             {"error": "Add a quick note on what's not landing — a rework needs something to steer it."},
             status_code=400)
-    tree = _ensure_tree(s)
+    tree = views.ensure_tree(s)
     active = tree["nodes"][tree["active"]]
     if active["step"] >= planner.N:
         return JSONResponse({"error": "This plan is already complete."}, status_code=409)
     def _work():
-        with _run_slot(s.get("user"), s.get("stack")):
+        with ops.run_slot(s.get("user"), s.get("stack")):
             sib, cost = planner.rebranch(planner._working_idea(s), s["research"], active, feedback,
-                                         founder=planner._founder(s), mock=MOCK)
+                                         founder=planner._founder(s), mock=ops.MOCK)
             regrade, cost2 = _regrade_setup(s, sib, cost)   # setup reframed → re-grade the verdict on the new angle
             return sib, regrade, cost2, pipeline.LEDGER.tokens()
     try:
         sib, regrade, cost, toks = await run_in_threadpool(_work)
-    except BusyError as be:
-        return _busy_response(be)
+    except ops.BusyError as be:
+        return ops.busy_response(be)
     except Exception as e:  # noqa: BLE001
-        return _engine_error(e)
-    node = _new_node(sib, active.get("parent"))   # sibling of the active node → same step, new branch
-    tree["nodes"][node["id"]] = node
-    if active.get("parent"):
-        tree["nodes"][active["parent"]].setdefault("children", []).append(node["id"])
-    tree["active"] = node["id"]
+        return ops.engine_error(e)
+    dtree.attach(tree, _new_node(sib, active.get("parent")))   # sibling of the active node → same step, new branch
     _meter(s.get("user"), cost)
-    updates = dict(tree=tree, **_mirror(tree))
+    updates = dict(tree=tree, **views.mirror(tree))
     if regrade:
         updates["vetting"] = regrade
-    _fold_usage(sid, s, cost, toks, **updates)
-    return _plan_state(store.plan_get(sid))
+    ops.fold_usage(sid, s, cost, toks, **updates)
+    return views.plan_state(store.plan_get(sid))
 
 
 @app.post("/api/plan/{sid}/stack")
@@ -1892,7 +1257,7 @@ async def api_plan_stack(sid: str, request: Request):
     body = await request.json()
     want = provider.stack_name(body.get("stack"))
     store.plan_save(sid, stack=want)
-    return _plan_state(store.plan_get(sid))
+    return views.plan_state(store.plan_get(sid))
 
 
 @app.post("/api/plan/{sid}/goto")
@@ -1904,12 +1269,12 @@ async def api_plan_goto(sid: str, request: Request):
         return JSONResponse({"error": "unknown session"}, status_code=404)
     body = await request.json()
     node_id = body.get("node")
-    tree = _ensure_tree(s)
+    tree = views.ensure_tree(s)
     if node_id not in (tree.get("nodes") or {}):
         return JSONResponse({"error": "unknown node"}, status_code=404)
     tree["active"] = node_id
-    store.plan_save(sid, tree=tree, **_mirror(tree))
-    return _plan_state(store.plan_get(sid))
+    store.plan_save(sid, tree=tree, **views.mirror(tree))
+    return views.plan_state(store.plan_get(sid))
 
 
 @app.post("/api/plan/{sid}/ask")
@@ -1925,16 +1290,16 @@ async def api_plan_ask(sid: str, request: Request):
     if archetype not in planner.ARCHETYPE_KEYS:
         return JSONResponse({"error": "pick an advisor"}, status_code=400)
     try:
-        with _run_slot(s.get("user"), s.get("stack")):
+        with ops.run_slot(s.get("user"), s.get("stack")):
             res, cost = planner.ask_expert(s["idea"], s.get("files") or {}, archetype,
-                                           body.get("question") or "", mock=MOCK)
+                                           body.get("question") or "", mock=ops.MOCK)
             toks = pipeline.LEDGER.tokens()
-    except BusyError as be:
-        return _busy_response(be)
+    except ops.BusyError as be:
+        return ops.busy_response(be)
     except Exception as e:  # noqa: BLE001
-        return _engine_error(e)
+        return ops.engine_error(e)
     _meter(s.get("user"), cost)
-    nc, nt = _fold_usage(sid, s, cost, toks)
+    nc, nt = ops.fold_usage(sid, s, cost, toks)
     return {**res, "cost": nc, "tokens": nt}
 
 
@@ -1960,31 +1325,31 @@ async def api_plan_board(sid: str, request: Request):
     work_idea = planner._working_idea(s)
     plan_text = planner.bundle_markdown(work_idea, s.get("files") or {})
     def _work():
-        with _run_slot(s.get("user"), s.get("stack")):
-            res, cost = board.convene(work_idea, plan_text, question, directors, mock=MOCK,
+        with ops.run_slot(s.get("user"), s.get("stack")):
+            res, cost = board.convene(work_idea, plan_text, question, directors, mock=ops.MOCK,
                                       extra_personas=customs)
             return res, cost, pipeline.LEDGER.tokens()
     try:
         res, cost, toks = await run_in_threadpool(_work)
-    except BusyError as be:
-        return _busy_response(be)
+    except ops.BusyError as be:
+        return ops.busy_response(be)
     except Exception as e:  # noqa: BLE001
-        return _engine_error(e)
+        return ops.engine_error(e)
     _meter(s.get("user"), cost)
     extra = {"directors": directors} if picked else {}   # persist a freshly chosen board for later steps
     # Persist the convene on the ACTIVE NODE's board history (bounded), so it survives tree navigation
     # (the flat `board` column is a mirror of the active node — writing only there gets clobbered),
     # steers later drafts via planner._board_notes, and shows up in the exports/handoff.
-    tree = _ensure_tree(s)
+    tree = views.ensure_tree(s)
     a = (tree.get("nodes") or {}).get(tree.get("active"))
     if a is not None:
         entry = {"section": "convene", "title": f"Board convened: “{question[:90]}”", **res}
-        # the legacy /respond flow advances the flat mirror without the tree — trust whichever is ahead
+        # pre-tree sessions advanced the flat mirror without the tree — trust whichever is ahead
         base = max((a.get("board") or []), (s.get("board") or []), key=len)
-        reviews = (list(base) + [entry])[-_MAX_BOARD_HISTORY:]
+        reviews = dtree.clip("board", list(base) + [entry])
         a["board"] = reviews
         extra.update(tree=tree, board=reviews)
-    nc, nt = _fold_usage(sid, s, cost, toks, **extra)
+    nc, nt = ops.fold_usage(sid, s, cost, toks, **extra)
     return {**res, "cost": nc, "tokens": nt}
 
 
@@ -2017,15 +1382,15 @@ async def api_director_forge(sid: str, request: Request):
                             status_code=409)
     existing = list(personas.KEYS) + [p["key"] for p in (s.get("custom_directors") or [])]
     try:
-        with _run_slot(s.get("user"), s.get("stack")):
-            persona, cost = director_forge.forge(desc, existing_keys=existing, mock=MOCK)
+        with ops.run_slot(s.get("user"), s.get("stack")):
+            persona, cost = director_forge.forge(desc, existing_keys=existing, mock=ops.MOCK)
             toks = pipeline.LEDGER.tokens()
-    except BusyError as be:
-        return _busy_response(be)
+    except ops.BusyError as be:
+        return ops.busy_response(be)
     except Exception as e:  # noqa: BLE001
-        return _engine_error(e)
+        return ops.engine_error(e)
     _meter(s.get("user"), cost)
-    nc, nt = _fold_usage(sid, s, cost, toks)
+    nc, nt = ops.fold_usage(sid, s, cost, toks)
     return {"persona": persona, "cost": nc, "tokens": nt}
 
 
@@ -2051,7 +1416,7 @@ async def api_director_save(sid: str, request: Request):
     if clean["key"] not in directors:                        # seat them on the active board
         directors.append(clean["key"])
     store.plan_save(sid, custom_directors=customs, directors=directors)
-    return _plan_state(store.plan_get(sid))
+    return views.plan_state(store.plan_get(sid))
 
 
 @app.post("/api/plan/{sid}/research/query")
@@ -2071,16 +1436,16 @@ async def api_research_query(sid: str, request: Request):
         return JSONResponse({"error": "Keep it under 1000 characters."}, status_code=400)
     mode = "deep" if body.get("mode") == "deep" else "quick"
     try:
-        with _run_slot(s.get("user"), s.get("stack")):
-            res, cost = advisor.research_answer(s, q, mode=mode, mock=MOCK)
+        with ops.run_slot(s.get("user"), s.get("stack")):
+            res, cost = advisor.research_answer(s, q, mode=mode, mock=ops.MOCK)
             toks = pipeline.LEDGER.tokens()
-    except BusyError as be:
-        return _busy_response(be)
+    except ops.BusyError as be:
+        return ops.busy_response(be)
     except Exception as e:  # noqa: BLE001
         traceback.print_exc()
         return JSONResponse({"error": str(e)}, status_code=500)
     _meter(s.get("user"), cost)
-    nc, nt = _fold_usage(sid, s, cost, toks)
+    nc, nt = ops.fold_usage(sid, s, cost, toks)
     return {**res, "cost": nc, "tokens": nt}
 
 
@@ -2097,19 +1462,17 @@ def _stress_worker(sid: str, idea: str, shaped: dict, research: dict | None,
             store.plan_save(sid, skeptic={"status": "running", "progress": list(progress),
                                           "result": None})
 
-        prov = _provider_for(user)
-        stk = tiers.clamp_stack(stack, tier=_tier(user), byok=bool(prov and not prov.bills_filg))
-        with provider.use(prov), provider.use_stack(stk), pipeline.run_ledger():
-            res, cost = skeptic.stress_test(idea, shaped, research, mock=MOCK, on_progress=on_progress)
+        with ops.bind_session_run(user, stack):
+            res, cost = skeptic.stress_test(idea, shaped, research, mock=ops.MOCK, on_progress=on_progress)
             toks = pipeline.LEDGER.tokens()
         _meter(user, cost)
         s = store.plan_get(sid) or {}
-        _fold_usage(sid, s, cost, toks,
+        ops.fold_usage(sid, s, cost, toks,
                     skeptic={"status": "done", "progress": progress, "result": res, "cost": cost})
     except Exception as e:  # noqa: BLE001
         traceback.print_exc()
         store.plan_save(sid, skeptic={"status": "error", "progress": progress, "result": None,
-                                      "error": _humanize_error(e)[0]})
+                                      "error": ops.humanize_error(e)[0]})
 
 
 @app.post("/api/plan/{sid}/stress-test")
@@ -2178,14 +1541,14 @@ async def api_plan_chat(sid: str, request: Request):
                                   (str(body.get("working") or "").strip() or None))
 
     def _work():
-        with _run_slot(s.get("user"), s.get("stack")):
-            reply, cost = advisor.chat_reply(s, message, history=hist_model, mock=MOCK,
+        with ops.run_slot(s.get("user"), s.get("stack")):
+            reply, cost = advisor.chat_reply(s, message, history=hist_model, mock=ops.MOCK,
                                              journey=journey, situation=situation)
             return reply, cost, pipeline.LEDGER.tokens()
     try:
         reply, cost, toks = await run_in_threadpool(_work)
-    except BusyError as be:
-        return _busy_response(be)
+    except ops.BusyError as be:
+        return ops.busy_response(be)
     except Exception as e:  # noqa: BLE001
         traceback.print_exc()
         return JSONResponse({"error": str(e)}, status_code=500)
@@ -2193,7 +1556,7 @@ async def api_plan_chat(sid: str, request: Request):
     history += (([{"role": "user", "content": message}] if echo_user else [])
                 + [{"role": "assistant", "content": reply}])
     _meter(s.get("user"), cost)  # FILG-key chat counts toward the daily kill switch; BYOK is the user's spend
-    nc, nt = _fold_usage(sid, s, cost, toks, chat=history)
+    nc, nt = ops.fold_usage(sid, s, cost, toks, chat=history)
     return {"reply": reply, "messages": history, "cost": nc, "tokens": nt}
 
 
@@ -2240,166 +1603,6 @@ async def api_plan_download(sid: str, request: Request):
                     headers={"Content-Disposition": 'attachment; filename="filg-business-plan.zip"'})
 
 
-def _export_text(s: dict) -> str:
-    """Everything the operator has generated so far, as ONE plain-text dump: the idea + offer summary,
-    the straight read, the plan part by part, the annotated graded research, and the board's takes.
-    Minimal formatting on purpose — it's a get-your-data-out file, available at any point, always free."""
-    out: list[str] = []
-    W = out.append
-    BAR = "=" * 64
-    R = s.get("research") or {}
-    prose = R.get("prose") or {}
-    v = s.get("vetting") or {}
-    sh = s.get("shaped") or {}
-    W("FILG — YOUR BUSINESS PLAN, SO FAR")
-    W("Built with FILG. Every number is graded by a source-credibility gate: vendor-marketing stats are")
-    W("labeled, not laundered. This is your raw export, it's always free.")
-    W("")
-    W(BAR); W("THE IDEA"); W(BAR)
-    W((s.get("idea") or "").strip())
-    if prose.get("title"):
-        W(""); W("Offer: " + prose["title"])
-    if prose.get("offer"):
-        W("What you'd sell: " + prose["offer"])
-    if prose.get("gtm"):
-        W("How you'd sell it: " + prose["gtm"])
-    if v.get("verdict"):
-        shape = ("  ·  shape: " + v["model_type"].replace("-", " ")) if v.get("model_type") else ""
-        W("Verdict: " + v["verdict"].upper() + shape)
-    W("")
-    if sh or v:
-        W(BAR); W("THE STRAIGHT READ"); W(BAR)
-        if sh.get("thesis"):
-            W("Focus: " + sh["thesis"])
-        if sh.get("founder_edge"):
-            W("Your edge: " + sh["founder_edge"])
-        if v.get("reason"):
-            W(v["reason"])
-        if v.get("biggest_risk"):
-            W("Biggest risk: " + v["biggest_risk"])
-        if v.get("first_test"):
-            W("Cheapest first test: " + v["first_test"])
-        for a in (v.get("premortem") or []):
-            why = ("  (" + a["why"] + ")") if a.get("why") else ""
-            W("  - [" + str(a.get("status", "")) + "] " + str(a.get("assumption", "")) + why)
-        W("")
-    files = s.get("files") or {}
-    if files:
-        W(BAR); W("THE PLAN, PART BY PART"); W(BAR)
-        for sec in planner.SECTIONS:
-            if sec["file"] in files:
-                W(""); W("## " + sec["title"] + " — " + sec.get("sub", ""))
-                W((files[sec["file"]] or "").strip())
-        W("")
-    rows = R.get("rows") or []
-    if rows:
-        W(BAR); W("THE RESEARCH, GRADED"); W(BAR)
-        W("Each claim is marked CITED (passed the gate) or VENDOR/UNVERIFIED (treat with care).")
-        for r in rows:
-            mark = "CITED" if r.get("mark") == "ok" else "VENDOR/UNVERIFIED"
-            W(""); W("[" + mark + "] " + (r.get("text") or ""))
-            meta = [x for x in (r.get("url"), r.get("note"),
-                                ("as of " + str(r["as_of"])) if r.get("as_of") else None) if x]
-            if meta:
-                W("    " + "  ·  ".join(meta))
-        W("")
-    board = s.get("board") or []
-    if board:
-        W(BAR); W("YOUR BOARD'S TAKE (composite advisors, not real people)"); W(BAR)
-        for rev in board:
-            W(""); W("On “" + (rev.get("title") or "") + "”:")
-            sk = rev.get("skeptic") or {}
-            if sk.get("rationale"):
-                W("  Skeptic (" + str(sk.get("verdict", "")) + "): " + sk["rationale"])
-            for d in (rev.get("directors") or []):
-                W("  " + (d.get("first") or d.get("name") or "Director") + ": " + (d.get("take") or ""))
-            if rev.get("verdict"):
-                W("  Board takeaway: " + rev["verdict"])
-        W("")
-    W(BAR)
-    W("Generated by FILG · fuckitletsgo.ai · your raw export is always free.")
-    return "\n".join(out)
-
-
-def _handoff_prompt(s: dict) -> str:
-    """An LLM-ingestion prompt so the operator can paste their work into ANY model and pick up exactly
-    where they left off: the idea + straight read, the plan parts already written, the part they're on
-    now, the graded research WITH source links, and the board's notes — then a continue-from-here task.
-    We never include sections ahead of where they are."""
-    out: list[str] = []
-    W = out.append
-    R = s.get("research") or {}
-    prose = R.get("prose") or {}
-    v = s.get("vetting") or {}
-    sh = s.get("shaped") or {}
-    files = s.get("files") or {}
-    prop = s.get("proposal") or {}
-    W("You are a pragmatic business-planning partner for a solo operator. They started building a plan "
-      "in another tool and want you to continue from exactly where they left off. Everything generated "
-      "so far is below: the idea, the honest read on it, the plan parts already written, the part they "
-      "are on now, the graded research (with source links), and their board's notes.")
-    W("")
-    W("Rules: keep the same buyer, offer, price, and numbers already chosen; stay concise; build on the "
-      "parts already written instead of redoing them; treat any source marked VENDOR/UNVERIFIED as "
-      "unproven; do not invent statistics.")
-    W("")
-    W("=== THE IDEA ===")
-    W((s.get("idea") or "").strip())
-    if prose.get("title"):
-        W("Offer: " + prose["title"])
-    if prose.get("offer"):
-        W("What they'd sell: " + prose["offer"])
-    if prose.get("gtm"):
-        W("How they'd sell it: " + prose["gtm"])
-    if v.get("verdict"):
-        W("Verdict so far: " + v["verdict"].upper()
-          + (("  ·  shape: " + v["model_type"].replace("-", " ")) if v.get("model_type") else ""))
-    if sh.get("founder_edge"):
-        W("Founder's edge: " + sh["founder_edge"])
-    if v.get("biggest_risk"):
-        W("Biggest risk: " + v["biggest_risk"])
-    W("")
-    if files:
-        W("=== THE PLAN SO FAR (already written — build on these, don't repeat) ===")
-        for sec in planner.SECTIONS:
-            if sec["file"] in files:
-                W(""); W("## " + sec["title"]); W((files[sec["file"]] or "").strip())
-        W("")
-    if prop.get("draft") and not s.get("done"):
-        W("=== THE PART THEY'RE ON NOW (a draft, not yet locked) ===")
-        W("## " + (prop.get("title") or ""))
-        W((prop.get("draft") or "").strip())
-        W("")
-    rows = R.get("rows") or []
-    if rows:
-        W("=== GRADED RESEARCH (with source links) ===")
-        for r in rows:
-            mark = "CITED" if r.get("mark") == "ok" else "VENDOR/UNVERIFIED"
-            url = ("  <" + r["url"] + ">") if r.get("url") else ""
-            W("- [" + mark + "] " + (r.get("text") or "") + url)
-        W("")
-    board = s.get("board") or []
-    if board:
-        W("=== THE BOARD'S NOTES (composite advisors) ===")
-        for rev in board:
-            sk = rev.get("skeptic") or {}
-            tail = ("  | skeptic (" + str(sk.get("verdict", "")) + "): " + sk["rationale"]) if sk.get("rationale") else ""
-            W("- on “" + (rev.get("title") or "") + "”: " + (rev.get("verdict") or "") + tail)
-        W("")
-    W("=== YOUR TASK ===")
-    if s.get("done"):
-        W("The plan is complete. Pressure-test it, then help them sharpen the weakest part and plan the "
-          "first 30 days of execution.")
-    else:
-        nxt = ""
-        st = s.get("step")
-        if isinstance(st, int) and 0 <= st + 1 < len(planner.SECTIONS):
-            nxt = " The next part to write is “" + planner.SECTIONS[st + 1]["title"] + "”."
-        W("Continue the plan from the part they're on now, keeping it tight and consistent with "
-          "everything above." + nxt)
-    return "\n".join(out)
-
-
 @app.get("/api/plan/{sid}/handoff.txt")
 async def api_plan_handoff(sid: str, request: Request):
     """The LLM-handoff prompt (copy-paste into any model to continue). Free, owner only, any point."""
@@ -2408,7 +1611,7 @@ async def api_plan_handoff(sid: str, request: Request):
         return JSONResponse({"error": "unknown session"}, status_code=404)
     if not (s.get("research") or s.get("files") or s.get("shaped") or s.get("vetting")):
         return JSONResponse({"error": "Nothing to hand off yet."}, status_code=400)
-    return Response(_handoff_prompt(s), media_type="text/plain; charset=utf-8")
+    return Response(exports.handoff_prompt(s), media_type="text/plain; charset=utf-8")
 
 
 @app.get("/api/plan/{sid}/export.txt")
@@ -2421,14 +1624,9 @@ async def api_plan_export_txt(sid: str, request: Request):
         return JSONResponse({"error": "unknown session"}, status_code=404)
     if not (s.get("research") or s.get("files") or s.get("shaped") or s.get("vetting")):
         return JSONResponse({"error": "Nothing to export yet."}, status_code=400)
-    fn = f"{_slug(s.get('idea'))}-filg-export.txt"
-    return Response(_export_text(s), media_type="text/plain; charset=utf-8",
+    fn = f"{exports.slug(s.get('idea'))}-filg-export.txt"
+    return Response(exports.export_text(s), media_type="text/plain; charset=utf-8",
                     headers={"Content-Disposition": f'attachment; filename="{fn}"'})
-
-
-def _slug(text: str) -> str:
-    s = re.sub(r"[^a-z0-9]+", "-", (text or "business-plan").lower()).strip("-")
-    return (s or "business-plan")[:50]
 
 
 @app.get("/api/plan/{sid}/plan.pdf")
@@ -2451,7 +1649,7 @@ async def api_plan_pdf(sid: str, request: Request):
     # artifact that circulates; the $13 unlock removes the line). No access and no key → payment.
     watermark = False
     if (billing.PDF_BILLING_ENABLED and not _is_subscriber(email)
-            and not billing.claim_pdf(email, _plan_key(s))):
+            and not billing.claim_pdf(email, ops.plan_key(s))):
         owner = (s.get("user") or email or "").strip().lower()
         if keys.enabled() and owner and keys.has_key(owner):
             watermark = True
@@ -2462,21 +1660,21 @@ async def api_plan_pdf(sid: str, request: Request):
                           "own API key for a free watermarked copy. Your raw export is always free.",
                  "needPurchase": True, "price": billing.PDF_PRICE_CENTS}, status_code=402)
     try:
-        with _run_slot(s.get("user"), s.get("stack")):
-            plan, cost = plan_pdf.synthesize(s, mock=MOCK)
+        with ops.run_slot(s.get("user"), s.get("stack")):
+            plan, cost = plan_pdf.synthesize(s, mock=ops.MOCK)
             data = plan_pdf.render(plan, style=(request.query_params.get("style") or "filg"),
                                    watermark=watermark)
             toks = pipeline.LEDGER.tokens()
-    except BusyError as be:
-        return _busy_response(be)
+    except ops.BusyError as be:
+        return ops.busy_response(be)
     except Exception as e:  # noqa: BLE001
         traceback.print_exc()
         return JSONResponse({"error": f"Could not build the PDF: {e}"}, status_code=500)
     # BYOK → the owner's own key (never touches FILG's budget). A subscriber → FILG's key, so meter the
     # synth against their monthly fair-use cap. The per-session meter reflects it either way.
     _meter(s.get("user"), cost)
-    nc, nt = _fold_usage(sid, s, cost, toks)   # binary response → echo usage via headers for the meter
-    fn = f"{_slug(s.get('idea'))}-business-plan.pdf"
+    nc, nt = ops.fold_usage(sid, s, cost, toks)   # binary response → echo usage via headers for the meter
+    fn = f"{exports.slug(s.get('idea'))}-business-plan.pdf"
     return Response(data, media_type="application/pdf",
                     headers={"Content-Disposition": f'attachment; filename="{fn}"',
                              "X-FILG-Cost": str(nc), "X-FILG-Tokens": str(nt),
@@ -2488,7 +1686,7 @@ def _page_head() -> str:
     cfg = json.dumps({"authEnabled": auth.AUTH_ENABLED,
                       "pdfBilling": billing.PDF_BILLING_ENABLED, "pdfPrice": billing.PDF_PRICE_CENTS,
                       "byokEnabled": keys.enabled(),
-                      "freeTaste": bool(HOSTED_FREE and keys.enabled()),   # first query on FILG's key
+                      "freeTaste": bool(ops.HOSTED_FREE and keys.enabled()),   # first query on FILG's key
                       "subEnabled": billing.PDF_BILLING_ENABLED,           # monthly tiers available (Stripe on)
                       "tiers": tiers.catalog(),                            # pricing table / fork UI
                       # dev-only: with auth off, act as this account so the subscriber UX reflects locally

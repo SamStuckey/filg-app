@@ -1,6 +1,6 @@
 """RAG stage 2 — embeddings (mock), the BLOB vector store, and semantic top-k search."""
 
-from rag import embed, ingest, search, store
+from app.rag import embed, ingest, search, store
 
 
 # ── embeddings ───────────────────────────────────────────────────────────────

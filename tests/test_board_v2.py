@@ -17,7 +17,8 @@ def wait_status(client, sid):
 
 
 def _start(client, email):
-    sid = client.post("/api/plan/start", json={"idea": GRAB_BAG, "email": email}).json()["id"]
+    from conftest import start_plan
+    sid = start_plan(client, GRAB_BAG, email=email)
     wait_status(client, sid)
     return sid
 
@@ -83,8 +84,9 @@ def test_help_pricing_facts_track_the_live_ladder():
     live prices and none of the dead models (the 2026-07-06 QA caught help quoting a stale price
     from a hardcoded prompt). Live model since the gating wave: $13 per-plan clean PDF, Pro $29 /
     Ultimate $99; the $7/3-credit bundle and the Starter/Studio tiers are dead copy."""
-    from app import main, tiers
-    block = main._help_system()
+    from app import tiers
+    from app.domain import help as domain_help
+    block = domain_help.system()
     for t in tiers.catalog():                      # every live tier, by label and price
         assert t["label"] in block and f"${t['price']:g}/mo" in block
     assert "$13" in block and "watermark" in block  # the PDF story ($13/plan + free watermarked copy)
@@ -98,7 +100,7 @@ def test_help_pricing_facts_track_the_live_ladder():
     assert "Lead with the FORK" in block
     assert "NOT qualified" in block and "authoritative" in block
     # help is a real SKILL now (app/skills/help), not a hardcoded prompt in main.py
-    import skill_registry
+    from app import skill_registry
     assert skill_registry.exists("help")
 
 

@@ -32,7 +32,7 @@ SKILLS_DIR = Path(__file__).resolve().parent / "skills"
 # Standing voice rule — appended to EVERY skill's system block so all generated, user-facing text
 # avoids the usual AI tells. Single-sourced from `voice_lint.VOICE_RULE` (the same canonical blocklist
 # the deterministic linter gates on), so the prompt and the gate can never drift. One place to edit.
-from voice_lint import VOICE_RULE as VOICE  # noqa: E402
+from engine.voice_lint import VOICE_RULE as VOICE  # noqa: E402
 
 
 def _parse(text: str) -> tuple[dict, str]:

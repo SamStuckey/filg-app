@@ -53,52 +53,9 @@ def test_key_remove_requires_signin(client):
 
 
 # ── phase 3: gating + metering routing ────────────────────────────────────────
-from app import access, main  # noqa: E402
+from app import access, main, ops  # noqa: E402
 
 _IDEA = {"idea": "a real idea about coaching small dental practices", "email": "x@y.com"}
-
-
-def test_start_walls_without_hosted_key(client, monkeypatch):
-    # BYOK on, no user key, and NO hosted FILG key → must bring a key from the very first submit.
-    monkeypatch.setattr(main.keys, "enabled", lambda: True)
-    monkeypatch.setattr(main.keys, "has_key", lambda u: False)
-    monkeypatch.setattr(main, "HOSTED_FREE", False)
-    r = client.post("/api/plan/start", json=_IDEA)
-    assert r.status_code == 402 and r.json()["needKey"] is True
-
-
-def test_first_query_free_on_hosted_key(client, monkeypatch):
-    # BYOK on, no user key, hosted FILG key present, free taste available → the first query is on us.
-    monkeypatch.setattr(main.keys, "enabled", lambda: True)
-    monkeypatch.setattr(main.keys, "has_key", lambda u: False)
-    monkeypatch.setattr(main, "HOSTED_FREE", True)
-    monkeypatch.setattr(main.usage, "can_run", lambda *a, **k: (True, "ok"))
-    r = client.post("/api/plan/start", json=_IDEA)
-    assert r.status_code == 200 and "id" in r.json()
-
-
-def test_free_taste_used_degrades_to_needkey(client, monkeypatch):
-    # Free taste used up (or the daily pool tapped) → degrade to a key prompt, not a dead end.
-    monkeypatch.setattr(main.keys, "enabled", lambda: True)
-    monkeypatch.setattr(main.keys, "has_key", lambda u: False)
-    monkeypatch.setattr(main, "HOSTED_FREE", True)
-    monkeypatch.setattr(main.usage, "can_run", lambda *a, **k: (False, "free limit reached"))
-    r = client.post("/api/plan/start", json=_IDEA)
-    assert r.status_code == 402 and r.json()["needKey"] is True
-
-
-def test_byok_user_has_no_cap(client, monkeypatch):
-    monkeypatch.setattr(main.keys, "enabled", lambda: True)
-    monkeypatch.setattr(main.keys, "has_key", lambda u: True)            # user has a saved key
-    r = client.post("/api/plan/start", json=_IDEA)
-    assert r.status_code == 200 and "id" in r.json()                     # key holders are unlimited
-
-
-def test_start_legacy_when_byok_off(client, monkeypatch):
-    monkeypatch.setattr(main.keys, "enabled", lambda: False)             # no FILG_KEY_SECRET (dev)
-    monkeypatch.setattr(main.usage, "can_run", lambda *a, **k: (False, "free limit reached"))
-    r = client.post("/api/plan/start", json=_IDEA)
-    assert r.status_code == 402 and "limit" in r.json()["error"].lower()  # legacy dev free-cap preserved
 
 
 # ── the section wall: no free API actions past the welcome ─────────────────────
@@ -121,10 +78,11 @@ def test_key_wall_off_when_byok_disabled(monkeypatch):
 
 
 def test_next_is_walled_without_key(client, monkeypatch):
+    from conftest import start_plan
     monkeypatch.setattr(main.keys, "enabled", lambda: True)
     has = {"v": True}
     monkeypatch.setattr(main.keys, "has_key", lambda u: has["v"])
-    sid = client.post("/api/plan/start", json=_IDEA).json()["id"]   # create the plan as a key holder
+    sid = start_plan(client, _IDEA["idea"], email=_IDEA["email"])   # build the plan as a key holder
     has["v"] = False                                                # key gone → wall closes
     r = client.post("/api/plan/" + sid + "/next", json={})          # building needs a key
     assert r.status_code == 402 and r.json().get("needKey") is True

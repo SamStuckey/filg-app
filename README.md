@@ -8,53 +8,59 @@ laundered.** No hallucinated TAM. Built for solo operators starting a service / 
 business.
 
 > Brand: **FILG** ("fuck it, let's go"). Domains: **filg.ai** + **fuckitletsgo.ai**.
-> Status: engine + marketing site working; **building the thin MVP, launching the free tier.**
+> Live at https://fuckitletsgo.ai (Render, auto-deploys from `main`).
 
 ---
 
-## What's here
+## Architecture
+
+Two packages with a hard boundary, plus deploy artifacts:
 
 | Path | What it is |
 |---|---|
-| `prototype/pipeline.py` | The unattended engine: Haiku research fan-out (real `web_search`) → Sonnet synthesis → source-credibility gate → re-search of flagged claims. Meters its own $/run. |
-| `prototype/source_credibility_gate.py` | The differentiator: grades each claim's source, flags self-interested vendor stats, routes a Haiku judge for unknown domains. |
-| `prototype/teardown.py` | The weekly "Cited Offer Teardown" lead-magnet generator (label-don't-chase mode, ~$0.40/issue). Emits branded hosted pages into `landing/teardowns/`. |
-| `prototype/pipeline_economics.py` · `test_01_*.md` | The cost/quality kill-gate work. |
-| `landing/` | The marketing site (self-contained static HTML) + the hosted teardown archive. Deploy the folder; point both domains at it. |
-| `teardowns/` | Markdown sources + structured rows for each teardown issue. |
+| `engine/` | **The decision engine — use-case-agnostic.** Research fan-out + the source-credibility gate (`pipeline.py`), the deterministic conductor (`spine.py`), the graded-evidence entry point (`evidence.py`), the decision tree — nodes, kinds, attachments (`tree.py`), providers/BYOK (`provider.py`), the model catalog, the VOICE linter, metering (`usage.py`). Knows nothing about business plans; `tests/test_engine_neutrality.py` enforces it. |
+| `app/` | **The business-planning product.** FastAPI routes (`main.py`) over layered modules: `ops.py` (how an op runs: slots, guards, metering), `views.py` (session → frontend shaping), `exports.py` (free text exports), `access.py` (entitlements), plus the funnel (`brainstorm`/`intake`/`planner`), advisors (`personas`/`board`/`advisor`), persistence (`store.py`) and billing. `app/domain/` is the use-case plug: the section spec, canned copy, node vocabulary, research framing, help facts. `app/web/` is the SPA. |
+| `scripts/` | Dev CLI (`dev.py`), the seeded Playwright monkey (`monkey.py`), the weekly teardown publisher (`teardown_publish.py`), the live BYOK path check (`verify_openrouter.py`). |
+| `landing/` · `teardowns/` | The static marketing site + the published teardown issues. |
+| `tests/` | 350+ pytest tests (mock mode, no spend) — wire-shape goldens, the engine-neutrality beacon, contract tests. |
 
 > **Planning + research docs** live in the sibling [filg-docs](https://github.com/SamStuckey/filg-docs)
-> repo: business plan, validation strategy, launch checklist, research findings, dogfood runs, brief,
-> and the session handoff (`NEXT_SESSION.md`). This repo is code + deploy artifacts only.
+> repo. This repo is code + deploy artifacts only.
 
-## Quickstart (engine)
+## Quickstart
+
 ```bash
-pip install anthropic
+pip install -r requirements.txt
+
+# dev mode — canned results, no API calls, no spend
+FILG_MOCK=1 uvicorn app.main:app --reload
+
+# real runs (BYOK or hosted key), metered
 export ANTHROPIC_API_KEY=...
-
-# full artifact set for one idea (~$1/run, re-sources every flagged claim)
-python3 prototype/pipeline.py "your plain-text idea"
-
-# a publishable teardown (~$0.40/run, label-don't-chase — the production behavior)
-python3 prototype/teardown.py "your plain-text idea"
+uvicorn app.main:app
 ```
 
-## Deploy the site
-`landing/` is a no-build static site. Drag it into Cloudflare Pages / Netlify / Vercel and point
-`filg.ai` + `fuckitletsgo.ai` at it. Wire `FORM_ENDPOINT` (Buttondown/ConvertKit) for email capture.
-See `landing/README.md`.
+```bash
+python -m pytest                                        # the suite (mock, fast)
+python scripts/monkey.py --base http://127.0.0.1:8600   # seeded random-walk UI drive
+python scripts/dev.py engine "your idea"                # real engine smoke test
+python scripts/teardown_publish.py "your idea"          # publish a lead-magnet issue
+```
 
 ## The two things that define this product
-1. **The source gate is the moat.** On a fresh niche it flags ~80% of raw research as
-   vendor-laundered; re-search lifts clean cites from ~20% to ~57%. See `prototype/test_01_live_results.md`.
-2. **Cost discipline = "label-don't-chase."** Label flagged claims by default, re-source only the 2–3
-   headline stats → ~$0.40/run. Free tier must be **metered (per-user run caps + kill switch)** before
-   launch — an unmetered free run is ~$0.40–1 of compute.
 
-## Next: the thin MVP
-Idea input → async pipeline run (label-don't-chase) → artifact workspace; free tier capped at 1 run;
-Stripe paywall for the $39/mo "Operator" tier; light auth. See `launch_todo.md` Phase 3 in
-[filg-docs](https://github.com/SamStuckey/filg-docs) for the checklist.
+1. **The source gate is the moat.** Every quantitative claim is graded against its source
+   (voted self-interest judge + deterministic staleness); vendor stats are labeled, never
+   laundered. The gate has no priors — that's the point.
+2. **Cost discipline = "label-don't-chase."** Label flagged claims by default, re-source only
+   the 2–3 headline stats. The free taste stays metered (per-user caps + daily kill switch);
+   subscribers are bounded by a monthly cost cap.
+
+## Building another product on the engine
+
+Swap the `app/domain/` package (sections, copy, node vocabulary, research framing), the
+`app/skills/` prompt files, and `app/personas.py` — the engine needs zero edits. The
+wedding-planner fork is the working proof.
 
 ---
 © Sam Stuckey. Private — not for redistribution.

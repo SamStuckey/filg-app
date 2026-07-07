@@ -14,15 +14,11 @@ Sonnet call: the durable instruction is the cached `business_advisor` system blo
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))                       # app/  → skills, personas
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "prototype"))  # prototype/ → engine
-import context  # noqa: E402 — the context engine (graded-evidence blocks)
-import personas  # noqa: E402
-import planner  # noqa: E402 — bundle_markdown + working idea/edge helpers
-import skill_registry as skills  # noqa: E402
+from app import context  # noqa: E402 — the context engine (graded-evidence blocks)
+from app import personas  # noqa: E402
+from app import planner  # noqa: E402 — bundle_markdown + working idea/edge helpers
+from app import skill_registry as skills  # noqa: E402
 
 DISCLAIMER = personas.DISCLAIMER  # AI-composite / not-professional-advice line (shown once in the UI)
 
@@ -79,7 +75,7 @@ def chat_reply(session: dict, message: str, history: list | None = None,
                f" Next step: {vet.get('first_test') or 'run one cheap test this week'}.")
         return base + nxt + aware + " (mock)", 0.0
 
-    from pipeline import LEDGER, call, SONNET  # heavy; real mode only
+    from engine.pipeline import LEDGER, call, SONNET  # heavy; real mode only
     start = len(LEDGER.rows)
     cited, flagged = _research_blocks(session)
     journey_block = (f"THE JOURNEY SO FAR (the decision tree they walked — every fork lists the "
@@ -114,8 +110,8 @@ def research_answer(session: dict, question: str, mode: str = "quick", mock: boo
                      "url": "https://example.com", "note": "mock deeper research"}]
             return {"mode": "deep", "answer": f"Deeper research on “{q[:80]}”: here's what fresh, graded "
                     f"sources say… (mock).", "rows": rows}, 0.0
-        import teardown  # noqa: PLC0415 — heavy engine import, real mode only
-        from pipeline import LEDGER, call, SONNET
+        from app import teardown  # noqa: PLC0415 — heavy engine import, real mode only
+        from engine.pipeline import LEDGER, call, SONNET
         start = len(LEDGER.rows)
         rows, _stats, _lanes = teardown.build_evidence(q, headlines=3, on_progress=on_progress)
         block = "\n".join(
@@ -133,7 +129,7 @@ def research_answer(session: dict, question: str, mode: str = "quick", mock: boo
         return {"mode": "quick", "answer": f"Quick check against your research for “{q[:80]}”: here's "
                 "what the gathered sources actually support, and I'll say so if they don't cover it. "
                 "(mock)"}, 0.0
-    from pipeline import LEDGER, call, SONNET
+    from engine.pipeline import LEDGER, call, SONNET
     start = len(LEDGER.rows)
     cited, flagged = _research_blocks(session)
     ans = call("research_quick", SONNET, max_tokens=450, system=skills.VOICE, prompt=(

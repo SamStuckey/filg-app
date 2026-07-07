@@ -1,6 +1,6 @@
 """Store — plan session persistence incl. the new intake/vet/board columns + migration."""
 
-import store
+from app import store
 
 
 def test_plan_lifecycle_round_trips_new_fields():

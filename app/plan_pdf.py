@@ -27,8 +27,8 @@ from urllib.parse import urlparse
 
 from fpdf import FPDF
 
-import planner  # section list + working idea
-import skill_registry as skills  # the standing VOICE rule (no AI tells)
+from app import planner  # section list + working idea
+from app import skill_registry as skills  # the standing VOICE rule (no AI tells)
 
 _FONTS = Path(__file__).resolve().parent / "assets" / "fonts"
 
@@ -65,7 +65,7 @@ def _exec_summary(thesis: str, files: dict, vetting: dict, mock: bool = False) -
                 f"you win customers, how you deliver repeatably, and your first 30 days. The biggest "
                 f"risk and the cheapest first test are named up front, and every market claim is "
                 f"sourced and graded in the evidence appendix."), 0.0
-    from pipeline import LEDGER, call, SONNET  # heavy; real mode only
+    from engine.pipeline import LEDGER, call, SONNET  # heavy; real mode only
     start = len(LEDGER.rows)
     plan = "\n\n".join(f"## {s['title']}\n{files[s['file']]}" for s in planner.SECTIONS
                        if files.get(s["file"]))
@@ -373,9 +373,11 @@ if __name__ == "__main__":  # self-test (mock, no API) — builds a real PDF and
             "founder_edge": "10 years teaching"}, "vetting": {"verdict": "pursue",
             "biggest_risk": "thin pipeline", "first_test": "post in 3 communities"}}
     prop, _ = planner.first_proposal(sess["idea"], r, mock=True)
-    sess["proposal"] = prop
-    while sess.get("status") != "done":
-        sess.update(planner.advance(sess, "yes_and", None, mock=True))
+    node = planner.root_node(prop)
+    while node["step"] < planner.N:
+        node, _ = planner.forward(sess["idea"], r, node, None, mock=True)
+    sess.update({"files": node["files"], "history": node["history"], "status": "done",
+                 "step": planner.N, "proposal": None})
     plan, cost = synthesize(sess, mock=True)
     assert plan["sections"] and len(plan["sections"]) == planner.N
     assert plan["cited"] >= 1 and plan["evidence"]

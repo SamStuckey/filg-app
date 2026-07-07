@@ -16,8 +16,9 @@ def wait_status(client, sid):
 
 
 def _finish(client, email):
-    sid = client.post("/api/plan/start", json={"idea": GRAB_BAG, "email": email}).json()["id"]
-    s = wait_status(client, sid)
+    from conftest import start_plan
+    sid = start_plan(client, GRAB_BAG, email=email)
+    s = client.get(f"/api/plan/{sid}").json()
     while not s["done"]:
         s = client.post(f"/api/plan/{sid}/next", json={"feedback": ""}).json()
     return sid
@@ -70,10 +71,10 @@ def test_pdf_clean_when_billing_off(client):
 def test_pdf_watermarked_free_copy_on_own_key(client, monkeypatch):
     # Billing on, not a subscriber, no credits — but the account has its own key: the PDF still
     # renders, watermarked (free copy), instead of 402ing. The Gamma loop.
-    from app import billing, keys, main
+    from app import access, billing, keys, main
     sid = _finish(client, "wm1@x.com")
     monkeypatch.setattr(billing, "PDF_BILLING_ENABLED", True)
-    monkeypatch.setattr(main, "_is_subscriber", lambda e: False)
+    monkeypatch.setattr(access, "_is_subscriber", lambda e: False)
     monkeypatch.setattr(billing, "claim_pdf", lambda e, k: False)
     monkeypatch.setattr(keys, "enabled", lambda: True)
     monkeypatch.setattr(keys, "has_key", lambda e: True)
@@ -83,10 +84,10 @@ def test_pdf_watermarked_free_copy_on_own_key(client, monkeypatch):
 
 
 def test_pdf_paywalled_without_key_or_credits(client, monkeypatch):
-    from app import billing, keys, main
+    from app import access, billing, keys, main
     sid = _finish(client, "wm2@x.com")
     monkeypatch.setattr(billing, "PDF_BILLING_ENABLED", True)
-    monkeypatch.setattr(main, "_is_subscriber", lambda e: False)
+    monkeypatch.setattr(access, "_is_subscriber", lambda e: False)
     monkeypatch.setattr(billing, "claim_pdf", lambda e, k: False)
     monkeypatch.setattr(keys, "enabled", lambda: True)
     monkeypatch.setattr(keys, "has_key", lambda e: False)
@@ -98,11 +99,8 @@ def test_pdf_paywalled_without_key_or_credits(client, monkeypatch):
 
 def test_render_watermark_param():
     # plan_pdf.render accepts watermark=True and still produces a valid PDF.
-    import sys
-    from pathlib import Path
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "app"))
-    import plan_pdf
-    import planner
+    from app import plan_pdf
+    from app import planner
     r = planner.research("I play guitar and want to help people learn", mock=True)
     sess = {"idea": "guitar coaching", "research": r, "files": {}, "history": [], "step": 0,
             "cost": 0.0, "status": "building",
@@ -110,9 +108,11 @@ def test_render_watermark_param():
             "vetting": {"verdict": "pursue", "biggest_risk": "thin pipeline",
                         "first_test": "post in 3 communities"}}
     prop, _ = planner.first_proposal(sess["idea"], r, mock=True)
-    sess["proposal"] = prop
-    while sess.get("status") != "done":
-        sess.update(planner.advance(sess, "yes_and", None, mock=True))
+    node = planner.root_node(prop)
+    while node["step"] < planner.N:
+        node, _ = planner.forward(sess["idea"], r, node, None, mock=True)
+    sess.update({"files": node["files"], "history": node["history"], "status": "done",
+                 "step": planner.N, "proposal": None})
     plan, _ = plan_pdf.synthesize(sess, mock=True)
     data = plan_pdf.render(plan, watermark=True)
     assert bytes(data)[:5] == b"%PDF-" and len(data) > 5000

@@ -11,17 +11,12 @@ is `_on_filg_key` (the single key-precedence decision) — `_provider_for` picks
 
 from __future__ import annotations
 
-import sys
 from datetime import datetime, timezone
-from pathlib import Path
 
-# engine-side infra (prototype/) — mirror main.py's path bootstrap so this imports standalone too
-_HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(_HERE.parent / "prototype"))
-import usage     # noqa: E402 — free-taste + monthly fair-use metering
-import provider  # noqa: E402 — per-run LLM provider (FILG's hosted key vs a user's own)
+from engine import usage     # free-taste + monthly fair-use metering
+from engine import provider  # per-run LLM provider (FILG's hosted key vs a user's own)
 
-from . import auth, billing, keys, store, tiers  # noqa: E402 — identity, purchases, BYOK keys, accounts, tier ladder
+from . import auth, billing, keys, store, tiers  # identity, purchases, BYOK keys, accounts, tier ladder
 
 def _is_byok(user: str) -> bool:
     """True iff this user runs on their own key (BYOK configured + a key saved)."""

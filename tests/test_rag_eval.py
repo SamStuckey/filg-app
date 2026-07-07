@@ -1,6 +1,6 @@
 """RAG stage 6 — the eval harness (retrieval metrics + LLM-judge answer score)."""
 
-from rag import eval as rag_eval
+from app.rag import eval as rag_eval
 
 
 def test_mock_eval_produces_expected_metrics():

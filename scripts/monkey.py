@@ -364,8 +364,69 @@ def chain_pivot_pick_sold(mk, rng):
                 raise AssertionError("chain: checked option not on the committed path after direct commit")
 
 
+def chain_comment_ride(mk, rng):
+    """Inline comments (v1 #7 parity): click-a-line on the ACTIVE card's draft -> save a note ->
+    Keep going. The note must ride /next (consumed on success) and the fold-in receipt (.chgnote)
+    must render on the next part. Self-sufficient: waits out any in-flight run the earlier chains
+    handed over, and commits itself if the funnel is still upstream of a built step."""
+    for _ in range(240):                      # let a handed-over background run land first
+        if not mk.js("typeof S!=='undefined'&&S&&S.status==='researching'"):
+            break
+        time.sleep(0.25)
+    mk.settle(90)
+    if mk.js("(S&&S.stage)!=='building'&&(S&&S.stage)!=='done'"):
+        box = mk.pg.locator(".gnode.focus .opt input[type=checkbox]")
+        if box.count() and not mk.js("typeof SEL!=='undefined'&&SEL&&SEL.size"):
+            box.first.click()
+        sold = mk.pg.locator(".gnode.focus button:has-text(\"I'm sold\")")
+        if not sold.count():
+            return                             # nothing buildable on screen — skip, don't fake it
+        sold.first.click()
+        mk.pg.wait_for_timeout(400)
+        guard = mk.pg.locator(".mc-go")        # the alertable-concerns modal, if concerns are open
+        if guard.count() and guard.first.is_visible():
+            guard.first.click()
+        for _ in range(240):
+            if mk.js("S&&S.stage==='building'"):
+                break
+            time.sleep(0.25)
+        mk.settle(90)
+    if mk.js("S&&(S.stage==='done'||S.done)"):
+        return                                 # a finished plan has no live draft to comment on
+    mk.js("focusNode((nodesOf(S).t||{}).active)")
+    mk.pg.wait_for_timeout(300)
+    line = mk.pg.locator(".gnode.focus .draft p, .gnode.focus .draft li")
+    if not line.count():                       # a built step MUST show its commentable draft
+        raise AssertionError("chain: no .draft on the active built step (step-0 card regression?)")
+    line.first.click()
+    mk.pg.wait_for_timeout(300)
+    if "show" not in (mk.js("(document.getElementById('cmtpop')||{}).className||''") or ""):
+        raise AssertionError("chain: comment popover did not open on a draft line")
+    mk.pg.fill("#cmtpop-note", "tighten this")
+    mk.pg.locator("#cmtpop button.primary").click()
+    mk.pg.wait_for_timeout(200)
+    if not mk.js("Object.keys(DOCCMTS).length"):
+        raise AssertionError("chain: comment did not save")
+    go_btn = mk.pg.locator(".gnode.focus button:has-text('Keep going')")
+    if not go_btn.count():
+        return                                 # step already decided (pivot-only) — the save is the pin
+    go_btn.first.click()
+    mk.pg.wait_for_timeout(400)
+    guard = mk.pg.locator(".mc-go")
+    if guard.count() and guard.first.is_visible():
+        guard.first.click()
+    mk.settle(90)
+    mk.check()
+    if mk.js("Object.keys(DOCCMTS).length"):
+        raise AssertionError("chain: comment not consumed by the roll-forward")
+    mk.js("focusNode((nodesOf(S).t||{}).active)")
+    mk.pg.wait_for_timeout(200)
+    if not mk.pg.locator(".gnode.focus .chgnote").count():
+        raise AssertionError("chain: fold-in receipt missing on the next part")
+
+
 CHAINS = [chain_pivot_board_pivot, chain_feedback_pick_roll, chain_reload_midstates,
-          chain_pivot_pick_sold]
+          chain_pivot_pick_sold, chain_comment_ride]
 
 
 def run_one(base, seed, steps, chains_only, headed=False):

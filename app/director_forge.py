@@ -21,12 +21,9 @@ from __future__ import annotations
 
 import json
 import re
-import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))  # app/ on path → bare sibling imports
-import personas  # noqa: E402
-import skill_registry as skills  # noqa: E402
+from app import personas  # noqa: E402
+from app import skill_registry as skills  # noqa: E402
 
 _FALLBACK_DOMAINS = ["strategy", "advice"]
 
@@ -83,7 +80,7 @@ def forge(description: str, existing_keys=None, mock: bool = False, on_progress=
         _progress(on_progress, "QA: checking they're distinct + useful")
         return _mock_persona(description, existing), 0.0
 
-    from pipeline import LEDGER, call, extract_json, SONNET
+    from engine.pipeline import LEDGER, call, extract_json, SONNET
     start = len(LEDGER.rows)
     roster = "; ".join(f"{p['name']} ({', '.join(p['domains'][:3])})"
                        for p in personas.PERSONAS if not p.get("standing"))

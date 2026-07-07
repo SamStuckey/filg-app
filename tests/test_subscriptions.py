@@ -6,9 +6,9 @@ math, PDF-free-for-subscribers, the feature gate, legacy tier folding, the allow
 upgrade prompt, and that a subscriber is not key-walled.
 """
 
-import provider
-import usage
-from app import access, billing, keys, main, store, tiers
+from engine import provider
+from engine import usage
+from app import access, billing, keys, main, ops, store, tiers
 
 
 def _sub(email, tier, period_end="2099-01-01T00:00:00Z"):
@@ -42,16 +42,16 @@ def test_legacy_tiers_fold_onto_live_ladder():
 def test_budget_math_over_cap_and_upgrade_prompt():
     email = "budget@x.com"
     _sub(email, "pro")
-    b = main._budget(email)
+    b = access._budget(email)
     assert b["tier"] == "pro" and b["cap_cents"] == 1600 and not b["over"]
     # spend past the $16 cap → over-limit, tokens tracked for the meter
-    usage.record_monthly(main._acct(email), main._period(email), 17.00, 12345)
-    b = main._budget(email)
+    usage.record_monthly(access._acct(email), access._period(email), 17.00, 12345)
+    b = access._budget(email)
     assert b["over"] and b["spent_cents"] >= 1600 and b["tokens"] == 12345
-    assert main._budget("noone@x.com") is None   # non-subscriber has no budget
+    assert access._budget("noone@x.com") is None   # non-subscriber has no budget
     # Ultimate is HIDDEN for launch: the allowance-exhausted response pitches only the BYOK fallback
     # (no upgrade rung on the public ladder), and checkout refuses the hidden tier.
-    resp = main._budget_response(main.BudgetError(b))
+    resp = ops.budget_response(ops.BudgetError(b))
     body = resp.body.decode()
     assert resp.status_code == 402 and "upgradeTier" not in body
     assert "fallback" in body
@@ -115,28 +115,28 @@ def test_subscribe_route_validates(client, monkeypatch):
 def test_key_precedence_paid_allowance_first(monkeypatch):
     """A subscriber spends their paid allowance on OUR key first, THEN falls back to their own key —
     we never charge for credits and then quietly bill their key. Free/BYOK users run on their key."""
-    import usage
+    from engine import usage
     email = "prec@x.com"
     # free user: no key → hosted taste; with a key → their key
     monkeypatch.setattr(access, "_is_byok", lambda u: False)
-    assert main._on_filg_key(email) is True
+    assert access._on_filg_key(email) is True
     monkeypatch.setattr(access, "_is_byok", lambda u: True)
-    assert main._on_filg_key(email) is False
+    assert access._on_filg_key(email) is False
     # subscriber UNDER allowance → OUR key even though they have a key (spend paid credits first)
     _sub(email, "pro")
-    assert main._on_filg_key(email) is True
+    assert access._on_filg_key(email) is True
     # exhaust the allowance → fall back to their own key (the BYOK fallback)
-    usage.record_monthly(main._acct(email), main._period(email), 100.0, 0)
-    assert main._on_filg_key(email) is False
+    usage.record_monthly(access._acct(email), access._period(email), 100.0, 0)
+    assert access._on_filg_key(email) is False
     # over allowance but NO key → still ours (the fair-use gate then prompts upgrade/add-key/wait)
     monkeypatch.setattr(access, "_is_byok", lambda u: False)
-    assert main._on_filg_key(email) is True
+    assert access._on_filg_key(email) is True
 
 
 def test_meter_follows_actual_key(monkeypatch):
     """Metering follows the key the run ACTUALLY used: a subscriber under allowance (on our key) is
     metered monthly even though they have a key saved — the bug was skipping it because they had a key."""
-    import usage
+    from engine import usage
     email = "mfollow@x.com"
     _sub(email, "pro")
     monkeypatch.setattr(access, "_is_byok", lambda u: True)   # has a key, but under allowance → our key

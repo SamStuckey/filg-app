@@ -4,7 +4,7 @@ The mock paths return canned dicts; the bug was in the real path where the model
 fenced object-with-array got mis-parsed. test_shape_real_*_returns_dict exercises
 exactly that and would have caught the regression."""
 
-import intake
+from app import intake
 
 GRAB_BAG = "I like basketball, Magic the Gathering, and food, and I'm good at sales"
 

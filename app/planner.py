@@ -20,43 +20,27 @@ from __future__ import annotations
 
 import json
 import re
-import sys
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 
-# reuse the engine (prototype/ is a sibling of app/) and the app-side skill/persona layer (app/).
-sys.path.insert(0, str(Path(__file__).resolve().parent))                       # app/  → skills, personas
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "prototype"))  # prototype/ → engine
-import teardown  # noqa: E402
-import intake  # noqa: E402
-import personas  # noqa: E402
-import board  # noqa: E402 — Board of Directors review, run inline so its takeaway can steer next draft
-import skill_registry as skills  # noqa: E402
+# the engine package (research/grading) + the app-side skill/persona layer.
+from app import teardown  # noqa: E402 — the research-run layer (graded evidence + offer summary)
+from app import intake  # noqa: E402
+from app import personas  # noqa: E402
+from app import board  # noqa: E402 — Board of Directors review, run inline so its takeaway can steer next draft
+from app import skill_registry as skills  # noqa: E402
+from app.domain import copy as domain_copy      # canned mock/WOD copy (the use-case plug)
+from app.domain import sections as sections_spec  # the staged build spec + QA checklist
 
-# The plan = an ordered set of files. Plain-language titles (operator voice), friendly filenames.
-# `guide` (optional) is extra per-section instruction injected into synthesis — it forces the section
-# to answer the questions a generic plan leaves vague (what am I actually selling? why me?).
-SECTIONS = [
-    {"key": "brief",    "file": "1-the-setup.md",            "title": "The setup",             "sub": "who it's for & why now"},
-    {"key": "offer",    "file": "2-what-you-sell.md",        "title": "What you sell",         "sub": "the offer & business model",
-     "guide": "State plainly WHAT the operator sells AND how it's produced — pick one and name it: a "
-              "done-for-you build/service, a productized repeatable package, reselling/white-labeling "
-              "an existing tool, or their own software. Make it unambiguous whether they're building "
-              "it custom, productizing it, reselling someone else's, or selling a service — and say "
-              "exactly what the buyer is paying for."},
-    {"key": "why",      "file": "3-why-you-win.md",          "title": "Why you win",           "sub": "alternatives & your edge",
-     "guide": "Name the REAL alternatives the buyer weighs — including doing nothing / DIY and the "
-              "obvious competitor or substitute, then make the specific, defensible case for why THIS "
-              "operator wins anyway, led by their unfair advantage (founder edge). No 'we care more'; "
-              "give a defensible reason a buyer picks them over the named alternatives."},
-    {"key": "pricing",  "file": "4-what-you-charge.md",      "title": "What you charge",       "sub": "packaging & price"},
-    {"key": "gtm",      "file": "5-how-you-get-customers.md","title": "How you get customers", "sub": "go-to-market"},
-    {"key": "delivery", "file": "6-how-you-deliver.md",      "title": "How you deliver",       "sub": "delivery playbook"},
-    {"key": "roadmap",  "file": "7-your-first-30-days.md",   "title": "Your first 30 days",    "sub": "the roadmap"},
-]
-N = len(SECTIONS)
-
-CHOICES = {"yes_and", "not_quite", "okay_but"}
+# The build spec (the 7 plan sections + guides) and its canned copy live in the domain layer —
+# app/domain/sections.py + app/domain/copy.py — the swap surface for a sibling product on the same
+# engine. The names below stay importable as planner.SECTIONS etc. (main.py + tests key on them).
+SECTIONS = sections_spec.SECTIONS
+N = sections_spec.N
+QA_CHECKS = sections_spec.QA_CHECKS
+_MOCK_DRAFT = domain_copy.MOCK_DRAFT
+WOD = domain_copy.WOD
+_MOCK_QA = domain_copy.MOCK_QA
+_MOCK_NUDGES = domain_copy.MOCK_NUDGES
 
 # "Ask an expert" + "Board of Directors" both draw on the persona registry (app/personas.py) — FILG-
 # owned COMPOSITE ARCHETYPES, never real named people. Naming/impersonating a real person would
@@ -66,49 +50,6 @@ CHOICES = {"yes_and", "not_quite", "okay_but"}
 ARCHETYPES = personas.catalog()
 ARCHETYPE_KEYS = personas.KEYS
 _DISCLAIMER = personas.DISCLAIMER
-
-_MOCK_DRAFT = {
-    "brief": ("## Structured brief\n\n**Problem:** the operator can do the work but is stuck on "
-              "*what to sell*.\n**Wedge:** a single, specific, outcome-named offer.\n**Who it's "
-              "for:** people already trying to solve this and failing.\n**Why now:** demand is "
-              "visible and unmet."),
-    "offer": ("## Offer\n\nA productized service: you build and run one named outcome for the client "
-              "(done-for-you), fixed scope, flat price, short timeline. The buyer pays for the outcome, "
-              "not your hours, not a tool they self-serve, not a custom one-off."),
-    "why": ("## Why you win\n\nThe alternatives are doing nothing, a DIY tool, or a generalist "
-            "competitor. You win on a specific unfair advantage, name it and make it the wedge, not a "
-            "vague claim of caring more."),
-    "pricing": ("## Packaging & pricing\n\nOne tier to start: a flat setup fee + a small monthly. "
-                "Anchor on the outcome's value, not your hours. (Vendor 'leak/ROI' figures are "
-                "*unverified*, model per client.)"),
-    "gtm": ("## Go-to-market\n\nPost one specific offer in three communities your buyer already "
-            "lives in this week. Take the first paying customer before building anything."),
-    "delivery": ("## Delivery playbook\n\nDiscovery → build → test → go-live → a monthly "
-                 "'what-you-got' report. Templatize each step so it runs the same every time."),
-    "roadmap": ("## 30-day roadmap\n\nWk1 reference build · Wk2 list 50 + outreach · Wk3 demos + "
-                "pilots · Wk4 convert + ask for one referral."),
-}
-
-
-# "Waste of time" mode — when the operator forces past the kill gate with no substance, each section is
-# a self-aware comedic placeholder. NO research, NO board, NO API calls → ~$0, and by design never a
-# credible-looking plan (protects invariant #1: a no-substance idea yields obvious comedy, not a laundered
-# plan). The off-ramp is always open: add a real skill/asset/buyer and /revet turns this into a real build.
-WOD = {
-    "brief":    ("## The setup\n\n**Who it's for:** unclear. **Why now:** also unclear. We asked, you "
-                 "clicked the button. Name one real skill or who'd pay and this becomes a real setup."),
-    "offer":    ("## What you sell\n\nNo clue, you tell me. You're the one mashing the button. The moment "
-                 "you name one real thing you can do, this turns into an actual offer."),
-    "why":      ("## Why you win\n\nYou win because you out-clicked the gate. That is not a moat. Give us "
-                 "one real edge and we'll write you a real one."),
-    "pricing":  ("## What you charge\n\nCharge whatever you like for nothing. The market's counter-offer "
-                 "is also nothing. Add a real deliverable and we'll price it."),
-    "gtm":      ("## How you get customers\n\nStep one: have something to sell. We're still waiting on "
-                 "step one."),
-    "delivery": ("## How you deliver\n\nDeliver what, exactly? Name the thing and we'll build the playbook."),
-    "roadmap":  ("## Your first 30 days\n\nDay 1 to 30: keep clicking this button. Results: the same as "
-                 "now. Or give the gate something real and start over with an actual idea."),
-}
 
 
 def wod_forward(node: dict) -> tuple[dict, float]:
@@ -227,7 +168,7 @@ def prepare(idea: str, mock: bool = False, on_progress=None, prior: dict | None 
     # another's output, so run them concurrently instead of serially (3 model round-trips → 1
     # wall-clock). pipeline.bound() carries the provider/stack/ledger into each worker thread
     # (threads don't inherit contextvars); progress lines are emitted after, in the original order.
-    from pipeline import bound  # noqa: PLC0415
+    from engine.pipeline import bound  # noqa: PLC0415
     emit("Vetting the idea, pressure-testing assumptions, and drafting your first offer")
     with ThreadPoolExecutor(max_workers=3) as ex:
         f_vet = ex.submit(bound(lambda: intake.vet(idea, shaped, research_data, mock=mock)))
@@ -272,7 +213,7 @@ def propose(idea: str, section_key: str, research_data: dict, history: list,
             draft += "\n\n*(board-guided)*"
         return draft, 0.0
 
-    from pipeline import LEDGER, call, SONNET  # heavy; only in real mode
+    from engine.pipeline import LEDGER, call, SONNET  # heavy; only in real mode
     start = len(LEDGER.rows)
     section = next(s for s in SECTIONS if s["key"] == section_key)
     cited, flagged = _cited_flagged(research_data["rows"])
@@ -281,7 +222,7 @@ def propose(idea: str, section_key: str, research_data: dict, history: list,
     # Wrapped so grounding can NEVER break plan building (a bad key / missing dep just skips it).
     method_block = ""
     try:
-        from rag import grounding  # noqa: PLC0415 — additive integration, lazy so it's optional
+        from app.rag import grounding  # noqa: PLC0415 — additive integration, lazy so it's optional
         method_block, _msrc, _mcost = grounding.method_grounding(
             f"{section['title']}: {section.get('guide', '')}\nBUSINESS: {idea}", mock=mock)
     except Exception:
@@ -307,7 +248,7 @@ def propose(idea: str, section_key: str, research_data: dict, history: list,
         f"CITED RESEARCH:\n{cited}\n\nFLAGGED (vendor) CLAIMS:\n{flagged}")
     # VOICE author seam (spine): generate → voice-lint → reprompt until clean (bounded, accumulating).
     # The system block stays cached (the IP); only the appended lint feedback varies per attempt.
-    import spine, voice_lint  # noqa: PLC0415 — engine modules, real mode only
+    from engine import spine, voice_lint  # noqa: PLC0415 — engine modules, real mode only
     def _gen(fb: str) -> str:
         return call(f"plan_{section_key}", SONNET, max_tokens=800,
                     system=skills.system("synth_section"), cache=True,
@@ -327,7 +268,7 @@ def _change_note(idea: str, feedback: str | None, section: dict, mock: bool = Fa
         return None, 0.0
     if mock:
         return (f"Folded in your note (“{fb[:60]}”): this part now takes it into account."), 0.0
-    from pipeline import LEDGER, call, SONNET  # heavy; real mode only
+    from engine.pipeline import LEDGER, call, SONNET  # heavy; real mode only
     start = len(LEDGER.rows)
     note = call("plan_change_note", SONNET, max_tokens=120, system=skills.VOICE, cache=True, prompt=(
         f"The operator is building a business plan for: {idea}.\nThey just added this note: \"{fb}\".\n"
@@ -336,28 +277,11 @@ def _change_note(idea: str, feedback: str | None, section: dict, mock: bool = Fa
     return note.strip(), round(LEDGER.cost_slice(start), 4)
 
 
-_MOCK_QA = {"notes": ["Read all seven sections as one plan — same buyer, offer, and price throughout.",
-                      "Tightened a few wordy lines so each part stays skimmable.",
-                      "Confirmed every cited link is a real source, no placeholders."],
-            "fixed": []}
-
-# The plan-QA verdict, decomposed into atomic yes/no checks the SCRIPT routes from (instead of one
-# holistic "is this good?"). Each is voted; the failures (with reasons) are fed to the editor pass.
-QA_CHECKS = [
-    ("CONSISTENT", "Do ALL sections describe the SAME buyer, the SAME core offer, the SAME price, and "
-                   "the SAME primary channel, with no drift between sections?"),
-    ("NO_CONTRADICTION", "Is the plan free of statements that directly contradict each other across "
-                         "sections?"),
-    ("NO_INVENTED_STAT", "Does the plan avoid presenting any NEW statistic or hard number that is not "
-                         "already supported by the cited research (i.e. nothing fabricated)?"),
-]
-
-
 def _qa_judge(idea: str, plan_md: str, votes: int = 3) -> list[tuple[str, str]]:
     """Voted boolean checklist over the assembled plan. Runs the atomic checks ×votes and resolves each
     by majority with DEFAULT-TO-FAIL on a tie/uncertain. Returns the FAILED checks as (id, why) so the
     editor can fix exactly those. The script owns the route; the model only answers yes/no + why."""
-    from pipeline import call, extract_json, SONNET
+    from engine.pipeline import call, extract_json, SONNET
     listing = "\n".join(f"{i + 1}. [{cid}] {q}" for i, (cid, q) in enumerate(QA_CHECKS))
     prompt = (
         "You are auditing a finished business plan against a fixed checklist. For EACH numbered check, "
@@ -396,7 +320,7 @@ def qa_plan(idea: str, files: dict, mock: bool = False) -> tuple[dict, dict, flo
         return files, {"notes": [], "fixed": []}, 0.0
     if mock:
         return dict(files), {"notes": list(_MOCK_QA["notes"]), "fixed": []}, 0.0
-    from pipeline import LEDGER, call, extract_json, SONNET  # heavy; real mode only
+    from engine.pipeline import LEDGER, call, extract_json, SONNET  # heavy; real mode only
     start = len(LEDGER.rows)
     paths = list(files.keys())
     plan_md = bundle_markdown(idea, files)
@@ -473,74 +397,6 @@ def _steer(choice: str, note: str | None) -> str | None:
     if choice == "okay_but":
         return f"The operator accepts but with this constraint/objection: “{note}”. Revise to honor it."
     return None
-
-
-def advance(session: dict, choice: str, note: str | None, mock: bool = False,
-            directors: list | None = None) -> dict:
-    """Apply a branch to the current node and return the fields to persist
-    ({files, step, proposal, history, status, cost, board}).
-
-    - not_quite → re-draft THIS section with a different angle (stay on the node).
-    - yes_and / okay_but with a note → re-synthesize THIS section honoring the note, then finalize.
-    - yes_and / okay_but with no note → accept the current draft as-is, then finalize.
-    The choice+note are appended to history, which feeds every later section's prompt.
-
-    If `directors` is set (the operator built a Board of Directors), each finalized section is vetted
-    by the board (board.review_section) — each director's take + a synthesized takeaway — and that
-    takeaway is fed into the NEXT section's synthesis, so the board genuinely steers the output."""
-    if choice not in CHOICES:
-        raise ValueError(f"bad choice {choice!r}")
-    step = session["step"]
-    section = SECTIONS[step]
-    files = dict(session.get("files") or {})
-    history = list(session.get("history") or [])
-    reviews = list(session.get("board") or [])
-    cost = session.get("cost") or 0.0
-    note = (note or "").strip() or None
-    idea = _working_idea(session)  # synthesize on the focused thesis, not the raw grab-bag
-    founder = _founder(session)
-    history.append({"section": section["key"], "choice": choice, "note": note})
-
-    if choice == "not_quite":
-        draft, c = propose(idea, section["key"], session["research"], history,
-                           steer=_steer(choice, note), board_notes=_board_notes(reviews),
-                           founder=founder, mock=mock, plan_so_far=_plan_so_far(files))
-        return {"proposal": {"section": section["key"], "title": section["title"], "draft": draft},
-                "history": history, "cost": round(cost + c, 4)}
-
-    # yes_and / okay_but → finalize this file (re-synthesizing if the note steers it), then advance
-    steer = _steer(choice, note)
-    if steer:
-        draft, c = propose(idea, section["key"], session["research"], history,
-                           steer=steer, board_notes=_board_notes(reviews), founder=founder, mock=mock,
-                           plan_so_far=_plan_so_far(files))
-        cost = round(cost + c, 4)
-    else:
-        draft = session["proposal"]["draft"]
-    files[section["file"]] = draft
-
-    # The board reviews the section just finalized; its takeaway then steers the next draft.
-    if directors:
-        review, bc = board.review_section(idea, section["title"], draft,
-                                          bundle_markdown(idea, files), directors, mock=mock,
-                                          extra_personas=session.get("custom_directors"))
-        reviews.append({"section": section["file"], "title": section["title"], **review})
-        cost = round(cost + bc, 4)
-
-    if step + 1 < N:
-        nxt = SECTIONS[step + 1]
-        draft, c = propose(idea, nxt["key"], session["research"], history,
-                           board_notes=_board_notes(reviews), founder=founder, mock=mock,
-                           plan_so_far=_plan_so_far(files))
-        upd = {"files": files, "step": step + 1, "history": history, "cost": round(cost + c, 4),
-               "proposal": {"section": nxt["key"], "title": nxt["title"], "draft": draft}}
-    else:
-        files, qa, qc = qa_plan(idea, files, mock=mock)   # final QA pass before the plan is complete
-        upd = {"files": files, "step": N, "history": history, "status": "done",
-               "proposal": None, "qa": qa, "cost": round(cost + qc, 4)}
-    if directors:
-        upd["board"] = reviews
-    return upd
 
 
 # ── Branching decision tree (Next / Back / navigate between branches) ─────────
@@ -621,9 +477,6 @@ def rebranch(idea: str, research_data: dict, node: dict, feedback: str,
     return sib, round(c + cc, 4)
 
 
-_MOCK_NUDGES = ["go bolder", "narrower niche", "cheaper entry", "more specific", "add an upsell"]
-
-
 def nudges(idea: str, section_key: str, draft: str, mock: bool = False) -> tuple[list[str], float]:
     """A handful of SHORT (2-4 word) quick-edit chips a founder might click to revise THIS section of
     THIS business — specific to where the plan stands, not generic. One cheap Haiku call. Returns
@@ -633,7 +486,7 @@ def nudges(idea: str, section_key: str, draft: str, mock: bool = False) -> tuple
     section = next((s for s in SECTIONS if s["key"] == section_key), None)
     if not section or not (draft or "").strip():
         return list(_MOCK_NUDGES), 0.0
-    from pipeline import LEDGER, call, extract_json, HAIKU
+    from engine.pipeline import LEDGER, call, extract_json, HAIKU
     start = len(LEDGER.rows)
     out = call("nudges", HAIKU, max_tokens=140, system=skills.VOICE, cache=True, prompt=(
         "Suggest 5 SHORT feedback nudges (2-4 words each, lowercase, no punctuation) that this founder "
@@ -667,7 +520,7 @@ def ask_expert(idea: str, files: dict, archetype_key: str, question: str,
                 "answer": f"{_DISCLAIMER}\n\n**{p['name']}** on “{q}”: tighten the offer to one "
                           f"outcome, charge for it up front, and go get one yes this week. (mock)"}, 0.0
 
-    from pipeline import LEDGER, call, SONNET  # heavy; only in real mode
+    from engine.pipeline import LEDGER, call, SONNET  # heavy; only in real mode
     start = len(LEDGER.rows)
     plan = "\n\n".join(f"## {f}\n{c}" for f, c in files.items()) or "(plan still in progress)"
     ans = call(f"expert_{archetype_key}", SONNET, max_tokens=700,
@@ -690,61 +543,41 @@ def bundle_markdown(idea: str, files: dict) -> str:
 if __name__ == "__main__":  # self-test (mock, no API)
     r = research("I play guitar and want to help people learn", mock=True)
     assert r["prose"]["title"]
-    sess = {"idea": "guitar coaching", "research": r, "files": {}, "history": [], "step": 0,
-            "cost": 0.0, "status": "building"}
-    prop, _ = first_proposal(sess["idea"], r, mock=True)
-    sess["proposal"] = prop
+    prop, _ = first_proposal("guitar coaching", r, mock=True)
     assert prop["section"] == "brief"
-    # not_quite stays on the same node and re-drafts
-    upd = advance(sess, "not_quite", "make it punchier", mock=True)
-    assert "revised" in upd["proposal"]["draft"] and "step" not in upd
-    sess.update(upd)
-    # yes_and WITH a note re-synthesizes the section (the note steers it, not just a footnote)
-    sess.update(advance(sess, "yes_and", "add a freemium hook", mock=True))
-    assert "revised" in sess["files"]["1-the-setup.md"] and sess["step"] == 1
-    # finish the rest with plain acceptance (no re-gen)
-    while sess.get("status") != "done":
-        sess.update(advance(sess, "yes_and", None, mock=True))
-    assert sess["status"] == "done" and len(sess["files"]) == N
-    assert "revised" not in sess["files"]["7-your-first-30-days.md"]  # plain-accepted kept as-is
-    md = bundle_markdown(sess["idea"], sess["files"])
-    assert "Business plan" in md
-    exp, _ = ask_expert(sess["idea"], sess["files"], "closer", "is the price right?", mock=True)
-    assert exp["archetype"] == "The Closer" and "AI composite" in exp["answer"]
+    md_probe = ask_expert("guitar coaching", {}, "closer", "is the price right?", mock=True)[0]
+    assert md_probe["archetype"] == "The Closer" and "AI composite" in md_probe["answer"]
     # prepare(): intake shapes a grab-bag → thesis drives synthesis; vet returns a verdict
     prep = prepare("I like basketball, MTG, food, and I'm good at sales", mock=True)
     assert prep["shaped"]["thesis"] and prep["vetting"]["verdict"] in ("pursue", "pivot", "kill")
-    sess2 = {"idea": "raw grab-bag", "shaped": prep["shaped"], "research": prep["research"],
-             "files": {}, "history": [], "step": 0, "cost": prep["cost"], "proposal": prep["proposal"]}
+    sess2 = {"idea": "raw grab-bag", "shaped": prep["shaped"], "research": prep["research"]}
     assert _working_idea(sess2) == prep["shaped"]["thesis"]  # builds on the focused thesis
     assert _working_idea({"idea": "x"}) == "x"               # back-compat: no shaped → raw idea
-    # board-driven advance: each finalized section gets a board review, takeaway steers the next draft
-    sess2.update({"history": [], "step": 0, "cost": 0.0, "board": []})
-    upd = advance(sess2, "yes_and", None, mock=True, directors=["closer", "cfo"])
-    assert len(upd["board"]) == 1 and len(upd["board"][0]["directors"]) == 2  # per-director takes
-    assert upd["board"][0]["verdict"]                                          # synthesized takeaway
-    assert "board-guided" in upd["proposal"]["draft"]                          # takeaway steered next
-    assert _board_notes(upd["board"]).startswith("- on")
     # branching tree: root → forward (finalize + next) → rebranch (re-draft previous as a sibling)
-    r3 = research("guitar coaching", mock=True)
-    prop3, _ = first_proposal("guitar coaching", r3, mock=True)
-    root = root_node(prop3)
+    root = root_node(prop)
     assert root["step"] == 0 and root["files"] == {}
-    child, _ = forward("guitar coaching", r3, root, "go bolder", mock=True)
+    child, _ = forward("guitar coaching", r, root, "go bolder", mock=True)
     assert child["step"] == 1 and len(child["files"]) == 1            # section 0 finalized
     assert "revised" in child["files"]["1-the-setup.md"]             # forward note steered it
     assert child["change"] and "go bolder" in child["change"]        # the fold-in is flagged
-    sib, _ = rebranch("guitar coaching", r3, root, "narrower niche", mock=True)
+    sib, _ = rebranch("guitar coaching", r, root, "narrower niche", mock=True)
     assert sib["step"] == 0 and "revised" in sib["draft"] and sib["files"] == {}  # re-draft, no finalize
     assert sib["change"] and "narrower niche" in sib["change"]
-    assert forward("guitar coaching", r3, root, None, mock=True)[0]["change"] is None  # no note, no flag
-    # forward to the end → terminal node
+    assert forward("guitar coaching", r, root, None, mock=True)[0]["change"] is None  # no note, no flag
+    # board-reviewed forward: the finalized section gets a review; its takeaway steers the next draft
+    b_child, _ = forward("guitar coaching", r, root, None, directors=["closer", "cfo"], mock=True)
+    assert len(b_child["board"]) == 1 and len(b_child["board"][0]["directors"]) == 2
+    assert b_child["board"][0]["verdict"]                             # synthesized takeaway
+    assert "board-guided" in b_child["draft"]                         # takeaway steered the next draft
+    assert _board_notes(b_child["board"]).startswith("- on")
+    # forward to the end → terminal node with the full file tree + the QA pass
     node = child
     while node["step"] < N:
-        node, _ = forward("guitar coaching", r3, node, None, mock=True)
+        node, _ = forward("guitar coaching", r, node, None, mock=True)
     assert node["step"] == N and node["draft"] is None and len(node["files"]) == N
+    md = bundle_markdown("guitar coaching", node["files"])
+    assert "Business plan" in md
     # waste-of-time mode: force past a kill → comedic placeholder, zero spend, still advances the tree
     wod, wc = wod_forward(root)
     assert wc == 0.0 and wod["step"] == 1 and wod.get("wod") and "button" in wod["files"]["1-the-setup.md"].lower()
-    print("planner.py self-test OK —", N, "sections,", len(sess["files"]),
-          "files, expert ok, prepare ok, board ok, tree ok")
+    print("planner.py self-test OK —", N, "sections, expert ok, prepare ok, board ok, tree ok")

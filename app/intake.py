@@ -3,7 +3,7 @@
 Intake + vet — the two stages that run BEFORE the engine builds anything.
 
 Why this exists: the engine assumed its input was already one coherent business
-idea (see prototype/pipeline.py DEFAULT_IDEA — a full paragraph). Hand it a pile
+idea (see engine/pipeline.py DEFAULT_IDEA — a full paragraph). Hand it a pile
 of hobbies ("basketball, Magic: The Gathering, food, and I'm good at sales") and
 it Frankensteins them into one nonsense offer. There was no stage that turned
 vague input into a focused thesis, and no stage willing to say an idea is weak.
@@ -17,11 +17,8 @@ have mock paths so the app's mock mode and these self-tests need no API key.
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))  # app/ on path → bare sibling imports
-import skill_registry as skills  # noqa: E402
+from app import skill_registry as skills  # noqa: E402
 
 _MOCK_SHAPED = {
     "coherent": True,
@@ -54,7 +51,7 @@ def shape(idea: str, mock: bool = False) -> tuple[dict, float]:
     Never blends unrelated interests — picks the strongest wedge and names the rest."""
     if mock:
         return dict(_MOCK_SHAPED), 0.0
-    from pipeline import LEDGER, call, extract_json, SONNET  # heavy; real mode only
+    from engine.pipeline import LEDGER, call, extract_json, SONNET  # heavy; real mode only
     start = len(LEDGER.rows)
     out = call("intake", SONNET, max_tokens=600, system=skills.system("intake"), cache=True,
                prompt=f"The operator typed this in plain text:\n\n{idea}\n\nShape it now.")
@@ -78,7 +75,7 @@ def vet(idea: str, shaped: dict, research: dict | None = None, mock: bool = Fals
     against this new angle. Returns (vetting, cost)."""
     if mock:
         return dict(_MOCK_VET), 0.0
-    from pipeline import LEDGER, call, extract_json, SONNET
+    from engine.pipeline import LEDGER, call, extract_json, SONNET
     start = len(LEDGER.rows)
     cited = ""
     if research and research.get("rows"):
@@ -146,7 +143,7 @@ def premortem(idea: str, shaped: dict, research: dict | None = None,
     (assumptions, cost) where each item is {assumption, status: holds|shaky|breaks, why}."""
     if mock:
         return [dict(a) for a in _MOCK_PREMORTEM], 0.0
-    from pipeline import LEDGER, call, extract_json, SONNET
+    from engine.pipeline import LEDGER, call, extract_json, SONNET
     start = len(LEDGER.rows)
     cited = ""
     if research and research.get("rows"):

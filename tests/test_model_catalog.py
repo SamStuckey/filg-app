@@ -5,8 +5,8 @@ catalog into the cost ledger live (via _row_cost), so an env price override take
 deploy, and unknown ids resolve to $0 (BYOK stays off FILG's budget).
 """
 
-import model_catalog
-import pipeline
+from engine import model_catalog
+from engine import pipeline
 
 
 def test_resolution_and_fallbacks():

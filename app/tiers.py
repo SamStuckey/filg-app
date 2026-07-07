@@ -26,15 +26,8 @@ so a pre-restructure account row never falls back to free.
 from __future__ import annotations
 
 import os
-import sys
 
-# prototype/ holds provider.py (the model-stack ladder). main.py already puts it on sys.path before
-# importing app submodules; add it defensively so tiers.py also imports cleanly on its own.
-_PROTO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "prototype")
-if _PROTO not in sys.path:
-    sys.path.insert(0, _PROTO)
-
-import provider  # noqa: E402 — after the sys.path bootstrap above
+from engine import provider  # the model-stack ladder
 
 FREE = "free"   # sentinel: no subscription (BYOK / free taste). Not a paid tier.
 
@@ -168,11 +161,7 @@ def catalog() -> list[dict]:
     return out
 
 
-if __name__ == "__main__":  # self-test (imports provider; run from prototype-on-path context)
-    import sys
-    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "prototype"))
-    import provider  # noqa: F811 — ensure importable when run standalone
-
+if __name__ == "__main__":  # self-test: python -m app.tiers
     assert TIER_ORDER == ["pro", "ultimate"]
     # both defined tiers unlock EVERYTHING — the ladder differs only in the monthly allowance
     assert allowed_stacks("pro") == provider.STACK_ORDER

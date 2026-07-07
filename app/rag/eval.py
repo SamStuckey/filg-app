@@ -35,9 +35,7 @@ import sys
 from dataclasses import dataclass
 
 _APP = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # …/app on path → `from rag import`
-if _APP not in sys.path:
-    sys.path.insert(0, _APP)
-from rag import answer, embed, ingest, search, store   # noqa: E402
+from . import answer, embed, ingest, search, store   # noqa: E402
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
 
@@ -93,7 +91,7 @@ def judge_answer(case: EvalCase, got: str, *, mock: bool = False, key: str | Non
     word overlap (deterministic); real mode asks a cheap LLM judge."""
     if mock:
         return float(round(5 * _overlap_ratio(case.expected, got))), 0.0
-    from pipeline import LEDGER, call, HAIKU, extract_json   # heavy; real mode only
+    from engine.pipeline import LEDGER, call, HAIKU, extract_json   # heavy; real mode only
     start = len(LEDGER.rows)
     out = call("rag_eval_judge", HAIKU, max_tokens=40, prompt=(
         "Score how well the CANDIDATE answer matches the REFERENCE answer to the QUESTION, from 0 "
@@ -157,8 +155,8 @@ def _print_report(report: dict) -> None:
 def main() -> int:
     real = "--real" in sys.argv
     if real:
-        import pipeline
-        import provider
+        from engine import pipeline
+        from engine import provider
         with provider.use(provider.anthropic_provider()), pipeline.run_ledger():
             report = evaluate(mock=False)
     else:

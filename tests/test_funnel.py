@@ -63,7 +63,7 @@ def test_merge_needs_a_selection(client):
 
 # ── refine: the prelaunch gate sharpens in place, never re-spreads ────────────
 def test_refined_gate_carries_questions_and_a_light_skim(client):
-    import brainstorm
+    from app import brainstorm
     s = _brainstorm(client)
     sid = s["id"]
     client.post(f"/api/plan/{sid}/merge", json={"options": [s["activeNode"]["options"][0]["id"]]})
@@ -309,13 +309,14 @@ def test_lookup_requires_a_question(client):
 def test_tripped_kill_switch_degrades_funnel_to_key_prompt(client, monkeypatch):
     # invariant #3: the funnel feeds the daily meter, so it must READ it too. A tripped kill switch
     # on FILG's key → 402 + needKey (degrade to the key prompt), never an uncapped run.
-    from app import main as m
+    from app import access, ops
+    from engine import usage
 
     class _HostedProv:
         bills_filg = True
-    monkeypatch.setattr(m, "MOCK", False)
-    monkeypatch.setattr(m, "_provider_for", lambda user: _HostedProv())
-    monkeypatch.setattr(m.usage, "kill_switch_tripped", lambda: True)
+    monkeypatch.setattr(ops, "MOCK", False)
+    monkeypatch.setattr(access, "_provider_for", lambda user: _HostedProv())
+    monkeypatch.setattr(usage, "kill_switch_tripped", lambda: True)
     r = client.post("/api/brainstorm", json={"idea": "cookies with ex cons on tiktok"})
     assert r.status_code == 402 and r.json().get("needKey") is True
 
@@ -334,7 +335,7 @@ def test_info_requests_never_pivot(client):
 
 
 def test_scaffold_never_renders_as_a_direction():
-    import brainstorm
+    from app import brainstorm
     echo = [{"title": "THE OPERATOR IS PIVOTING. Their pivot instruction OUTWEIGHS",
              "one_liner": "THE OPERATOR IS PIVOTING. Their pivot instruction OUTWEIGHS everything"}]
     assert brainstorm._clean_directions(echo) == []

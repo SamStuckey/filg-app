@@ -1,7 +1,7 @@
 """Skill registry + persona registry."""
 
-import personas
-import skill_registry as skills
+from app import personas
+from app import skill_registry as skills
 
 
 def test_registry_loads_expected_skills():

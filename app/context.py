@@ -22,13 +22,17 @@ The engine has two layers:
        - evidence(s)       — the gate-graded research, split cited vs flagged. Feeds the advisor
                              and the board.
 
-Pure functions over the session dict — no engine imports, no I/O. Contract tests in
-tests/test_context.py assert every user-visible fact (a pick, a pivot steer, an on-screen option)
-appears in the view of every surface that must answer about it; a new drop should fail there, not
-in the operator's chat.
+Pure functions over the session dict — no model calls, no I/O. Tree mechanics (kind resolution,
+path walks) come from engine/tree.py; the app's kind vocabulary is registered in app/domain/nodes.
+Contract tests in tests/test_context.py assert every user-visible fact (a pick, a pivot steer, an
+on-screen option) appears in the view of every surface that must answer about it; a new drop
+should fail there, not in the operator's chat.
 """
 
 from __future__ import annotations
+
+from engine import tree as dtree
+from app.domain import nodes as _vocab  # noqa: F401 — registers the app's kinds + attachments
 
 # Per-view character budgets. Truncation is centralized so nothing important silently falls off the
 # end of an ad-hoc slice; views trim WITHIN structure (per line) rather than chopping the whole tail.
@@ -39,10 +43,9 @@ SCREEN_CAP = 900       # the router runs on every prompt — keep its context le
 JOURNEY_CAP = 4000     # the advisor answers ABOUT the journey — it gets the full story
 
 
-def kind(node: dict) -> str:
-    """A node's kind. Legacy plan-section nodes (built before the funnel existed) have no `kind`,
-    so an absent kind means 'section'. Funnel kinds: idea | brainstorm | option | refined | fork."""
-    return (node or {}).get("kind") or "section"
+# A node's kind — the engine resolves it against the registry app/domain/nodes.py declares
+# (legacy plan-section nodes carry no `kind` field; the registered default makes them 'section').
+kind = dtree.kind
 
 
 def snippet(n: dict) -> str:
@@ -71,14 +74,8 @@ def _nodes(s: dict) -> tuple[dict, str | None]:
     return (t.get("nodes") or {}), t.get("active")
 
 
-def _chain(nodes: dict, at_id: str | None) -> list[dict]:
-    """Root → at_id, in order. Empty when the node is unknown."""
-    chain = []
-    cur = at_id
-    while cur is not None and nodes.get(cur):
-        chain.append(nodes[cur])
-        cur = nodes[cur].get("parent")
-    return list(reversed(chain))
+# Root → at_id, in order; empty when the node is unknown. The engine's cycle-safe walk.
+_chain = dtree.chain
 
 
 def _fork_options(nodes: dict, fork: dict) -> list[dict]:

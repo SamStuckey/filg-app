@@ -5,10 +5,10 @@ API (pipeline.call / the anthropic client are monkeypatched)."""
 
 import types
 
-import pipeline
-import provider
-from pipeline import Claim, gate_claim, judge_batch
-from source_credibility_gate import TIER_VENDOR
+from engine import pipeline
+from engine import provider
+from engine.pipeline import Claim, gate_claim, judge_batch
+from engine.source_credibility_gate import TIER_VENDOR
 
 
 def _bound(cap):
@@ -184,10 +184,10 @@ def test_build_evidence_emits_leaf_events(monkeypatch):
     # The runner's leaf viz is driven by two sentinel progress lines: §LANES§<json> up front, then a
     # §LANEDONE§<index> as each lane future completes. Guard that build_evidence emits both, with one
     # done-event per lane, so the frontend can paint grey→green leaves.
-    import teardown
+    from app import teardown
     lanes = ["lane A?", "lane B?", "lane C?"]
-    monkeypatch.setattr(pipeline, "plan", lambda idea: list(lanes))
-    monkeypatch.setattr(pipeline, "research_lane", lambda idea, ln: [])
+    monkeypatch.setattr(pipeline, "plan", lambda idea, framing=None: list(lanes))
+    monkeypatch.setattr(pipeline, "research_lane", lambda idea, ln, framing=None: [])
     monkeypatch.setattr(pipeline, "gate_claims", lambda claims, votes=None: [])
     monkeypatch.setattr(pipeline, "research_primary", lambda c: None)
     seen = []
@@ -201,8 +201,8 @@ def test_build_evidence_emits_leaf_events(monkeypatch):
 def test_generate_reuse_path_regrades_without_refetch(monkeypatch):
     # T2: generate(prior_claims=...) re-grades the carried claims (no build_evidence / web fan-out) and
     # echoes them back serialized on the result so a downstream node keeps the reusable evidence.
-    import teardown
-    import spine
+    from app import teardown
+    from engine import spine
 
     def boom(*a, **k):
         raise AssertionError("build_evidence ran on the reuse path")
@@ -220,14 +220,14 @@ def test_generate_reuse_path_regrades_without_refetch(monkeypatch):
 
 
 def test_label_triangulation_marks_single_vs_corroborated():
-    import teardown
+    from engine import spine
     rows = [
         {"mark": "ok", "url": "https://census.gov/x", "lane": "market"},
         {"mark": "ok", "url": "https://bls.gov/y", "lane": "market"},      # different host, same lane
         {"mark": "ok", "url": "https://mgma.com/z", "lane": "pricing"},    # alone in its lane
         {"mark": "warn", "url": "https://vendor.com/w", "lane": "pricing"},
     ]
-    teardown._label_triangulation(rows)
+    spine._label_triangulation(rows)
     assert rows[0]["corroborated"] is True and rows[1]["corroborated"] is True
     assert rows[2]["corroborated"] is False and rows[2]["sources"] == 1
     assert "corroborated" not in rows[3]   # flagged rows are not labeled (already unverified)

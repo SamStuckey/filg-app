@@ -1,6 +1,6 @@
 """RAG stage 4 — hybrid merge (RRF) + rerank."""
 
-from rag import search, store
+from app.rag import search, store
 
 
 def _seed():

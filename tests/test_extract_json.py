@@ -5,7 +5,7 @@ it used to scan for [...] before {...}, so an object containing an array parsed 
 the inner array and callers got a list. These lock the fix.
 """
 
-from pipeline import extract_json
+from engine.pipeline import extract_json
 
 
 def test_object_with_inner_array_returns_object():

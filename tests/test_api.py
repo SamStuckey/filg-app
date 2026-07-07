@@ -1,28 +1,24 @@
 """End-to-end API tests through the FastAPI app (mock mode) — the full plan flow + guards.
 
 This is the test that, run automatically, would have caught the prod break: it
-drives /api/plan/start through to a built section. (In mock mode it exercises the
-wiring; the real-mode parsing is covered in test_intake_vet.)"""
+drives the funnel (brainstorm -> merge -> commit) through to a built section. (In mock
+mode it exercises the wiring; the real-mode parsing is covered in test_intake_vet.)"""
 
-from conftest import frontend, wait_status
+from conftest import frontend, start_plan, wait_status
 
 GRAB_BAG = "I like basketball, Magic the Gathering, and food, and I'm good at sales"
 
 
 def test_full_plan_flow_with_board(client):
-    r = client.post("/api/plan/start",
-                    json={"idea": GRAB_BAG, "email": "e2e@x.com", "directors": ["closer", "cfo"]})
-    assert r.status_code == 200
-    sid = r.json()["id"]
-
-    s = wait_status(client, sid)
+    sid = start_plan(client, GRAB_BAG, email="e2e@x.com", directors=["closer", "cfo"])
+    s = client.get(f"/api/plan/{sid}").json()
     assert s["status"] == "building"
     assert s["shaped"]["thesis"] and s["vetting"]["verdict"] in ("pursue", "pivot", "kill")
     assert s["directors"] == ["closer", "cfo"]
     assert s["proposal"]["section"] == "brief"
 
     # advance one section → the board auto-reviews it with per-director takes + a takeaway
-    s = client.post(f"/api/plan/{sid}/respond", json={"choice": "yes_and", "note": ""}).json()
+    s = client.post(f"/api/plan/{sid}/next", json={"feedback": ""}).json()
     assert len(s["files"]) == 1
     assert len(s["board"]) == 1 and len(s["board"][-1]["directors"]) == 2
     assert s["board"][-1]["verdict"]
@@ -46,12 +42,11 @@ def test_full_plan_flow_with_board(client):
 
 
 def test_branching_next_back_goto(client):
-    sid = client.post("/api/plan/start",
-                      json={"idea": GRAB_BAG, "email": "tree@x.com"}).json()["id"]
-    s = wait_status(client, sid)
-    # the tree shows from the first render (single 'setup' node) so the tool is there immediately
+    sid = start_plan(client, GRAB_BAG, email="tree@x.com")
+    s = client.get(f"/api/plan/{sid}").json()
+    # the graph is live from the funnel (idea/fork/options/refined + the built section)
     assert s["proposal"]["section"] == "brief" and s["tree"] and s["tree"]["show"]
-    assert len(s["tree"]["nodes"]) == 1
+    assert s["tree"]["active"] in [n["id"] for n in s["tree"]["nodes"] if n["kind"] == "section"]
 
     # roll forward twice → two sections finalized, still a single (unbranched) line
     s = client.post(f"/api/plan/{sid}/next", json={"feedback": ""}).json()
@@ -83,9 +78,8 @@ def test_branching_next_back_goto(client):
 def test_qa_pass_and_pdf_unlock_on_finish(client):
     # Driving a plan all the way to done runs the final QA pass (surfaced as s["qa"]) and the finished
     # branch reports its per-branch PDF unlock state (pdfUnlocked → True here since billing is off).
-    sid = client.post("/api/plan/start",
-                      json={"idea": GRAB_BAG, "email": "finish@x.com"}).json()["id"]
-    s = wait_status(client, sid)
+    sid = start_plan(client, GRAB_BAG, email="finish@x.com")
+    s = client.get(f"/api/plan/{sid}").json()
     total = s["total"]
     for _ in range(total + 2):                      # roll forward until the plan completes
         if s.get("done"):
@@ -125,8 +119,7 @@ def test_pdf_unlock_is_per_plan_13_flat():
 def test_export_txt_available_with_data_unfinished(client):
     # The free get-your-data-out: one plain-text dump of everything so far, available the moment
     # there's data (no 'done' gate, no paywall).
-    sid = client.post("/api/plan/start", json={"idea": GRAB_BAG, "email": "exp@x.com"}).json()["id"]
-    wait_status(client, sid)
+    sid = start_plan(client, GRAB_BAG, email="exp@x.com")
     client.post(f"/api/plan/{sid}/next", json={"feedback": ""})   # build one section, still unfinished
     r = client.get(f"/api/plan/{sid}/export.txt")
     assert r.status_code == 200 and r.headers["content-type"].startswith("text/plain")
@@ -139,9 +132,7 @@ def test_export_txt_available_with_data_unfinished(client):
 def test_nudges_returns_quick_edit_chips(client):
     # The feedback modal's per-step nudge chips: a short list keyed to the current proposal.
     # In mock mode this returns the static set; the route must echo cumulative cost/tokens.
-    sid = client.post("/api/plan/start",
-                      json={"idea": GRAB_BAG, "email": "nudge@x.com"}).json()["id"]
-    wait_status(client, sid)
+    sid = start_plan(client, GRAB_BAG, email="nudge@x.com")
     r = client.get(f"/api/plan/{sid}/nudges")
     assert r.status_code == 200
     d = r.json()
@@ -153,9 +144,7 @@ def test_nudges_returns_quick_edit_chips(client):
 
 def test_redraft_regenerates_current_part_as_sibling(client):
     # "Not feeling it" regenerates the CURRENT part in place (a sibling at the same step), not a step back.
-    sid = client.post("/api/plan/start",
-                      json={"idea": GRAB_BAG, "email": "redraft@x.com"}).json()["id"]
-    s = wait_status(client, sid)
+    sid = start_plan(client, GRAB_BAG, email="redraft@x.com")
     s = client.post(f"/api/plan/{sid}/next", json={"feedback": ""}).json()   # advance to part 2
     assert s["step"] == 1 and len(s["files"]) == 1
 
@@ -175,9 +164,8 @@ def test_setup_redraft_regrades_verdict(client):
     # Regenerating the SETUP (step 0) re-grades the idea, so the response carries a (re-graded) verdict.
     # (Mock vet always returns "pursue"; this locks in that the setup-stage re-grade path runs + threads
     # the vetting back. Non-setup redrafts don't re-grade — covered by the sibling test above.)
-    sid = client.post("/api/plan/start",
-                      json={"idea": GRAB_BAG, "email": "regrade@x.com"}).json()["id"]
-    s = wait_status(client, sid)
+    sid = start_plan(client, GRAB_BAG, email="regrade@x.com")
+    s = client.get(f"/api/plan/{sid}").json()
     assert s["step"] == 0 and s["proposal"]["section"] == "brief"   # we're on the setup
     s = client.post(f"/api/plan/{sid}/redraft", json={"feedback": "reframe it around enterprise buyers"}).json()
     assert s["step"] == 0                                            # still the setup, a regenerated sibling
@@ -187,8 +175,8 @@ def test_setup_redraft_regrades_verdict(client):
 def test_download_follows_active_branch_no_paywall(client):
     # Build a plan to completion, then branch part 2 and finish again. The download must zip the
     # ACTIVE branch's files (the final decision set) — and no paywall gates it.
-    sid = client.post("/api/plan/start", json={"idea": GRAB_BAG, "email": "dl@x.com"}).json()["id"]
-    s = wait_status(client, sid)
+    sid = start_plan(client, GRAB_BAG, email="dl@x.com")
+    s = client.get(f"/api/plan/{sid}").json()
     while not s["done"]:
         s = client.post(f"/api/plan/{sid}/next", json={"feedback": ""}).json()
     r = client.get(f"/api/plan/{sid}/download")
@@ -206,8 +194,8 @@ def test_download_follows_active_branch_no_paywall(client):
 
 def test_chat_with_plan(client):
     # The standing advisor: grounded, persisted on the plan, owner-only.
-    sid = client.post("/api/plan/start", json={"idea": GRAB_BAG, "email": "chat@x.com"}).json()["id"]
-    s = wait_status(client, sid)
+    sid = start_plan(client, GRAB_BAG, email="chat@x.com")
+    s = client.get(f"/api/plan/{sid}").json()
     while not s["done"]:
         s = client.post(f"/api/plan/{sid}/next", json={"feedback": ""}).json()
     assert s["chat"] == [] and s["chatStarters"]                 # state exposes thread + starter Qs
@@ -229,8 +217,8 @@ def test_chat_with_plan(client):
 
 def test_plan_pdf_renders(client):
     # The core artifact: a finished plan downloads as a real, styled PDF (no paywall).
-    sid = client.post("/api/plan/start", json={"idea": GRAB_BAG, "email": "pdf@x.com"}).json()["id"]
-    s = wait_status(client, sid)
+    sid = start_plan(client, GRAB_BAG, email="pdf@x.com")
+    s = client.get(f"/api/plan/{sid}").json()
     while not s["done"]:
         s = client.post(f"/api/plan/{sid}/next", json={"feedback": ""}).json()
     r = client.get(f"/api/plan/{sid}/plan.pdf")
@@ -240,46 +228,30 @@ def test_plan_pdf_renders(client):
     assert "filename=" in r.headers.get("content-disposition", "")
 
     # not downloadable until finished
-    sid2 = client.post("/api/plan/start", json={"idea": GRAB_BAG, "email": "pdf2@x.com"}).json()["id"]
-    wait_status(client, sid2)
+    sid2 = start_plan(client, GRAB_BAG, email="pdf2@x.com")
     assert client.get(f"/api/plan/{sid2}/plan.pdf").status_code == 400
 
 
 def test_gibberish_idea_gets_roasted_for_free(client):
     # Total nonsense → a pre-rolled roast, status 200, NO session created (no run, no LLM spend).
     junk = "asdlfk asd fa lskdjf llaskjdflkajs dflk asdfasd lf lk asdlfk sladkf lkasdf"
-    r = client.post("/api/plan/start", json={"idea": junk, "email": "junk@x.com"})
+    r = client.post("/api/brainstorm", json={"idea": junk, "email": "junk@x.com"})
     assert r.status_code == 200
     d = r.json()
     assert d.get("gibberish") is True and d.get("title") and d.get("body") and "id" not in d
     # a real (if rough) idea is never roasted
-    ok = client.post("/api/plan/start",
+    ok = client.post("/api/brainstorm",
                      json={"idea": "i wanna help dentists with there missed calls", "email": "ok@x.com"})
     assert ok.status_code == 200 and "id" in ok.json()
 
 
 def test_goto_unknown_node_404(client):
-    sid = client.post("/api/plan/start",
-                      json={"idea": GRAB_BAG, "email": "g@x.com"}).json()["id"]
-    wait_status(client, sid)
+    sid = start_plan(client, GRAB_BAG, email="g@x.com")
     assert client.post(f"/api/plan/{sid}/goto", json={"node": "nope"}).status_code == 404
 
 
 def test_short_idea_rejected(client):
-    r = client.post("/api/plan/start", json={"idea": "hi", "email": "x@x.com"})
-    assert r.status_code == 400
-
-
-def test_missing_email_rejected(client):
-    r = client.post("/api/plan/start", json={"idea": GRAB_BAG})
-    assert r.status_code == 400
-
-
-def test_bad_choice_rejected(client):
-    sid = client.post("/api/plan/start",
-                      json={"idea": GRAB_BAG, "email": "bc@x.com"}).json()["id"]
-    wait_status(client, sid)
-    r = client.post(f"/api/plan/{sid}/respond", json={"choice": "nope"})
+    r = client.post("/api/brainstorm", json={"idea": "hi", "email": "x@x.com"})
     assert r.status_code == 400
 
 
@@ -356,8 +328,8 @@ def test_build_surface_wiring_present(client):
 
 def test_model_stack_selection(client):
     # The user can pick a model stack; it persists, unknown values fall back, legacy names alias forward.
-    sid = client.post("/api/plan/start", json={"idea": GRAB_BAG, "email": "stack@x.com"}).json()["id"]
-    s = wait_status(client, sid)
+    sid = start_plan(client, GRAB_BAG, email="stack@x.com")
+    s = client.get(f"/api/plan/{sid}").json()
     assert s["stack"] == "the-work-horse"                              # default = best Opus-free tier
     s = client.post(f"/api/plan/{sid}/stack", json={"stack": "trust-fund-baby"}).json()
     assert s["stack"] == "trust-fund-baby"
@@ -394,9 +366,7 @@ def test_kill_gate_blocks_until_resubstantiated(client):
     # A killed idea must not roll forward into a full plan. Mock vet always returns 'pursue', so we
     # force the kill verdict the gate keys off, then prove the hard gate + the /revet rescue path.
     from app import main
-    sid = client.post("/api/plan/start",
-                      json={"idea": "I want fame and money, help me get some", "email": "kill@x.com"}).json()["id"]
-    wait_status(client, sid)
+    sid = start_plan(client, "I want fame and money, help me get some", email="kill@x.com")
     s = main.store.plan_get(sid)
     v = {**(s.get("vetting") or {}), "verdict": "kill", "biggest_risk": "no skill or buyer named"}
     sh = {**(s.get("shaped") or {}), "clarifying_question": "What are you genuinely good at?"}
@@ -419,9 +389,7 @@ def test_kill_gate_softened_force_builds_waste_of_time(client):
     # operator can FORCE past it with no substance → comedic "waste of time" mode (zero spend, never a
     # credible plan), and the kill verdict persists so the snark keeps escalating.
     from app import main
-    sid = client.post("/api/plan/start",
-                      json={"idea": "I want fame and money, help me get some", "email": "wod@x.com"}).json()["id"]
-    wait_status(client, sid)
+    sid = start_plan(client, "I want fame and money, help me get some", email="wod@x.com")
     s = main.store.plan_get(sid)
     main.store.plan_save(sid, vetting={**(s.get("vetting") or {}), "verdict": "kill",
                                        "biggest_risk": "no skill or buyer named"})
@@ -443,8 +411,8 @@ def test_kill_gate_softened_force_builds_waste_of_time(client):
 def test_session_usage_meter_fields(client):
     # The live session usage meter reads cumulative cost/tokens off each response. Assert the wiring
     # exposes them everywhere it ticks (values are 0 in mock mode; real mode fills from the ledger).
-    sid = client.post("/api/plan/start", json={"idea": GRAB_BAG, "email": "meter@x.com"}).json()["id"]
-    s = wait_status(client, sid)
+    sid = start_plan(client, GRAB_BAG, email="meter@x.com")
+    s = client.get(f"/api/plan/{sid}").json()
     assert "cost" in s and "tokens" in s                      # plan-state (poll + build ops)
     nxt = client.post(f"/api/plan/{sid}/next", json={"feedback": ""}).json()
     assert "cost" in nxt and "tokens" in nxt
@@ -453,8 +421,8 @@ def test_session_usage_meter_fields(client):
 
 
 def _finish_plan(client, email):
-    sid = client.post("/api/plan/start", json={"idea": GRAB_BAG, "email": email}).json()["id"]
-    s = wait_status(client, sid)
+    sid = start_plan(client, GRAB_BAG, email=email)
+    s = client.get(f"/api/plan/{sid}").json()
     while not s["done"]:
         s = client.post(f"/api/plan/{sid}/next", json={"feedback": ""}).json()
     return sid
@@ -489,8 +457,8 @@ def test_pdf_open_when_billing_unconfigured(client):
 def test_free_taste_dedup_normalizes_email():
     # Anti-abuse (§16.2 #2): the free-taste counter dedupes on a normalized email, so +suffix and
     # gmail-dot aliases of the same person count as one taste, not infinite.
-    import auth
-    import usage
+    from app import auth
+    from engine import usage
     a = auth.normalize_email("Taste.Dedup+one@gmail.com")
     b = auth.normalize_email("tastededup+two@googlemail.com")
     assert a == b == "tastededup@gmail.com"
@@ -510,24 +478,24 @@ def test_clean_plan_url_serves_spa(client):
 
 
 def test_humanize_error_translates_openrouter_401():
-    from app import main
-    msg, need_key = main._humanize_error(
+    from app import ops
+    msg, need_key = ops.humanize_error(
         Exception("Error code: 401 - {'error': {'message': 'User not found.', 'code': 401}}"))
     assert need_key is True
     assert "key" in msg.lower() and "401" not in msg and "User not found" not in msg
 
 
 def test_humanize_error_credits_and_generic():
-    from app import main
-    msg_c, nk_c = main._humanize_error(Exception("Error code: 402 - insufficient credits openrouter"))
+    from app import ops
+    msg_c, nk_c = ops.humanize_error(Exception("Error code: 402 - insufficient credits openrouter"))
     assert nk_c is False and "credit" in msg_c.lower()
-    msg_g, nk_g = main._humanize_error(ValueError("could not parse JSON from model"))
+    msg_g, nk_g = ops.humanize_error(ValueError("could not parse JSON from model"))
     assert nk_g is False and "went wrong" in msg_g.lower() and "JSON" not in msg_g
 
 
 def test_engine_error_sets_needkey_flag():
-    from app import main
-    r = main._engine_error(Exception("Error code: 401 - User not found."))
+    from app import ops
+    r = ops.engine_error(Exception("Error code: 401 - User not found."))
     import json
     body = json.loads(bytes(r.body))
     assert body.get("needKey") is True and "key" in body["error"].lower()
