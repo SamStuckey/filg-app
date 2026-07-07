@@ -83,8 +83,10 @@ def impact(session: dict, decision_id: str) -> list[dict]:
 # The declarative markers: a first-person commitment/refusal or an absolute. Questions never are.
 _DECLARE = re.compile(
     r"\b(i'?d (rather|prefer|like)|i'?m (not|committed|set)|"
-    r"i (want|won'?t|will( not)?|need|prefer|refuse|insist|only|never|don'?t want|do not want|"
+    r"i (want|won'?t|will( not)?|need|prefer|refuse|insist|only|never|"
     r"can'?t stand|hate|am (not )?(going|willing)|would (never|rather)|must)|"
+    r"(don'?t|do not|won'?t|will not|refuse to) (want|do|use|touch|sell|run|hire|cold[- ]?call)|"
+    r"(don'?t|do not) want|"
     r"we (won'?t|never|only|refuse|want|need)|no cold|never|non[- ]?negotiable|has to (be|stay)|"
     r"must (be|stay|not|never)|absolutely (no|not))\b", re.I)
 _HARD = re.compile(r"\b(never|won'?t|will not|refuse|non[- ]?negotiable|absolutely (no|not)|hard no|"
@@ -154,6 +156,9 @@ if __name__ == "__main__":  # self-test (mock, no API)
     # detection: declaratives offer, questions/imperatives don't
     off, c = detect("i don't want to do cold call marketing", mock=True)
     assert c == 0.0 and off and off["weight"] == "non_negotiable"
+    # an intensifier between the subject and the refusal must not dodge detection (Sam, 2026-07-07)
+    assert detect("I really really do not want to do cold calling", mock=True)[0]["weight"] \
+        == "non_negotiable"
     assert detect("I want to run a non-profit", mock=True)[0]["weight"] == "firm"
     assert detect("ideally I'd prefer local clients", mock=True)[0]["weight"] == "nice_to_have"
     assert detect("what should I charge?", mock=True)[0] is None

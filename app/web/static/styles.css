@@ -753,3 +753,19 @@ ul.concernlist .concern .cdetail{color:var(--muted);font-size:13px;line-height:1
 .decimp .decw{margin-left:auto}
 .decref{display:flex;align-items:center;gap:7px;border-left:3px solid var(--muted);padding:4px 8px}
 .decref.gone{opacity:.6}
+
+/* ── The in-chat pin offer: weight options stack as list rows, one per line ── */
+.decopts{display:flex;flex-direction:column;gap:6px;margin-top:9px}
+.decopts .decopt{display:flex;align-items:center;gap:9px;width:100%;text-align:left;
+  padding:9px 12px;border:1px solid var(--line);border-radius:9px;background:var(--card);
+  color:var(--fg);font-size:13px;cursor:pointer}
+.decopts .decopt b{font-weight:600;white-space:nowrap}
+.decopt-sub{color:var(--muted);font-size:12px;margin-left:auto;text-align:right}
+.decopts .decopt.on{border-color:currentColor;box-shadow:0 0 0 1px currentColor inset}
+.decopts .decopt.non_negotiable.on{color:var(--red)}
+.decopts .decopt.firm.on{color:var(--yellow)}
+.decopts .decopt.nice_to_have.on{color:var(--green)}
+.decopts .decopt.on b,.decopts .decopt.on .decopt-sub{color:var(--fg)}
+.decopts .decopt.on .decopt-sub{color:var(--muted)}
+.decopts .decopt:hover{border-color:var(--accent)}
+.cmsg.asked .decopts{display:none}
