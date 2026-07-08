@@ -420,11 +420,21 @@ ul.concernlist .concern .cdetail{color:var(--muted);font-size:13px;line-height:1
 .rlist .thinking{font-size:13px}
 .rrow{font-size:13px;line-height:1.45;border:1px solid var(--line);border-radius:8px;padding:7px 9px;
   background:var(--card);transition:opacity .25s ease,border-color .25s ease,background .25s ease}
+/* Source type is the outline: blue = a hard/independent source (gov, official stats, Google Trends);
+   green = a vendor/secondary source. A search hit (yellow, below) still wins over both. */
+.rrow.hard{border-color:var(--blue);border-left-width:3px}
+.rrow.vendor{border-color:var(--green);border-left-width:3px}
 .rrow.hit{border-color:var(--yellow);background:color-mix(in srgb,var(--yellow) 10%,var(--card))}
 .rrow.dim{opacity:.42}
 .rrow a{color:var(--accent);font-size:12px;margin-left:6px;text-decoration:none}
 .rrow .rtier{font-size:11px;color:var(--muted);margin-left:6px;text-transform:uppercase;letter-spacing:.04em}
 .rrow.flagged .rtier{color:var(--yellow)}
+.rrow.hard .rtier{color:var(--blue)}
+.rrow.vendor .rtier{color:var(--green)}
+/* "How many hard sources" gate — a small notice pinned atop the research stack when we found <3. */
+.rwarn{position:sticky;top:0;z-index:1;font-size:12px;line-height:1.4;font-weight:600;
+  color:var(--fg);background:color-mix(in srgb,var(--blue) 12%,var(--card));
+  border:1px solid var(--blue);border-radius:8px;padding:7px 9px;margin-bottom:2px}
 .rdrawer{flex:0 0 0%;width:0;min-width:0;overflow:hidden;opacity:0;pointer-events:none;position:relative;
   border-right:1px solid var(--line);background:var(--bg);display:flex;flex-direction:column;
   padding:14px 0 14px;transition:flex .45s ease,opacity .3s ease}

@@ -2189,8 +2189,11 @@ function researchItems(){
     if(!r.text||seen.has(key))return;
     seen.add(key);
     const ok=('mark' in r)?r.mark==='ok':!r.flagged;
-    out.push({text:r.text,url:r.url,ok,tier:r.tier&&!('mark' in r)?r.tier:(ok?'cited':'vendor'),
-      fresh:!!fresh});
+    // hard = a real, independent number (gov / official stats / Google Trends → PRIMARY tier).
+    // The engine now stamps `hard` on graded rows; fall back to the tier for older/lookup rows.
+    const hard=('hard' in r)?!!r.hard:(String(r.tier||'').toUpperCase()==='PRIMARY');
+    const tier=hard?'hard':(r.tier&&!('mark' in r)?r.tier:(ok?'cited':'vendor'));
+    out.push({text:r.text,url:r.url,ok,hard,tier,fresh:!!fresh});
   });
   add(S&&S.research&&S.research.rows);
   add(S&&S.activeNode&&S.activeNode.research&&S.activeNode.research.rows);
@@ -2218,8 +2221,14 @@ function renderResearch(){
   const scored=items.map((it,i)=>({it,i,s:qt.length?_rscore(qt,it):0}));
   if(qt.length)scored.sort((a,b)=>b.s-a.s||a.i-b.i);   // focused items float up, the rest dim below
   const anyHit=scored.some(x=>x.s>0);
-  const html=items.length?scored.map(({it,s})=>
-    `<div class="rrow${s>0?' hit':(qt.length&&anyHit?' dim':'')}${it.ok?'':' flagged'}">`+
+  // Hard-source gate: strive for 1-3 real/independent numbers. Warn at the top when we found <3.
+  const hardN=items.filter(x=>x.hard).length;
+  const HARD_TARGET=3;
+  const banner=(items.length&&hardN<HARD_TARGET)?
+    `<div class="rwarn">⚠ Only ${hardN} hard source${hardN===1?'':'s'} found`+
+    ` (aiming for ${HARD_TARGET}). The rest are vendor/secondary — treat their numbers with care.</div>`:'';
+  const html=items.length?banner+scored.map(({it,s})=>
+    `<div class="rrow${s>0?' hit':(qt.length&&anyHit?' dim':'')}${it.ok?'':' flagged'}${it.hard?' hard':' vendor'}">`+
     `${it.ok?'✅':'⚠️'} ${esc(it.text)}`+
     (it.url?` <a href="${esc(it.url)}" target=_blank rel=noopener>src</a>`:'')+
     `<span class=rtier>${esc(it.tier)}${it.fresh?' · lookup':''}</span></div>`).join('')

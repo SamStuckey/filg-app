@@ -37,7 +37,7 @@ from . import provider
 from .provider import HAIKU, SONNET, OPUS  # canonical model ids (defined in provider to avoid a cycle)
 
 from .source_credibility_gate import (
-    classify_domain,
+    classify_domain, is_hard, HARD_TIERS,
     TIER_PRIMARY, TIER_RESEARCH, TIER_VENDOR, TIER_FORUM, TIER_UNKNOWN,
 )
 
@@ -503,6 +503,11 @@ def research_lane(idea: str, lane: str, framing: ResearchFraming | None = None) 
     base = (
         f"{f.researcher_intro}\n\n"
         f"{f.subject_label}:\n{idea}\n\nRESEARCH QUESTION:\n{lane}\n\n"
+        "PRIORITIZE HARD SOURCES. Prefer real, independent numbers from government / official "
+        "statistics agencies (.gov, census, labor/economic bureaus), Google Trends, standards or "
+        "professional bodies, and peer-reviewed / academic work over marketing pages of companies "
+        "that sell in this category. Aim to land at least 1-3 numbers backed by such hard sources; "
+        "you may still include vendor figures, but do not lean on them when a primary source exists.\n\n"
         "After researching, reply with ONLY a JSON array of up to 5 claims:\n"
         '[{"text": "the claim incl. the number", "source_url": "https://...", '
         '"quantitative": true, "promotes_category": "the thing this number makes look '

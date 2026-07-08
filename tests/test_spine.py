@@ -54,16 +54,19 @@ def test_run_engine_golden_rows(monkeypatch):
     cleared = rows[0]
     assert cleared["mark"] == "ok" and cleared["text"] == "2.5M businesses"
     assert cleared["url"] == "https://census.gov/x" and cleared["tier"] == "PRIMARY"
+    assert cleared["hard"] is True   # gov source → counts as a hard/independent number
     assert cleared["judge"] == "TRUST" and cleared["as_of"] == 2022 and cleared["lane"] == "L0 market?"
 
     rescued = rows[1]
     assert rescued["mark"] == "ok" and rescued["text"] == "FLAG 62% missed calls"
     assert rescued["url"] == "https://primary.gov/p"            # re-sourced to the primary cite
+    assert rescued["tier"] == "PRIMARY" and rescued["hard"] is True  # reclassified against the new cite
     assert rescued["note"].startswith("re-sourced") and rescued["lane"] == "L0 market?"
 
     labeled = rows[2]
     assert labeled["mark"] == "warn" and labeled["text"] == "FLAG 80% prefer us"
     assert labeled["url"] == "https://vendor.io/b" and labeled["as_of"] == 2019
+    assert labeled["hard"] is False   # vendor source → not a hard number
     assert labeled["lane"] == "L1 pricing?"
 
     # triangulation: the two ok rows share lane L0 with different hosts → both corroborated.

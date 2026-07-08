@@ -26,6 +26,8 @@ import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
+from .source_credibility_gate import is_hard
+
 # ── step kinds (the taxonomy) ────────────────────────────────────────────────
 DETERMINISTIC = "deterministic"   # code only; runs or errors
 RESEARCH = "research"             # model gathers from the open web, then we structure it
@@ -130,25 +132,31 @@ def _assemble_rows(cleared: list, rescues: list, to_label: list, claim_lane: dic
     for v in cleared:
         rows.append({"mark": "ok", "text": v.claim.text, "url": v.claim.source_url,
                      "note": f"{v.tier.lower()} source, passed the gate",
-                     "tier": v.tier, "judge": v.judge, "as_of": v.claim.as_of, "stale": _stale(v),
+                     "tier": v.tier, "hard": is_hard(v.tier),
+                     "judge": v.judge, "as_of": v.claim.as_of, "stale": _stale(v),
                      "lane": claim_lane.get(id(v.claim), "")})
     for r in rescues:
         if r.rescued and r.new_url:
+            # re-sourced to a primary/neutral cite — reclassify against the NEW url so a rescued
+            # claim now resting on a hard source is counted (and outlined) as one.
             rows.append({"mark": "ok", "text": r.original.claim.text, "url": r.new_url,
                          "note": "re-sourced to a primary/neutral cite by the gate",
-                         "tier": r.original.tier, "judge": r.original.judge,
+                         "tier": r.new_tier, "hard": is_hard(r.new_tier),
+                         "judge": r.original.judge,
                          "as_of": r.original.claim.as_of, "stale": _stale(r.original),
                          "lane": claim_lane.get(id(r.original.claim), "")})
         else:
             v = r.original
             rows.append({"mark": "warn", "text": v.claim.text, "url": v.claim.source_url,
                          "note": "no neutral source found, treat as a vendor marketing claim",
-                         "tier": v.tier, "judge": v.judge, "as_of": v.claim.as_of, "stale": _stale(v),
+                         "tier": v.tier, "hard": is_hard(v.tier),
+                         "judge": v.judge, "as_of": v.claim.as_of, "stale": _stale(v),
                          "lane": claim_lane.get(id(v.claim), "")})
     for v in to_label:
         rows.append({"mark": "warn", "text": v.claim.text, "url": v.claim.source_url,
                      "note": _warn_note(v),
-                     "tier": v.tier, "judge": v.judge, "as_of": v.claim.as_of, "stale": _stale(v),
+                     "tier": v.tier, "hard": is_hard(v.tier),
+                     "judge": v.judge, "as_of": v.claim.as_of, "stale": _stale(v),
                      "lane": claim_lane.get(id(v.claim), "")})
     return rows
 

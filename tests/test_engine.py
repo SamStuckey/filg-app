@@ -8,7 +8,7 @@ import types
 from engine import pipeline
 from engine import provider
 from engine.pipeline import Claim, gate_claim, judge_batch
-from engine.source_credibility_gate import TIER_VENDOR
+from engine.source_credibility_gate import TIER_VENDOR, classify_domain, is_hard, TIER_PRIMARY
 
 
 def _bound(cap):
@@ -50,6 +50,17 @@ def test_gate_flags_self_interested_vendor():
 def test_gate_passes_primary_source():
     v = gate_claim(_claim("https://www.census.gov"), jv="TRUST")
     assert v.flagged is False and v.tier  # primary/authoritative isn't flagged
+
+
+def test_hard_source_classification():
+    # gov + Google Trends are hard; a vendor blog is not.
+    assert is_hard(classify_domain("https://www.census.gov/data")[0]) is True
+    assert is_hard(classify_domain("https://trends.google.com/trends/explore?q=x")[0]) is True
+    assert is_hard(classify_domain("https://www.google.com/trends/explore?q=x")[0]) is True
+    assert classify_domain("https://bls.gov/report.pdf")[0] == TIER_PRIMARY
+    assert is_hard(classify_domain("https://acmevendor.com/blog/stat")[0]) is False
+    # a research firm is independent but NOT counted as hard (the strict, gov-first reading).
+    assert is_hard(classify_domain("https://www.statista.com/x")[0]) is False
 
 
 def test_gate_reuses_supplied_verdict_without_calling(monkeypatch):
