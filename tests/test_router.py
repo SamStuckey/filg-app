@@ -75,6 +75,49 @@ def test_route_real_bad_intent_in_tool_defaults_to_ask(patch_call):
     assert d["intent"] == "ask" and d["target"] == "research"
 
 
+def test_board_business_question_stays_with_the_board(patch_call):
+    # 2026-07-08: a business question typed in board mode drifted to the advisor (target=plan) and
+    # drew a "back to build?" nag. In board mode a business question is ALWAYS for the board.
+    patch_call('{"intent": "ask", "target": "plan", "say": "Answering that."}')
+    d, _ = router.route("how much will this actually make me?", mode="board", mock=False)
+    assert d["intent"] == "ask" and d["target"] == "board"
+
+
+def test_board_support_question_reaches_help(patch_call):
+    # the one exception: a genuine FILG support/usage question routes to help, even in board mode
+    patch_call('{"intent": "ask", "target": "help", "say": "Answering that."}')
+    d, _ = router.route("how do I export my plan?", mode="board", mock=False)
+    assert d["intent"] == "ask" and d["target"] == "help"
+
+
+def test_board_support_question_caught_when_model_drifts(patch_call):
+    # deterministic backstop: an obvious app-support question reaches help even if the model
+    # mislabels its target as board/plan
+    patch_call('{"intent": "ask", "target": "board", "say": "Answering that."}')
+    d, _ = router.route("how do I add my openrouter api key?", mode="board", mock=False)
+    assert d["target"] == "help"
+
+
+def test_board_support_check_does_not_steal_a_business_question(patch_call):
+    # the support check is TIGHT — a business question that names a product type stays with the board
+    patch_call('{"intent": "ask", "target": "board", "say": "Answering that."}')
+    d, _ = router.route("should I sell PDF templates?", mode="board", mock=False)
+    assert d["target"] == "board"
+
+
+def test_board_directive_still_breaks_out(patch_call):
+    # the pin is asks-only — a clear directive typed in board mode still leaves the board
+    patch_call('{"intent": "steer", "target": "current", "steer": "make the pricing simpler"}')
+    d, _ = router.route("make the pricing simpler", mode="board", mock=False)
+    assert d["intent"] == "steer" and d["target"] == "current"
+
+
+def test_board_question_mock_split():
+    # the mock path (dev/frontend) routes a business question to the board, a support question to help
+    assert router.route("how much will this make me?", mode="board", mock=True)[0]["target"] == "board"
+    assert router.route("how do I download my plan?", mode="board", mock=True)[0]["target"] == "help"
+
+
 # ── the pivot-fork integration gate ──────────────────────────────────────────
 def test_integration_tweak_integrates_mock():
     ok, _ = router.check_integration("make it cheaper", "sell a subscription box", mock=True)

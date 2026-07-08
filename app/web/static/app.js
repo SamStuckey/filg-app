@@ -542,9 +542,14 @@ async function _sendPrompt(prompt,box){
   dec._offResearch=!!RMODE&&dec.intent==='ask'&&(
     (dec.target!=='research'&&dec.target!=='board')||
     (rRelated===false&&researchItems().length>0));
-  dec._offBoard=!!BMODE&&dec.intent==='ask'&&(
-    (dec.target!=='board'&&dec.target!=='research')||
-    (bRelated===false&&boardItems().length>0));
+  // Board mode: a business question is ALWAYS for the board — the board answers, and it never
+  // draws a "back to build?" nag (Sam, 2026-07-08). The one exception is a genuine FILG support
+  // question (keys, export, billing, how the app works), which the router targets at `help`; that
+  // gets answered in place, still no nag. Only a clear directive (handled above) leaves the board,
+  // and those aren't asks. Pin a board-mode ask to the board unless it's a support question (the
+  // router does this split too; this is the client backstop) and never flag it off-board.
+  if(BMODE&&dec.intent==='ask'&&dec.target!=='help')dec.target='board';
+  dec._offBoard=false;
   // when an in-chat check follows immediately, the check IS the reply — skip the say bubble
   const checks=(dec.intent==='commit'&&dec.confirm)||dec.intent==='restart_hard';
   if(!checks)chatBot(dec.say||'On it.');
