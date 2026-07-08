@@ -1972,14 +1972,19 @@ async function buyPdf(){
 // ── Two projections of the same tree: the decision graph, and a left-to-right document reader ──
 let VIEWMODE='graph', DOCTAB=null;
 function setView(v){
-  VIEWMODE=(v==='docs')?'docs':'graph';
+  VIEWMODE=(v==='docs')?'docs':(v==='roadmap')?'roadmap':'graph';
   document.querySelectorAll('#vtabs button').forEach(b=>b.classList.toggle('on',b.dataset.v===VIEWMODE));
   $('graph').hidden=VIEWMODE!=='graph';
   $('docs').hidden=VIEWMODE!=='docs';
+  const rm=$('roadmap'); if(rm)rm.hidden=VIEWMODE!=='roadmap';
+  if(VIEWMODE==='roadmap'){   // lazy-load the standalone roadmap surface once a plan exists
+    const f=$('roadframe'), want=SID?('/plan/'+SID+'/roadmap'):'';
+    if(f&&want&&(f.getAttribute('src')||'')!==want)f.setAttribute('src',want);
+  }
   if(VIEWMODE!=='graph')pill(false);
   renderView();
 }
-function renderView(){ if(VIEWMODE==='docs')renderDocs(); else renderGraph(); }
+function renderView(){ if(VIEWMODE==='roadmap')return; if(VIEWMODE==='docs')renderDocs(); else renderGraph(); }
 function pickDoc(id){ DOCTAB=id; renderDocs(); }
 function renderDocs(){
   const dt=$('dtabs'), pane=$('docpane'); if(!dt||!S)return;

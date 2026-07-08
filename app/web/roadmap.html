@@ -21,7 +21,7 @@ button{font:inherit;cursor:pointer}
 header{display:flex;align-items:center;gap:14px;flex-wrap:wrap;border-bottom:1px solid var(--line);padding-bottom:14px}
 .logo{font-weight:800;font-size:19px;color:var(--accent);text-decoration:none}
 .idea{color:var(--muted);font-size:14px;flex:1;min-width:180px}
-.tabs{display:flex;gap:6px}
+.tabs{display:flex;gap:6px;margin-left:auto}
 .tab{border:1px solid var(--line);background:var(--card);color:var(--muted);border-radius:999px;padding:5px 15px;font-weight:600}
 .tab.on{color:var(--fg);border-color:var(--fg)}
 .pbar{height:7px;background:var(--line);border-radius:99px;overflow:hidden;margin:14px 0 4px}
@@ -107,6 +107,11 @@ header{display:flex;align-items:center;gap:14px;flex-wrap:wrap;border-bottom:1px
 .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--fg);color:var(--bg);
   padding:9px 16px;border-radius:8px;font-size:13px;opacity:0;transition:opacity .2s;z-index:30;pointer-events:none}
 .toast.on{opacity:1}
+/* embedded as the shell's Roadmap tab: drop our own logo/idea (the shell shows them) and clear its
+   floating view-tabs row that overlays the top-left */
+.embed .logo,.embed .idea{display:none}
+.embed header{padding-left:230px;padding-top:16px}
+.embed .wrap{padding-top:14px}
 /* toolbar + modal + replan banner */
 .toolbar{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 16px}
 .tbtn{border:1px solid var(--line);background:var(--card);color:var(--fg);border-radius:8px;padding:7px 13px;font-size:13.5px;font-weight:500}
@@ -150,6 +155,8 @@ header{display:flex;align-items:center;gap:14px;flex-wrap:wrap;border-bottom:1px
 <script>
 const SID = location.pathname.split("/")[2];
 const API = `/api/plan/${SID}`;
+const EMBED = window.self !== window.top;   // hosted inside the app shell's Roadmap tab
+if(EMBED) document.documentElement.classList.add("embed");
 let DATA = null, VIEW = "list", OPEN = null;
 
 const $ = (s,r=document)=>r.querySelector(s);
