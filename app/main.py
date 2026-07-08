@@ -1822,11 +1822,30 @@ def _page_head() -> str:
     return head
 
 
+def _asset_ver() -> str:
+    """A short cache-busting token from the static assets' mtimes. Appended as `?v=…` to the
+    app.js/styles.css URLs so a deploy that changes either file forces a re-fetch — a bare
+    `/static/app.js` can otherwise sit stale in the browser/CDN, leaving fresh HTML wired to
+    yesterday's JS (a click on a brand-new button then no-ops on an undefined function). This is
+    the /static twin of the mtime-fresh shell above."""
+    mt = 0.0
+    for name in ("static/app.js", "static/styles.css"):
+        try:
+            mt = max(mt, (_WEB_DIR / name).stat().st_mtime)
+        except OSError:
+            pass
+    return str(int(mt))
+
+
 def _shell() -> str:
     """THE app shell (the former v2 surface, promoted to the root namespace 2026-07-06 — v1 retired).
     Served at `/` and every clean deep-link path (`/plan/{id}`, `/account/<tab>`) so real History-API
     URLs direct-load and refresh."""
-    return _page_text("index.html").replace("__FILG_HEAD__", _page_head())
+    ver = _asset_ver()
+    return (_page_text("index.html")
+            .replace("__FILG_HEAD__", _page_head())
+            .replace("/static/app.js", f"/static/app.js?v={ver}")
+            .replace("/static/styles.css", f"/static/styles.css?v={ver}"))
 
 
 @app.get("/", response_class=HTMLResponse)
