@@ -79,22 +79,48 @@ def _mock_route(prompt: str, stage: str, mode: str) -> dict:
             return {"intent": "pick", "target": "current", "keep": None, "steer": None, "picks": picks,
                     "confirm": False, "say": "Taking direction" + ("s " if len(picks) > 1 else " ") +
                     " + ".join(map(str, picks)) + " and merging."}
+    # a FILG support/usage question is the one ask that isn't for the board — it goes to help
+    sup = _is_support_ask(p)
     if (p.strip().endswith("?") or p.startswith(("what", "why", "how", "who", "when", "does", "can ",
                                                   "which", "where", "tell me", "show me", "remind me"))
             or any(k in p for k in _INFO_ASK)):
         tgt = mode if mode in ("research", "board", "help") else "plan"
+        if mode == "board" and sup:
+            tgt = "help"
         return {"intent": "ask", "target": tgt, "keep": None, "steer": None,
                 "confirm": False, "say": "Answering that."}
     # mode prior: an ambiguous prompt inside a tool is a question for that tool
     if mode in ("research", "board", "help"):
-        return {"intent": "ask", "target": mode, "keep": None, "steer": None,
-                "confirm": False, "say": "Answering from " + mode + "."}
+        tgt = "help" if (mode == "board" and sup) else mode
+        return {"intent": "ask", "target": tgt, "keep": None, "steer": None,
+                "confirm": False, "say": "Answering from " + tgt + "."}
     return {"intent": "steer", "target": "current", "keep": None, "steer": prompt,
             "confirm": False, "say": "Working that into this part."}
 
 
 _INFO_ASK = ("tell me", "show me", "remind me", "which node", "which step", "which section",
              "where am i", "what am i looking", "what node")
+
+# FILG support/usage questions — about USING THE APP (keys, export/download, billing, sign-in,
+# how FILG works), not the operator's business. In board mode these are the ONE ask that isn't for
+# the board; they route to help like anywhere else. Deliberately TIGHT: only app-specific phrasings
+# a business question would never use, so it never steals a real board question ("should I sell PDF
+# templates?" must stay with the board). The router's semantic `help` classification is the primary
+# check; this is the deterministic backstop for the obvious cases when the model drifts.
+_SUPPORT_ASK = ("api key", "openrouter", "anthropic key", "byok", "my own key", "my api key",
+                "export the plan", "export my plan", "export this plan", "download the plan",
+                "download my plan", "download the pdf", "download my pdf", "the .zip", ".zip file",
+                "raw files", "subscribe to filg", "cancel my subscription", "manage billing",
+                "how much does filg", "how much is filg", "what does filg cost", "cost to use filg",
+                "how does filg work", "how do i use filg", "my filg account", "delete my account",
+                "sign in", "sign up", "log in", "logging in", "reset my password")
+
+
+def _is_support_ask(prompt: str) -> bool:
+    """True when a prompt is clearly about USING FILG rather than the operator's business. Tight by
+    design (see `_SUPPORT_ASK`) — a business question must never trip it."""
+    p = (prompt or "").lower()
+    return any(k in p for k in _SUPPORT_ASK)
 
 
 def _clean(decision: dict, prompt: str, mode: str) -> dict:
@@ -129,15 +155,16 @@ def _clean(decision: dict, prompt: str, mode: str) -> dict:
                   "restart_keep": "brainstorm", "restart_hard": "brainstorm", "pick": "current",
                   "next": "current",
                   "ask": (mode if mode in ("research", "board", "help") else "plan")}[intent]
-    # BOARD MODE: a question is ALWAYS for the board (Sam, 2026-07-08). The board section is where
-    # you talk TO the board — a business question typed there ("how much will this make me?") is for
-    # the board to weigh in on, never re-routed to the advisor with a "back to build?" nag. Only a
-    # clear directive (steer/commit/next/diverge/pick/restart_*) leaves the board, and those aren't
-    # asks. `_mock_route` already pins board questions to board via the mode prior; the real Haiku
-    # router drifts a "general plan question" to target=plan (per the skill), the exact misroute we
-    # override here so the board — not the advisor — answers.
+    # BOARD MODE: a question about the BUSINESS is always for the board (Sam, 2026-07-08) — never
+    # re-routed to the advisor with a "back to build?" nag. The ONE exception is a genuine FILG
+    # support/usage question (keys, export/download, billing, how the app works): that goes to help,
+    # like in any mode. We trust the router's own `help` classification and add a deterministic
+    # backstop (`_is_support_ask`) for the obvious app-support phrasings a business question would
+    # never use, so a support question reaches help even if the model drifted it to board/plan.
+    # Everything else in board mode is for the board. Only a clear directive (steer/commit/next/…)
+    # leaves the board, and those aren't asks. `_mock_route` applies the same split.
     if intent == "ask" and mode == "board":
-        target = "board"
+        target = "help" if (target == "help" or _is_support_ask(prompt)) else "board"
     return {
         "intent": intent,
         "target": target,
@@ -248,10 +275,17 @@ if __name__ == "__main__":  # self-test (mock, no API)
     assert _clean({"intent": "steer", "say": "Telling you which node you're on."},
                   "tell me which node i'm on", "build")["intent"] == "ask"
     assert _clean({"intent": "steer"}, "make the pricing simpler", "build")["intent"] == "steer"
-    # a board question stays with the board even when the model aims it at the advisor (2026-07-08)
+    # a business question stays with the board even when the model aims it at the advisor (2026-07-08)
     assert _clean({"intent": "ask", "target": "plan"}, "how much will this make me?",
                   "board")["target"] == "board"
-    assert _clean({"intent": "ask", "target": "help"}, "what's the market size?",
+    # ...but a genuine FILG support/usage question is the one ask that goes to help, not the board —
+    # both when the model labels it help and when the deterministic backstop catches the drift
+    assert _clean({"intent": "ask", "target": "help"}, "how do I export my plan?",
+                  "board")["target"] == "help"
+    assert _clean({"intent": "ask", "target": "board"}, "how do I add my openrouter api key?",
+                  "board")["target"] == "help"
+    # the support check is tight — a business question mentioning a product type stays with the board
+    assert _clean({"intent": "ask", "target": "board"}, "should I sell PDF templates?",
                   "board")["target"] == "board"
     # a clear directive still breaks out of board mode (not an ask → not pinned)
     assert _clean({"intent": "steer", "target": "current"}, "make the pricing simpler",
