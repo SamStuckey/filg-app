@@ -570,13 +570,18 @@ def test_root_shell_and_assets_serve(client):
     assert 'id=rpane' in page.text and 'id=rdrawer' in page.text and 'id=rexpand' in page.text
     assert 'id=bpane' in page.text and 'id=bdrawer' in page.text and 'id=bseats' in page.text
     assert 'id=hpane' in page.text and 'id=spane' in page.text and 'tooldrawer' not in page.text
+    # summary + help expand into their own drawers too (2026-07-08), same contract as research/board
+    assert 'id=sdrawer' in page.text and 'id=hdrawer' in page.text
+    assert 'id=slist2' in page.text and 'id=hlist2' in page.text
     js = client.get("/static/app.js").text
     for needle in ("enterResearch", "exitResearch", "expandResearch", "collapseResearch",
                    "renderResearch", "offerExitMode", "RMODE='split'",
                    "enterBoard", "exitBoard", "expandBoard", "collapseBoard",
                    "renderBoard", "BMODE='split'", "forgeModal", "stressGo", "boardNotesHtml",
                    "enterHelp", "renderHelp", "faqPush", "HELP_BLURB",
+                   "expandHelp", "collapseHelp", "HMODE='split'",
                    "enterSummary", "exitSummary", "summaryHtml",
+                   "expandSummary", "collapseSummary", "SMODE='split'",
                    "openAccount", "acctExport", "acctPrompt"):
         assert needle in js, needle
     # the 2026-07-07 UX wave: gate-question answers + confirm gate, click-a-line comments, chat-send

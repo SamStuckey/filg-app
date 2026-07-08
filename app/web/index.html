@@ -38,16 +38,18 @@ __FILG_HEAD__
       <div class=vgrip data-pane=rpane title="Drag to resize"></div>
     </div>
     <!-- Help: a banner above the chat (the split mechanism) — the one-paragraph how-to plus the
-         user's own past help Q&As as a personal FAQ. No drawer. -->
+         user's own past help Q&As as a personal FAQ; ⇥ Expand slides it out like research/board. -->
     <div class=rpane id=hpane aria-hidden=true>
-      <div class=rpane-head><span>Help</span></div>
+      <div class=rpane-head><span>Help</span>
+        <button type=button class="ghost small" onclick="expandHelp()" title="Slide the help out into its own drawer">⇥ Expand</button></div>
       <div class=rlist id=hlist></div>
       <div class=vgrip data-pane=hpane title="Drag to resize"></div>
     </div>
     <!-- Summary: the in-voice idea summary (v1's top-of-page block), as a display state — review it,
          or just keep chatting under it; the conversation is the same one chat. -->
     <div class=rpane id=spane aria-hidden=true>
-      <div class=rpane-head><span>Summary</span></div>
+      <div class=rpane-head><span>Summary</span>
+        <button type=button class="ghost small" onclick="expandSummary()" title="Slide the summary out into its own drawer">⇥ Expand</button></div>
       <div class=rlist id=slist></div>
       <div class=vgrip data-pane=spane title="Drag to resize"></div>
     </div>
@@ -103,6 +105,24 @@ __FILG_HEAD__
     <div class=bseats id=bseats2 title="Who's seated — click to bench/seat for the next convene"></div>
     <div class=rlist id=blist2></div>
     <div class=hgrip data-drawer=bdrawer title="Drag to resize"></div>
+  </aside>
+  <aside class=rdrawer id=sdrawer aria-hidden=true>
+    <div class=rpane-head><span>Summary</span>
+      <span class=bacts>
+        <button type=button class="ghost small" onclick="collapseSummary()" title="Tuck the summary back into the chat drawer">⇤ Tuck in</button>
+      </span></div>
+    <button type=button class=mrail-in onclick="mToggle()" aria-label="Collapse the drawer" title="Collapse">&#8249;</button>
+    <div class=rlist id=slist2></div>
+    <div class=hgrip data-drawer=sdrawer title="Drag to resize"></div>
+  </aside>
+  <aside class=rdrawer id=hdrawer aria-hidden=true>
+    <div class=rpane-head><span>Help</span>
+      <span class=bacts>
+        <button type=button class="ghost small" onclick="collapseHelp()" title="Tuck the help back into the chat drawer">⇤ Tuck in</button>
+      </span></div>
+    <button type=button class=mrail-in onclick="mToggle()" aria-label="Collapse the drawer" title="Collapse">&#8249;</button>
+    <div class=rlist id=hlist2></div>
+    <div class=hgrip data-drawer=hdrawer title="Drag to resize"></div>
   </aside>
   <button id=mrail type=button onclick="mToggle()" aria-label="Open the drawer" title="Open">&#8250;</button>
   <main class=right id=right>
