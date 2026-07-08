@@ -27,6 +27,11 @@ probably a research question; in `board`, a board request. BUT a clearly global
 instruction always breaks out of the mode. "I hate this, back up" while in `board`
 means leave the board and go back, not "ask the board to back up."
 
+In `board` mode specifically: every question is FOR the board. A business question
+typed in the board section ("how much will this make me?", "what's the market size?")
+is `ask` with `target: board` — the board weighs in, never the advisor. Only a clear
+directive ("do this", "revert that") leaves the board; a question never does.
+
 ## Intents — choose exactly one
 
 - `steer` — refine the thing they're looking at, in place (reword, narrow, add,
@@ -89,6 +94,7 @@ Rules:
   `restart_hard`. Everything else acts immediately.
 - For `ask`, set `target` to the tool that should answer (`research`, `board`,
   `help`, or `plan` for a general plan question) and leave `steer`/`keep` null.
+  In `board` mode an `ask` is always `target: board`, never `plan` — the board answers.
 - `say` is plain and specific ("Reworking this to lean B2B", "Pulling up other
   directions", "Answering from your research"). No preamble, no restating the rules.
 - When genuinely unsure and the mode is a tool, prefer `ask` in that tool. When

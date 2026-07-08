@@ -129,6 +129,15 @@ def _clean(decision: dict, prompt: str, mode: str) -> dict:
                   "restart_keep": "brainstorm", "restart_hard": "brainstorm", "pick": "current",
                   "next": "current",
                   "ask": (mode if mode in ("research", "board", "help") else "plan")}[intent]
+    # BOARD MODE: a question is ALWAYS for the board (Sam, 2026-07-08). The board section is where
+    # you talk TO the board — a business question typed there ("how much will this make me?") is for
+    # the board to weigh in on, never re-routed to the advisor with a "back to build?" nag. Only a
+    # clear directive (steer/commit/next/diverge/pick/restart_*) leaves the board, and those aren't
+    # asks. `_mock_route` already pins board questions to board via the mode prior; the real Haiku
+    # router drifts a "general plan question" to target=plan (per the skill), the exact misroute we
+    # override here so the board — not the advisor — answers.
+    if intent == "ask" and mode == "board":
+        target = "board"
     return {
         "intent": intent,
         "target": target,
@@ -239,6 +248,14 @@ if __name__ == "__main__":  # self-test (mock, no API)
     assert _clean({"intent": "steer", "say": "Telling you which node you're on."},
                   "tell me which node i'm on", "build")["intent"] == "ask"
     assert _clean({"intent": "steer"}, "make the pricing simpler", "build")["intent"] == "steer"
+    # a board question stays with the board even when the model aims it at the advisor (2026-07-08)
+    assert _clean({"intent": "ask", "target": "plan"}, "how much will this make me?",
+                  "board")["target"] == "board"
+    assert _clean({"intent": "ask", "target": "help"}, "what's the market size?",
+                  "board")["target"] == "board"
+    # a clear directive still breaks out of board mode (not an ask → not pinned)
+    assert _clean({"intent": "steer", "target": "current"}, "make the pricing simpler",
+                  "board")["target"] == "current"
     # mode as a prior: an ambiguous prompt inside research is a research question
     assert route("cheaper competitors", mode="research", mock=True)[0]["target"] == "research"
     # ...but a global break-out wins over the mode

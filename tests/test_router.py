@@ -75,6 +75,32 @@ def test_route_real_bad_intent_in_tool_defaults_to_ask(patch_call):
     assert d["intent"] == "ask" and d["target"] == "research"
 
 
+def test_board_question_stays_with_the_board(patch_call):
+    # 2026-07-08: a business question typed in board mode drifted to the advisor (target=plan) and
+    # drew a "back to build?" nag. In board mode a question is ALWAYS for the board.
+    patch_call('{"intent": "ask", "target": "plan", "say": "Answering that."}')
+    d, _ = router.route("how much will this actually make me?", mode="board", mock=False)
+    assert d["intent"] == "ask" and d["target"] == "board"
+
+
+def test_board_ask_pin_overrides_even_a_help_target(patch_call):
+    patch_call('{"intent": "ask", "target": "help"}')
+    d, _ = router.route("what's the market size for this?", mode="board", mock=False)
+    assert d["target"] == "board"
+
+
+def test_board_directive_still_breaks_out(patch_call):
+    # the pin is asks-only — a clear directive typed in board mode still leaves the board
+    patch_call('{"intent": "steer", "target": "current", "steer": "make the pricing simpler"}')
+    d, _ = router.route("make the pricing simpler", mode="board", mock=False)
+    assert d["intent"] == "steer" and d["target"] == "current"
+
+
+def test_board_question_mock_already_pinned():
+    # the mock path (dev/frontend) already routes board questions to the board via the mode prior
+    assert router.route("how much will this make me?", mode="board", mock=True)[0]["target"] == "board"
+
+
 # ── the pivot-fork integration gate ──────────────────────────────────────────
 def test_integration_tweak_integrates_mock():
     ok, _ = router.check_integration("make it cheaper", "sell a subscription box", mock=True)

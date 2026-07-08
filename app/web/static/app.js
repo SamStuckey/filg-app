@@ -542,9 +542,12 @@ async function _sendPrompt(prompt,box){
   dec._offResearch=!!RMODE&&dec.intent==='ask'&&(
     (dec.target!=='research'&&dec.target!=='board')||
     (rRelated===false&&researchItems().length>0));
-  dec._offBoard=!!BMODE&&dec.intent==='ask'&&(
-    (dec.target!=='board'&&dec.target!=='research')||
-    (bRelated===false&&boardItems().length>0));
+  // Board mode: a question is ALWAYS for the board — the board answers, and it never draws a
+  // "back to build?" nag (Sam, 2026-07-08). Only a clear directive (handled above) leaves the
+  // board, and those aren't asks. Pin a board-mode ask to the board (the router does this too;
+  // this is the client backstop) and never flag it off-board.
+  if(BMODE&&dec.intent==='ask')dec.target='board';
+  dec._offBoard=false;
   // when an in-chat check follows immediately, the check IS the reply — skip the say bubble
   const checks=(dec.intent==='commit'&&dec.confirm)||dec.intent==='restart_hard';
   if(!checks)chatBot(dec.say||'On it.');
