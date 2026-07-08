@@ -120,5 +120,47 @@ def test_task_chat_is_grounded(client):
     assert client.post(f"/api/plan/{sid}/tasks/nope/chat", json={"message": "hi"}).status_code == 404
 
 
+def test_replan_proposes_never_mutates(client):
+    sid = _demo(client)
+    j = _extract(client, sid)
+    ids = [t["id"] for t in j["roadmap"]["tasks"]]
+    # block one task so replan has a 'resolve' suggestion
+    client.patch(f"/api/plan/{sid}/tasks/{ids[1]}", json={"blocker_note": {"what": "waiting on X"}})
+    r = client.post(f"/api/plan/{sid}/roadmap/replan", json={})
+    assert r.status_code == 200
+    rp = r.json()
+    assert rp["next"] and rp["framing"]
+    assert any(s["kind"] == "resolve" for s in rp["suggestions"])
+    # replan didn't change stored state (it only proposes)
+    before = client.get(f"/api/plan/{sid}/roadmap").json()["progress"]
+    client.post(f"/api/plan/{sid}/roadmap/replan", json={})
+    assert client.get(f"/api/plan/{sid}/roadmap").json()["progress"] == before
+
+
+def test_handoff_prompt(client):
+    sid = _demo(client)
+    j = _extract(client, sid)
+    tid = j["roadmap"]["tasks"][0]["id"]
+    r = client.get(f"/api/plan/{sid}/roadmap/handoff", params={"task": tid})
+    assert r.status_code == 200 and j["roadmap"]["tasks"][0]["text"][:10] in r.json()["prompt"]
+    # honors standing decisions from the demo seed
+    assert "No cold-call marketing" in r.json()["prompt"]
+    whole = client.get(f"/api/plan/{sid}/roadmap/handoff")
+    assert "30-day plan" in whole.json()["prompt"]
+    assert client.get(f"/api/plan/{sid}/roadmap/handoff", params={"task": "nope"}).status_code == 404
+
+
+def test_digest_preview_and_optin(client):
+    sid = _demo(client)
+    _extract(client, sid)
+    r = client.get(f"/api/plan/{sid}/digest/preview")
+    assert r.status_code == 200 and r.json()["subject"] and "mail_enabled" in r.json()
+    # opt in — stored on the roadmap; sending is inert without a key (reported, not errored)
+    r = client.post(f"/api/plan/{sid}/digest", json={"cadence": True, "send_now": True})
+    assert r.json()["cadence"] is True
+    assert r.json()["send"]["sent"] is False   # no RESEND_API_KEY in test env
+    assert client.get(f"/api/plan/{sid}/digest/preview").json()["cadence"] is True
+
+
 def test_roadmap_404_on_unknown_session(client):
     assert client.get("/api/plan/nope/roadmap").status_code == 404

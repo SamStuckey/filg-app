@@ -460,6 +460,108 @@ def _extract_real(session, actions, node, decisions, today):
     return rm, 0.0
 
 
+# ── replan — the weekly cadence's ONE next action + adjustments (G4) ──────────
+def _overdue(task: dict, today: date) -> bool:
+    if task.get("status") in ("done", "dropped") or not task.get("due"):
+        return False
+    try:
+        return date.fromisoformat(task["due"]) < today
+    except ValueError:
+        return False
+
+
+def replan(session: dict, mock: bool = False) -> tuple[dict, float]:
+    """The weekly loop (G4): reads the roadmap's state — what's done, blocked, slipped — and PROPOSES
+    the ONE next action plus a few adjustments (push a slipped date, split a stuck task, drop a dead
+    one, resolve a blocker). It never mutates; the operator confirms each suggestion, same
+    offer-don't-autopin rule as decisions. Returns ({next, suggestions:[{kind,text,task?,why}]}, cost).
+
+    Deterministic core (mock + the fallback): next = the first unblocked open task; suggestions from
+    plain signals (overdue → push, blocked → resolve, all done → celebrate). Real mode layers a cheap
+    model call for a sharper 'what to focus on this week' framing on top of the same signals."""
+    rm = (session or {}).get("roadmap") or {}
+    today = _today()
+    nxt = next_action(rm)
+    suggestions: list[dict] = []
+    for t in ordered_tasks(rm):
+        if t.get("status") in ("done", "dropped"):
+            continue
+        if is_blocked(t, rm):
+            what = t["blocker_note"]["what"] if t.get("blocker_note") else "an unfinished prerequisite"
+            suggestions.append({"kind": "resolve", "task": t["id"],
+                                "text": f"Unblock “{t['text']}”", "why": f"blocked by {what}"})
+        elif _overdue(t, today):
+            suggestions.append({"kind": "push", "task": t["id"],
+                                "text": f"Reschedule “{t['text']}” — its date slipped",
+                                "why": f"was due {t['due']}"})
+    prog = progress(rm)
+    if prog["total"] and prog["done"] == prog["total"]:
+        suggestions.insert(0, {"kind": "celebrate", "text": "Every task is done — time to set the "
+                               "next 30 days.", "why": "roadmap complete"})
+    framing = (f"You've cleared {prog['done']} of {prog['total']}. "
+               + (f"Focus this week: {nxt['text']}." if nxt else
+                  "Nothing is queued — resolve a blocker or add the next step."))
+    if mock or not nxt:
+        return {"next": nxt["id"] if nxt else None, "framing": framing + (" (mock)" if mock else ""),
+                "suggestions": suggestions[:6]}, 0.0
+    cost = 0.0
+    try:
+        from engine.pipeline import LEDGER, call, HAIKU  # noqa: PLC0415
+        start = len(LEDGER.rows)
+        open_lines = "\n".join(f"- {t['text']}"
+                               + (" [BLOCKED]" if is_blocked(t, rm) else "")
+                               + (f" (due {t['due']})" if t.get("due") else "")
+                               for t in ordered_tasks(rm) if t.get("status") in ("todo", "doing"))[:2000]
+        sharper = call("roadmap_replan", HAIKU, max_tokens=200, cache=True, prompt=(
+            "A solo operator is executing their 30-day business roadmap. Given the open tasks below, "
+            "write ONE encouraging sentence naming the single most important thing to do this week and "
+            "why. No preamble, one sentence.\n\nOPEN TASKS:\n" + open_lines
+            + f"\n\nProgress: {prog['done']}/{prog['total']} done."))
+        cost = round(LEDGER.cost_slice(start), 4)
+        if sharper and sharper.strip():
+            framing = sharper.strip()
+    except Exception:
+        pass
+    return {"next": nxt["id"] if nxt else None, "framing": framing, "suggestions": suggestions[:6]}, cost
+
+
+# ── handoff prompt — the honest v0 of the Claude two-way street ───────────────
+def handoff_prompt(session: dict, task: dict | None = None) -> str:
+    """A paste-ready brief for an external AI (Claude Code, ChatGPT…) to EXECUTE a task or the whole
+    roadmap. No integration, no auth — the operator copies it into their own agent. The honest v0 of
+    'FILG dispatches to Claude Code' (integrations_research.md §Claude): dispatch doesn't exist yet,
+    a great handoff prompt does. Pure text, no model call."""
+    idea = (session or {}).get("idea") or "my business"
+    files = (session or {}).get("files") or {}
+    decisions = [d for d in ((session or {}).get("decisions") or []) if d.get("text")]
+    lines = [f"I'm building: {idea}.", ""]
+    if decisions:
+        lines.append("Hard constraints (do not violate):")
+        lines += [f"- {d['text']}" for d in decisions[:10]]
+        lines.append("")
+    if task:
+        lines += [f"The task I need you to do: {task['text']}"]
+        if task.get("detail"):
+            lines.append(task["detail"])
+        arts = [a for a in ((session or {}).get("codex") or []) if a.get("id") in (task.get("artifacts") or [])]
+        if arts:
+            lines.append("")
+            lines.append("Relevant materials:")
+            lines += [f"- {a.get('title')}: {a.get('url') or a.get('note') or ''}".rstrip(": ")
+                      for a in arts]
+        lines += ["", "Do this task end to end. Ask me only if you hit a real decision I need to make."]
+    else:
+        rm = (session or {}).get("roadmap") or {}
+        open_tasks = [t for t in ordered_tasks(rm) if t.get("status") in ("todo", "doing")]
+        lines += ["Here is my 30-day plan. Help me work through it, starting with the first item:"]
+        lines += [f"{i + 1}. {t['text']}" + (f" (by {t['due']})" if t.get("due") else "")
+                  for i, t in enumerate(open_tasks[:30])]
+    gtm = files.get("2-what-you-sell.md") or ""
+    if gtm:
+        lines += ["", "Context — what I sell:", " ".join(gtm.split())[:600]]
+    return "\n".join(lines)
+
+
 if __name__ == "__main__":  # self-test (mock, no API)
     # entity validators
     assert clean_task({"text": "x"}) is None and clean_task({"text": "Do the thing"})
@@ -509,4 +611,20 @@ if __name__ == "__main__":  # self-test (mock, no API)
     # ICS export
     ics = to_ics(rm, "My plan")
     assert "BEGIN:VCALENDAR" in ics and "BEGIN:VEVENT" in ics and "DTSTART;VALUE=DATE:" in ics
-    print("tasks.py self-test OK —", len(rm["tasks"]), "parsed,", len(rm2["tasks"]), "canned")
+    # replan: proposes a next action + adjustments, never mutates
+    c2["blocked_by"] = []                         # C is now unblocked → it's the next action
+    rp, rc = replan({"roadmap": rm3}, mock=True)
+    assert rc == 0.0 and rp["next"] == c2["id"] and "framing" in rp
+    assert any(s["kind"] == "resolve" for s in rp["suggestions"])   # Task B is still blocked
+    # an overdue task surfaces a push suggestion
+    od = new_task("Overdue thing", order=5, due="2000-01-01"); rm3["tasks"].append(od)
+    rp2, _ = replan({"roadmap": rm3}, mock=True)
+    assert any(s["kind"] == "push" for s in rp2["suggestions"])
+    # handoff prompt: task-scoped + whole-roadmap, honors decisions
+    hp = handoff_prompt({"idea": "cookies", "decisions": [{"text": "No cold calls"}], "roadmap": rm,
+                         "codex": []}, task=rm["tasks"][0])
+    assert "cookies" in hp and "No cold calls" in hp and rm["tasks"][0]["text"] in hp
+    hp2 = handoff_prompt({"idea": "cookies", "roadmap": rm}, task=None)
+    assert "30-day plan" in hp2 and "1." in hp2
+    print("tasks.py self-test OK —", len(rm["tasks"]), "parsed,", len(rm2["tasks"]), "canned,",
+          "replan+handoff pinned")

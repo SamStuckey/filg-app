@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Roadmap · FILG</title>
+<link rel="icon" href="data:,">
 __FILG_HEAD__
 <style>
 :root{
@@ -106,6 +107,23 @@ header{display:flex;align-items:center;gap:14px;flex-wrap:wrap;border-bottom:1px
 .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--fg);color:var(--bg);
   padding:9px 16px;border-radius:8px;font-size:13px;opacity:0;transition:opacity .2s;z-index:30;pointer-events:none}
 .toast.on{opacity:1}
+/* toolbar + modal + replan banner */
+.toolbar{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 16px}
+.tbtn{border:1px solid var(--line);background:var(--card);color:var(--fg);border-radius:8px;padding:7px 13px;font-size:13.5px;font-weight:500}
+.tbtn:hover{border-color:var(--accent)}
+.mscrim{position:fixed;inset:0;background:rgba(0,0,0,.42);display:none;z-index:40;align-items:center;justify-content:center}
+.mscrim.open{display:flex}
+.modal{background:var(--bg);border:1px solid var(--line);border-radius:14px;padding:20px;max-width:600px;width:92vw;max-height:86vh;overflow:auto}
+.modal h3{margin:0 0 4px} .modal .sub{color:var(--muted);font-size:13px;margin:0 0 14px}
+.modal textarea{width:100%;min-height:230px;background:var(--card);border:1px solid var(--line);border-radius:8px;
+  padding:11px;color:var(--fg);font:13px/1.5 ui-monospace,Menlo,monospace;resize:vertical}
+.modal .mrow{display:flex;gap:8px;justify-content:flex-end;margin-top:12px}
+.rplan{border:1px solid color-mix(in srgb,var(--blue) 40%,var(--line));background:color-mix(in srgb,var(--blue) 7%,var(--card));
+  border-radius:12px;padding:14px;margin-bottom:16px}
+.rplan .fr{font-weight:600;margin-bottom:8px}
+.sug{display:flex;align-items:center;gap:10px;padding:7px 0;border-top:1px solid var(--line)}
+.sug .st{flex:1;font-size:13.5px} .sug .sw{color:var(--muted);font-size:12px}
+.dpreview{border:1px solid var(--line);border-radius:10px;padding:4px 14px;background:var(--card);margin:12px 0}
 </style>
 </head>
 <body>
@@ -126,6 +144,7 @@ header{display:flex;align-items:center;gap:14px;flex-wrap:wrap;border-bottom:1px
 
 <div class="scrim" id="scrim"></div>
 <aside class="drawer" id="drawer"></aside>
+<div class="mscrim" id="mscrim"><div class="modal" id="modal"></div></div>
 <div class="toast" id="toast"></div>
 
 <script>
@@ -181,6 +200,68 @@ function renderHead(){
     const go=el("button","btn ghost","Open"); go.style.marginLeft="auto"; go.onclick=()=>openTask(nx.id); nc.appendChild(go);
   } else nc.textContent = "Nothing queued — every task is done or blocked.";
   h.appendChild(nc);
+  // toolbar
+  const tb=el("div","toolbar");
+  const mk=(label,fn)=>{const b=el("button","tbtn",label); b.onclick=fn; return b;};
+  tb.appendChild(mk("⟳ Plan my week", doReplan));
+  tb.appendChild(mk("⇥ Handoff to my AI", ()=>showHandoff()));
+  tb.appendChild(mk("✉ Weekly digest", showDigest));
+  h.appendChild(tb);
+  if(REPLAN) h.appendChild(replanBanner());
+}
+
+// ── replan (the weekly cadence) ──
+let REPLAN=null;
+async function doReplan(){
+  const j=await api("/roadmap/replan","POST",{}); REPLAN=j; renderHead(); toast("Planned your week");
+}
+function replanBanner(){
+  const w=el("div","rplan");
+  w.appendChild(el("div","fr",REPLAN.framing||"Here's your week."));
+  (REPLAN.suggestions||[]).forEach(s=>{
+    const row=el("div","sug");
+    const t=el("div","st"); t.innerHTML=esc(s.text)+(s.why?` <span class="sw">— ${esc(s.why)}</span>`:""); row.appendChild(t);
+    if(s.kind==="resolve"&&s.task){const b=el("button","tbtn","Open"); b.onclick=()=>openTask(s.task); row.appendChild(b);}
+    if(s.kind==="push"&&s.task){const b=el("button","tbtn","+1 week"); b.onclick=()=>pushTask(s.task,7); row.appendChild(b);}
+    w.appendChild(row);
+  });
+  const x=el("button","tbtn","Dismiss"); x.style.marginTop="10px"; x.onclick=()=>{REPLAN=null; renderHead();};
+  w.appendChild(x);
+  return w;
+}
+async function pushTask(tid,days){
+  const t=DATA.roadmap.tasks.find(x=>x.id===tid); if(!t)return;
+  const base=t.due?new Date(t.due+"T00:00:00"):new Date(); base.setDate(base.getDate()+days);
+  const j=await api("/tasks/"+tid,"PATCH",{due:base.toISOString().slice(0,10)}); setData(j);
+  REPLAN=null; toast("Pushed a week");
+}
+
+// ── modal helper ──
+function modal(html){const m=$("#modal"); m.innerHTML=html; $("#mscrim").classList.add("open"); return m;}
+function closeModal(){$("#mscrim").classList.remove("open");}
+$("#mscrim") && ($("#mscrim").onclick=e=>{if(e.target.id==="mscrim")closeModal();});
+
+async function showHandoff(tid){
+  const url = "/roadmap/handoff" + (tid?("?task="+tid):"");
+  const j = await api(url);
+  const m=modal(`<h3>Hand this to your AI</h3><p class="sub">Paste into Claude Code or ChatGPT to actually build it. No integration needed — this is the honest v0 of the two-way street.</p>
+    <textarea id="hoff" readonly>${esc(j.prompt)}</textarea>
+    <div class="mrow"><button class="btn ghost" id="hcopy">Copy</button><button class="btn" id="hclose">Done</button></div>`);
+  m.querySelector("#hcopy").onclick=()=>{const t=m.querySelector("#hoff"); t.select(); document.execCommand&&document.execCommand("copy"); navigator.clipboard&&navigator.clipboard.writeText(j.prompt); toast("Copied");};
+  m.querySelector("#hclose").onclick=closeModal;
+}
+
+async function showDigest(){
+  const j=await api("/digest/preview");
+  const on=j.cadence;
+  const m=modal(`<h3>Weekly digest</h3><p class="sub">A Sunday-evening nudge: what got done, your one next move, what slipped. ${j.mail_enabled?"":"(sending is off in this environment — preview only)"}</p>
+    <div class="dpreview">${j.html}</div>
+    <div class="mrow">
+      <button class="btn ghost" id="dtoggle">${on?"Turn off":"Turn on"}</button>
+      <button class="btn" id="dclose">Done</button>
+    </div>`);
+  m.querySelector("#dtoggle").onclick=async()=>{const r=await api("/digest","POST",{cadence:!on}); toast(r.cadence?"Digest on":"Digest off"); closeModal();};
+  m.querySelector("#dclose").onclick=closeModal;
 }
 
 // ── LIST VIEW ──
@@ -366,11 +447,24 @@ function openTask(id){
     bi.addEventListener("keydown",async e=>{if(e.key==="Enter"&&bi.value.trim()){const j=await api("/tasks/"+id,"PATCH",{blocker_note:{what:bi.value.trim()}}); DATA=j; openTask(id); render();}});
     sb.appendChild(bi); }
   sc.appendChild(sb);
-  // artifacts
+  // artifacts (linking a codex artifact feeds its note into this task's chat context)
   const sa=el("div","dsec"); sa.innerHTML="<h4>Artifacts</h4>";
   (t.artifacts||[]).forEach(aid=>{const a=(DATA.codex||[]).find(x=>x.id===aid); if(a)sa.appendChild(el("span","pill","📎 "+a.title));});
-  if(!(t.artifacts||[]).length) sa.innerHTML+="<div class=hint>Attach real work from your Codex.</div>";
+  const unlinked=(DATA.codex||[]).filter(a=>!(t.artifacts||[]).includes(a.id));
+  if(unlinked.length){
+    const sel=el("select","tsel"); sel.innerHTML=`<option value="">＋ reference something from your codex…</option>`
+      + unlinked.map(a=>`<option value="${a.id}">${esc(a.title)}</option>`).join("");
+    sel.onchange=async()=>{if(!sel.value)return; const a=(DATA.codex||[]).find(x=>x.id===sel.value);
+      const arts=(t.artifacts||[]).concat([a.id]); const j=await api("/tasks/"+id,"PATCH",{artifacts:arts});
+      DATA=j; openTask(id); toast("Linked — its notes now feed this chat");};
+    sa.appendChild(sel);
+  }
+  if(!(t.artifacts||[]).length && !unlinked.length) sa.innerHTML+="<div class=hint>Add work to your Codex, then link it here — its notes feed this chat.</div>";
   sc.appendChild(sa);
+  // hand to AI
+  const sh=el("div","dsec"); sh.innerHTML="<h4>Do it with your AI</h4>";
+  const hb=el("button","pill","⇥ Hand this task to Claude Code / ChatGPT"); hb.onclick=()=>showHandoff(id); sh.appendChild(hb);
+  sc.appendChild(sh);
   // chat
   const scc=el("div","dsec"); scc.innerHTML="<h4>Ask about this step</h4>";
   const chat=el("div","chat"); chat.id="tchat"; scc.appendChild(chat); sc.appendChild(scc);

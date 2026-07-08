@@ -52,6 +52,7 @@ from app import advisor    # noqa: E402 — "chat with your plan" (grounded advi
 from app import context    # noqa: E402 — THE CONTEXT ENGINE: every model-facing view of session state
 from app import decisions as decisions_mod  # noqa: E402 — standing decisions: axioms/non-negotiables (Summary tab)
 from app.domain import tasks as tasks_mod  # noqa: E402 — execution layer: the Roadmap + Codex (tasks/milestones/goals/artifacts)
+from app import notify      # noqa: E402 — transactional email: the cadence digest (Resend, inert without a key)
 from app import skeptic    # noqa: E402 — adversarial assumption-checking on the live research path
 from engine import provider   # noqa: E402 — BYOK: per-run LLM provider (FILG's key vs a user's OpenRouter key)
 from engine import pipeline   # noqa: E402 — engine: per-run cost ledger (run_ledger) for safe concurrency
@@ -1330,6 +1331,80 @@ async def api_roadmap_ics(sid: str, request: Request):
     ics = tasks_mod.to_ics(s.get("roadmap"), plan_title=(s.get("idea") or "FILG roadmap")[:60])
     return Response(ics, media_type="text/calendar",
                     headers={"Content-Disposition": f'inline; filename="filg-{sid}.ics"'})
+
+
+@app.post("/api/plan/{sid}/roadmap/replan")
+async def api_roadmap_replan(sid: str, request: Request):
+    """The weekly cadence (G4): PROPOSE the one next action + adjustments (push/resolve/split/drop).
+    Account-walled like every engine verb — it may call the model. Never mutates; the frontend
+    offers each suggestion for the operator to confirm."""
+    s = store.plan_get(sid)
+    if not s or not _owns(request, s):
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    wall = _account_wall(request, s)
+    if wall:
+        return wall
+    def _work():
+        with ops.run_slot(ops.slot_user(s), s.get("stack")):
+            return tasks_mod.replan(s, mock=ops.MOCK)
+    try:
+        plan, cost = await run_in_threadpool(_work)
+    except ops.BusyError as be:
+        return ops.busy_response(be)
+    except Exception as e:  # noqa: BLE001
+        return ops.engine_error(e)
+    ops.fold_usage(sid, s, cost, pipeline.LEDGER.tokens())
+    return {**plan, "cost": cost}
+
+
+@app.get("/api/plan/{sid}/roadmap/handoff")
+async def api_roadmap_handoff(sid: str, request: Request, task: str = ""):
+    """A paste-ready brief for the operator's own AI (Claude Code / ChatGPT) to EXECUTE a task or the
+    whole roadmap — the honest v0 of the Claude two-way street (dispatch doesn't exist yet; a great
+    handoff prompt does). Pure text, free side of the wall."""
+    s = store.plan_get(sid)
+    if not s or not _owns(request, s):
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    t = None
+    if task:
+        rm = s.get("roadmap") or {}
+        t = next((x for x in rm.get("tasks") or [] if x.get("id") == task), None)
+        if t is None:
+            return JSONResponse({"error": "unknown task"}, status_code=404)
+    return {"prompt": tasks_mod.handoff_prompt(s, task=t)}
+
+
+@app.get("/api/plan/{sid}/digest/preview")
+async def api_digest_preview(sid: str, request: Request):
+    """Preview the weekly digest email (pure compose — works even with mail disabled)."""
+    s = store.plan_get(sid)
+    if not s or not _owns(request, s):
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    base = str(request.base_url).rstrip("/")
+    d = notify.digest(s, base_url=base)
+    return {**d, "mail_enabled": notify.enabled(),
+            "cadence": bool((s.get("roadmap") or {}).get("cadence"))}
+
+
+@app.post("/api/plan/{sid}/digest")
+async def api_digest_set(sid: str, request: Request):
+    """Opt in/out of the weekly digest (stored on the roadmap), and optionally send one now. Sending
+    is inert without RESEND_API_KEY — the response reports {sent:false, reason} rather than erroring,
+    so the opt-in still records in dev."""
+    s = store.plan_get(sid)
+    if not s or not _owns(request, s):
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    body = await request.json()
+    rm = s.get("roadmap") or tasks_mod.empty_roadmap()
+    if "cadence" in body:
+        rm["cadence"] = bool(body["cadence"])
+        store.plan_save(sid, roadmap=rm)
+    result = {"cadence": bool(rm.get("cadence")), "mail_enabled": notify.enabled()}
+    if body.get("send_now"):
+        to = (s.get("user") or "").strip() or body.get("to") or ""
+        d = notify.digest(s, base_url=str(request.base_url).rstrip("/"))
+        result["send"] = notify.send(to, d["subject"], d["html"], d.get("text", ""))
+    return result
 
 
 @app.post("/api/plan/{sid}/chatlog")
