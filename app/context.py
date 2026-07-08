@@ -202,6 +202,71 @@ def decisions_block(s: dict) -> str:
             "of these shapes your output, say which):\n" + lines)
 
 
+def execution(s: dict) -> str:
+    """The roadmap as a prompt block for the advisor / replan: THE next action, then the open tasks
+    (blocked flagged), milestones, and goal progress. Kept lean — the advisor reasons about where the
+    operator IS in execution, not every field. Empty when no roadmap has been extracted yet."""
+    from app.domain import tasks as _tk  # noqa: PLC0415 — avoid a module-load cycle
+    rm = (s or {}).get("roadmap") or {}
+    open_tasks = [t for t in _tk.ordered_tasks(rm) if t.get("status") in ("todo", "doing")]
+    if not (rm.get("tasks") or rm.get("milestones") or rm.get("goals")):
+        return ""
+    lines = []
+    nxt = _tk.next_action(rm)
+    if nxt:
+        lines.append("THE NEXT ACTION: " + nxt["text"])
+    prog = _tk.progress(rm)
+    lines.append(f"Progress: {prog['done']}/{prog['total']} tasks done ({prog['pct']}%)")
+    if open_tasks:
+        lines.append("Open tasks:")
+        for t in open_tasks[:20]:
+            flag = " [BLOCKED: " + (t["blocker_note"]["what"] if t.get("blocker_note") else
+                                   "waiting on another task") + "]" if _tk.is_blocked(t, rm) else ""
+            due = f" (due {t['due']})" if t.get("due") else ""
+            lines.append(f"  - {t['text']}{due}{flag}")
+    for g in rm.get("goals") or []:
+        m = g.get("metric") or {}
+        prg = f" — {m.get('current', 0)}/{m.get('target')}" if m.get("target") is not None else ""
+        lines.append(f"Goal: {g['text']}{prg} [{g.get('status')}]")
+    return "\n".join(lines)[:JOURNEY_CAP]
+
+
+def task_view(s: dict, task_id: str) -> str:
+    """One task grounded for a task-focused chat ('what does this mean?', 'how do I do this?'):
+    the task, its provenance (source node + section + honored decisions), its schedule, blocker
+    state, and any linked codex artifacts with the operator's notes. Empty when unknown."""
+    from app.domain import tasks as _tk  # noqa: PLC0415
+    rm = (s or {}).get("roadmap") or {}
+    t = next((x for x in (rm.get("tasks") or []) if x.get("id") == task_id), None)
+    if not t:
+        return ""
+    parts = ["THE TASK the operator is asking about: " + t["text"]]
+    if t.get("detail"):
+        parts.append("Detail: " + t["detail"])
+    if t.get("due"):
+        parts.append("Scheduled: " + t["due"])
+    if _tk.is_blocked(t, rm):
+        parts.append("This task is BLOCKED"
+                     + (": " + t["blocker_note"]["what"] if t.get("blocker_note") else
+                        " by an incomplete prerequisite task"))
+    nodes, _ = _nodes(s)
+    src = nodes.get(t.get("node") or "")
+    if src:
+        parts.append("It came from this step of their plan: " + snippet(src))
+    arts = [a for a in ((s or {}).get("codex") or []) if a.get("id") in (t.get("artifacts") or [])]
+    if arts:
+        parts.append("Artifacts the operator attached (their real-world materials):")
+        for a in arts:
+            parts.append(f"  - {a.get('title')} ({a.get('kind')})"
+                         + (f": {a['note']}" if a.get("note") else "")
+                         + (f" [{a['url']}]" if a.get("url") else ""))
+    fb = t.get("feedback") or []
+    if fb:
+        parts.append("Notes the operator left on this task: "
+                     + " · ".join(str(f.get("text") or f) for f in fb[-5:]))
+    return "\n".join(parts)[:JOURNEY_CAP]
+
+
 def evidence(s: dict) -> tuple[str, str]:
     """The gate-graded research as two prompt blocks: (cited, flagged). The labels ARE the product —
     a consumer must never re-merge these into one unlabeled list."""
@@ -253,4 +318,21 @@ if __name__ == "__main__":  # self-test: the four 2026-07-04 drops, each pinned 
         {"id": "d2", "text": "No cold-call marketing", "weight": "non_negotiable", "why": "hates phones"}]})
     assert db.index("[NON-NEGOTIABLE] No cold-call marketing") < db.index("[NICE-TO-HAVE]")
     assert "hates phones" in db and decisions_block({}) == ""
-    print("context.py self-test OK — the four known drops are pinned")
+    # execution views: next action + progress + a blocked flag; empty with no roadmap
+    assert execution({}) == ""
+    SR = {"roadmap": {"tasks": [
+        {"id": "tk1", "text": "Post the offer", "status": "todo", "order": 0, "due": "2026-08-01",
+         "node": "sec1", "artifacts": ["ar1"]},
+        {"id": "tk2", "text": "File the LLC", "status": "todo", "order": 1,
+         "blocker_note": {"what": "waiting on state paperwork"}}],
+        "milestones": [], "goals": [{"text": "3 clients", "status": "on_track",
+                                     "metric": {"target": 3, "current": 1}}]},
+        "codex": [{"id": "ar1", "title": "Sales sheet", "kind": "sheet", "note": "week 1: 14 units"}],
+        "tree": S["tree"]}
+    ex = execution(SR)
+    assert "THE NEXT ACTION: Post the offer" in ex and "BLOCKED: waiting on state paperwork" in ex
+    assert "3 clients — 1/3" in ex
+    tv = task_view(SR, "tk1")
+    assert "Post the offer" in tv and "Sales sheet" in tv and "week 1: 14 units" in tv
+    assert task_view(SR, "nope") == ""
+    print("context.py self-test OK — the four known drops + execution views are pinned")

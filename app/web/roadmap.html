@@ -1,0 +1,415 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Roadmap · FILG</title>
+__FILG_HEAD__
+<style>
+:root{
+  --bg:#fbfbfa; --fg:#1a1a1a; --muted:#6b6b6b; --line:#e2e2df; --card:#fff;
+  --accent:#FF6B4A; --blue:#2E7CF6; --yellow:#c99a00; --red:#d1453b; --green:#2e7d32;
+}
+@media (prefers-color-scheme:dark){:root{--bg:#161615;--fg:#ededec;--muted:#9a9a97;--line:#2e2e2b;--card:#1e1e1d;}}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;font-size:15px}
+a{color:var(--blue);text-decoration:none} a:hover{text-decoration:underline}
+button{font:inherit;cursor:pointer}
+.wrap{max-width:1080px;margin:0 auto;padding:18px 20px 80px}
+header{display:flex;align-items:center;gap:14px;flex-wrap:wrap;border-bottom:1px solid var(--line);padding-bottom:14px}
+.logo{font-weight:800;font-size:19px;color:var(--accent);text-decoration:none}
+.idea{color:var(--muted);font-size:14px;flex:1;min-width:180px}
+.tabs{display:flex;gap:6px}
+.tab{border:1px solid var(--line);background:var(--card);color:var(--muted);border-radius:999px;padding:5px 15px;font-weight:600}
+.tab.on{color:var(--fg);border-color:var(--fg)}
+.pbar{height:7px;background:var(--line);border-radius:99px;overflow:hidden;margin:14px 0 4px}
+.pbar>i{display:block;height:100%;background:var(--green);width:0;transition:width .4s}
+.pmeta{color:var(--muted);font-size:12.5px;margin-bottom:16px}
+.next{border:1px solid color-mix(in srgb,var(--accent) 45%,var(--line));background:color-mix(in srgb,var(--accent) 8%,var(--card));
+  border-radius:12px;padding:13px 15px;margin-bottom:18px;display:flex;align-items:center;gap:12px}
+.next .lbl{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--accent);font-weight:800}
+.next .t{font-weight:600} .next.empty{border-style:dashed;color:var(--muted)}
+.mgroup{margin-bottom:22px}
+.mhead{display:flex;align-items:center;gap:8px;font-weight:700;margin:0 0 8px;font-size:14px}
+.mhead .due{color:var(--muted);font-weight:500;font-size:12.5px}
+.mhead .dia{color:var(--yellow)}
+.task{display:flex;gap:11px;align-items:flex-start;background:var(--card);border:1px solid var(--line);
+  border-radius:10px;padding:11px 13px;margin-bottom:8px;transition:border-color .15s}
+.task:hover{border-color:color-mix(in srgb,var(--fg) 25%,var(--line))}
+.task.dragging{opacity:.4} .task.done{opacity:.62}
+.task .grip{color:var(--muted);cursor:grab;user-select:none;padding-top:1px;font-size:15px}
+.cbox{width:19px;height:19px;border:1.8px solid var(--muted);border-radius:6px;flex:none;margin-top:1px;
+  display:grid;place-items:center;color:#fff;font-size:12px;background:transparent}
+.task.done .cbox{background:var(--green);border-color:var(--green)}
+.tbody{flex:1;min-width:0}
+.ttext{line-height:1.4} .task.done .ttext{text-decoration:line-through}
+.trow2{display:flex;gap:7px;flex-wrap:wrap;margin-top:6px;align-items:center}
+.chip{font-size:11.5px;border:1px solid var(--line);border-radius:99px;padding:1px 9px;color:var(--muted);background:var(--bg)}
+.chip.due{color:var(--blue);border-color:color-mix(in srgb,var(--blue) 35%,var(--line))}
+.chip.blk{color:var(--red);border-color:color-mix(in srgb,var(--red) 40%,var(--line))}
+.chip.art{color:var(--fg)}
+.chip.prov{cursor:pointer} .chip.prov:hover{color:var(--fg)}
+.tacts{display:flex;gap:4px;opacity:0;transition:opacity .15s}
+.task:hover .tacts{opacity:1}
+.iconbtn{border:none;background:none;color:var(--muted);font-size:14px;padding:2px 5px;border-radius:6px}
+.iconbtn:hover{background:var(--line);color:var(--fg)}
+.prov{margin-top:8px;padding:9px 11px;border-left:2px solid var(--accent);background:var(--bg);border-radius:0 8px 8px 0;
+  font-size:12.5px;color:var(--muted);display:none} .prov.open{display:block}
+.addrow{display:flex;gap:8px;margin-top:6px}
+.addrow input{flex:1;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:9px 11px;color:var(--fg);outline:none}
+.addrow input:focus{border-color:var(--accent)}
+.btn{background:var(--accent);color:#fff;border:none;border-radius:8px;padding:9px 16px;font-weight:600}
+.btn.ghost{background:var(--card);color:var(--fg);border:1px solid var(--line);font-weight:500}
+.empty-cta{text-align:center;padding:48px 20px;color:var(--muted)}
+.empty-cta .btn{margin-top:14px}
+/* calendar */
+.cal{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}
+.cal .dow{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);text-align:center;padding:2px}
+.day{min-height:78px;background:var(--card);border:1px solid var(--line);border-radius:9px;padding:5px 6px}
+.day.dim{opacity:.45} .day.today{border-color:var(--accent)}
+.day.dragover{border-color:var(--blue);background:color-mix(in srgb,var(--blue) 8%,var(--card))}
+.dnum{font-size:11.5px;color:var(--muted);margin-bottom:3px}
+.day.today .dnum{color:var(--accent);font-weight:700}
+.cchip{font-size:11px;background:color-mix(in srgb,var(--blue) 12%,var(--card));border:1px solid color-mix(in srgb,var(--blue) 30%,var(--line));
+  border-radius:6px;padding:2px 5px;margin-bottom:3px;cursor:grab;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cchip.done{opacity:.55;text-decoration:line-through} .cchip.ms{background:color-mix(in srgb,var(--yellow) 15%,var(--card));border-color:var(--yellow)}
+.cchip.blk{border-color:var(--red)}
+/* codex */
+.cxgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px}
+.art{background:var(--card);border:1px solid var(--line);border-radius:11px;padding:13px}
+.art .k{font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+.art .at{font-weight:700;margin:3px 0} .art .an{font-size:13px;color:var(--muted);line-height:1.45}
+.art .al{font-size:12px;margin-top:6px;word-break:break-all}
+.cxform{background:var(--card);border:1px dashed var(--line);border-radius:11px;padding:14px;margin-bottom:16px}
+.cxform input{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:9px 11px;color:var(--fg);margin-bottom:8px;outline:none}
+.cxform input:focus{border-color:var(--accent)}
+/* task drawer */
+.scrim{position:fixed;inset:0;background:rgba(0,0,0,.42);display:none;z-index:20}
+.scrim.open{display:block}
+.drawer{position:fixed;top:0;right:0;height:100%;width:min(460px,94vw);background:var(--bg);border-left:1px solid var(--line);
+  transform:translateX(100%);transition:transform .28s ease;z-index:21;display:flex;flex-direction:column}
+.drawer.open{transform:none}
+.dhead{padding:16px 18px;border-bottom:1px solid var(--line)}
+.dhead .x{float:right;border:none;background:none;color:var(--muted);font-size:20px}
+.dscroll{flex:1;overflow:auto;padding:16px 18px}
+.dsec{margin-bottom:16px} .dsec h4{margin:0 0 7px;font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+.pill{display:inline-block;font-size:12px;border:1px solid var(--line);border-radius:99px;padding:3px 10px;margin:0 5px 5px 0;background:var(--card)}
+.chat{display:flex;flex-direction:column;gap:8px}
+.msg{padding:9px 12px;border-radius:10px;font-size:13.5px;line-height:1.45;max-width:90%}
+.msg.user{align-self:flex-end;background:color-mix(in srgb,var(--accent) 14%,var(--card));border:1px solid color-mix(in srgb,var(--accent) 35%,var(--line))}
+.msg.bot{align-self:flex-start;background:var(--card);border:1px solid var(--line)}
+.dfoot{padding:12px 18px;border-top:1px solid var(--line);display:flex;gap:8px}
+.dfoot input{flex:1;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:9px 11px;color:var(--fg);outline:none}
+.tsel{width:100%;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:8px 10px;color:var(--fg);margin-bottom:8px}
+.hint{color:var(--muted);font-size:12px}
+.toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--fg);color:var(--bg);
+  padding:9px 16px;border-radius:8px;font-size:13px;opacity:0;transition:opacity .2s;z-index:30;pointer-events:none}
+.toast.on{opacity:1}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <a href="/" class="logo">FILG</a>
+    <span class="idea" id="idea"></span>
+    <div class="tabs">
+      <button class="tab on" data-view="list">List</button>
+      <button class="tab" data-view="cal">Calendar</button>
+      <button class="tab" data-view="codex">Codex</button>
+      <a class="tab" id="icslink" href="#" title="Subscribe in your calendar app">ICS</a>
+    </div>
+  </header>
+  <div id="head"></div>
+  <div id="board"></div>
+</div>
+
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer"></aside>
+<div class="toast" id="toast"></div>
+
+<script>
+const SID = location.pathname.split("/")[2];
+const API = `/api/plan/${SID}`;
+let DATA = null, VIEW = "list", OPEN = null;
+
+const $ = (s,r=document)=>r.querySelector(s);
+const el = (t,c,txt)=>{const e=document.createElement(t); if(c)e.className=c; if(txt!=null)e.textContent=txt; return e;};
+const esc = s => (s||"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+function toast(m){const t=$("#toast"); t.textContent=m; t.classList.add("on"); setTimeout(()=>t.classList.remove("on"),1600);}
+
+async function api(path, method="GET", body){
+  const o={method,headers:{}};
+  if(body){o.headers["Content-Type"]="application/json"; o.body=JSON.stringify(body);}
+  const r = await fetch(API+path, o);
+  const j = await r.json().catch(()=>({}));
+  if(!r.ok){ toast(j.error||("error "+r.status)); throw j; }
+  return j;
+}
+function setData(j){ DATA = j; render(); }
+
+async function load(){
+  const j = await api("/roadmap");
+  if(!j.extracted){ renderEmpty(); DATA=j; return; }
+  setData(j);
+}
+
+function renderEmpty(){
+  $("#idea").textContent = "";
+  $("#head").innerHTML=""; $("#board").innerHTML="";
+  const box = el("div","empty-cta");
+  box.innerHTML = `<div style="font-size:17px;color:var(--fg);font-weight:600">Turn your plan into a roadmap</div>
+    <p>FILG will read your plan and lay out the steps — dated, ordered, and ready to work.</p>`;
+  const b = el("button","btn","Build my roadmap");
+  b.onclick = async ()=>{ b.disabled=true; b.textContent="Reading your plan…";
+    const j = await api("/roadmap/extract","POST",{}); setData(j); toast("Roadmap ready"); };
+  box.appendChild(b); $("#board").appendChild(box);
+}
+
+// ── header: idea + progress + next action ──
+function renderHead(){
+  const rm=DATA.roadmap, p=DATA.progress;
+  $("#idea").textContent = DATA.idea || "";
+  $("#icslink").href = API + "/roadmap.ics";
+  const h=$("#head"); h.innerHTML="";
+  const bar=el("div","pbar"); const fill=el("i"); fill.style.width=p.pct+"%"; bar.appendChild(fill);
+  h.appendChild(bar);
+  h.appendChild(el("div","pmeta",`${p.done} of ${p.total} done · ${p.pct}%`));
+  const nx = rm.tasks.find(t=>t.id===DATA.next_action);
+  const nc = el("div","next"+(nx?"":" empty"));
+  if(nx){ nc.innerHTML=`<span class="lbl">Next</span>`; const t=el("span","t",nx.text); nc.appendChild(t);
+    const go=el("button","btn ghost","Open"); go.style.marginLeft="auto"; go.onclick=()=>openTask(nx.id); nc.appendChild(go);
+  } else nc.textContent = "Nothing queued — every task is done or blocked.";
+  h.appendChild(nc);
+}
+
+// ── LIST VIEW ──
+function renderList(){
+  const b=$("#board"); b.innerHTML="";
+  const rm=DATA.roadmap;
+  const ms = rm.milestones||[];
+  const groups = [...ms.map(m=>({m, tasks:rm.tasks.filter(t=>t.milestone===m.id)})),
+                  {m:null, tasks:rm.tasks.filter(t=>!t.milestone || !ms.find(x=>x.id===t.milestone))}];
+  for(const g of groups){
+    if(!g.tasks.length && !g.m) continue;
+    const wrap=el("div","mgroup");
+    if(g.m){ const mh=el("div","mhead"); mh.innerHTML=`<span class="dia">◆</span> ${esc(g.m.title)}`
+      + (g.m.due?` <span class="due">· ${fmtDate(g.m.due)}</span>`:""); wrap.appendChild(mh); }
+    const list=el("div"); list.dataset.drop="1";
+    g.tasks.forEach(t=>list.appendChild(taskRow(t)));
+    wrap.appendChild(list);
+    wireDrag(list);
+    b.appendChild(wrap);
+  }
+  const add=el("div","addrow");
+  add.innerHTML=`<input placeholder="Add a task…" id="addtask">`;
+  const ab=el("button","btn","Add"); add.appendChild(ab);
+  const doAdd=async()=>{const v=$("#addtask").value.trim(); if(!v)return;
+    const j=await api("/tasks","POST",{text:v}); setData(j);};
+  ab.onclick=doAdd; add.querySelector("input").addEventListener("keydown",e=>{if(e.key==="Enter")doAdd();});
+  b.appendChild(add);
+}
+
+function taskRow(t){
+  const blocked = DATA.blocked[t.id];
+  const row=el("div","task"+(t.status==="done"?" done":"")); row.draggable=true; row.dataset.id=t.id;
+  const grip=el("span","grip","⠿"); row.appendChild(grip);
+  const box=el("div","cbox",t.status==="done"?"✓":""); box.onclick=(e)=>{e.stopPropagation(); toggleDone(t);}; row.appendChild(box);
+  const body=el("div","tbody");
+  const tx=el("div","ttext",t.text); body.appendChild(tx);
+  const r2=el("div","trow2");
+  if(t.due) r2.appendChild(el("span","chip due",fmtDate(t.due)));
+  if(blocked){ const b=el("span","chip blk","🚧 "+(t.blocker_note?t.blocker_note.what:"blocked")); r2.appendChild(b); }
+  (t.artifacts||[]).forEach(aid=>{const a=(DATA.codex||[]).find(x=>x.id===aid); if(a)r2.appendChild(el("span","chip art","📎 "+a.title));});
+  if(t.node||t.section||(t.decisions||[]).length){
+    const pv=el("span","chip prov","ⓘ why"); pv.onclick=(e)=>{e.stopPropagation(); const p=row.querySelector(".prov"); p.classList.toggle("open");}; r2.appendChild(pv);
+  }
+  body.appendChild(r2);
+  // provenance
+  const prov=el("div","prov");
+  const bits=[];
+  if(t.section) bits.push("from the <b>"+esc(sectionName(t.section))+"</b> part of your plan");
+  if(t.source==="generated") bits.push("generated from your plan");
+  if((t.decisions||[]).length) bits.push("honors "+t.decisions.length+" standing decision"+(t.decisions.length>1?"s":""));
+  prov.innerHTML = bits.join(" · ") || "manual task";
+  body.appendChild(prov);
+  row.appendChild(body);
+  const acts=el("div","tacts");
+  const open=el("button","iconbtn","💬"); open.title="Open & chat"; open.onclick=(e)=>{e.stopPropagation(); openTask(t.id);};
+  const del=el("button","iconbtn","✕"); del.title="Delete"; del.onclick=async(e)=>{e.stopPropagation(); const j=await api("/tasks/"+t.id,"DELETE"); setData(j);};
+  acts.appendChild(open); acts.appendChild(del); row.appendChild(acts);
+  row.onclick=()=>openTask(t.id);
+  return row;
+}
+
+async function toggleDone(t){
+  const st = t.status==="done" ? "todo" : "done";
+  const j = await api("/tasks/"+t.id,"PATCH",{status:st}); setData(j);
+}
+
+// drag reorder within a list
+function wireDrag(list){
+  let dragEl=null;
+  list.addEventListener("dragstart",e=>{const r=e.target.closest(".task"); if(!r)return; dragEl=r; r.classList.add("dragging");});
+  list.addEventListener("dragend",()=>{if(dragEl){dragEl.classList.remove("dragging"); persistOrder(); dragEl=null;}});
+  list.addEventListener("dragover",e=>{e.preventDefault(); const after=afterEl(list,e.clientY);
+    if(!dragEl)return; if(after==null)list.appendChild(dragEl); else list.insertBefore(dragEl,after);});
+}
+function afterEl(list,y){
+  const rows=[...list.querySelectorAll(".task:not(.dragging)")];
+  return rows.reduce((closest,child)=>{const box=child.getBoundingClientRect(); const off=y-box.top-box.height/2;
+    if(off<0 && off>closest.offset) return {offset:off,element:child}; return closest;},
+    {offset:-Infinity}).element || null;
+}
+async function persistOrder(){
+  const ids=[...document.querySelectorAll(".task")].map(r=>r.dataset.id);
+  const j=await api("/tasks/reorder","POST",{ids}); DATA=j;  // no full re-render — the DOM already reflects order
+}
+
+// ── CALENDAR VIEW (dates only) ──
+function renderCal(){
+  const b=$("#board"); b.innerHTML="";
+  const rm=DATA.roadmap;
+  const byDay={}; rm.tasks.forEach(t=>{if(t.due)(byDay[t.due]=byDay[t.due]||[]).push(t);});
+  const msDay={}; (rm.milestones||[]).forEach(m=>{if(m.due)(msDay[m.due]=msDay[m.due]||[]).push(m);});
+  const grid=el("div","cal");
+  ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].forEach(d=>grid.appendChild(el("div","dow",d)));
+  const today=new Date(); today.setHours(0,0,0,0);
+  const start=new Date(today); const dow=(start.getDay()+6)%7; start.setDate(start.getDate()-dow); // Monday
+  for(let i=0;i<42;i++){
+    const d=new Date(start); d.setDate(start.getDate()+i);
+    const iso=d.toISOString().slice(0,10);
+    const cell=el("div","day"+(d<today?" dim":"")+(d.getTime()===today.getTime()?" today":""));
+    cell.dataset.day=iso;
+    cell.appendChild(el("div","dnum", (d.getDate()===1? (d.toLocaleString("en",{month:"short"})+" ") : "")+d.getDate()));
+    (msDay[iso]||[]).forEach(m=>cell.appendChild(el("div","cchip ms","◆ "+m.title)));
+    (byDay[iso]||[]).forEach(t=>{
+      const c=el("div","cchip"+(t.status==="done"?" done":"")+(DATA.blocked[t.id]?" blk":""),t.text);
+      c.draggable=true; c.dataset.id=t.id; c.title=t.text;
+      c.addEventListener("dragstart",e=>{e.dataTransfer.setData("id",t.id);});
+      c.onclick=()=>openTask(t.id);
+      cell.appendChild(c);
+    });
+    cell.addEventListener("dragover",e=>{e.preventDefault(); cell.classList.add("dragover");});
+    cell.addEventListener("dragleave",()=>cell.classList.remove("dragover"));
+    cell.addEventListener("drop",async e=>{e.preventDefault(); cell.classList.remove("dragover");
+      const id=e.dataTransfer.getData("id"); if(!id)return;
+      const j=await api("/tasks/"+id,"PATCH",{due:iso}); setData(j); toast("Rescheduled");});
+    grid.appendChild(cell);
+  }
+  b.appendChild(grid);
+  b.appendChild(el("div","hint","Drag a task to a day to reschedule it. Milestones are diamonds."));
+}
+
+// ── CODEX VIEW ──
+function renderCodex(){
+  const b=$("#board"); b.innerHTML="";
+  const form=el("div","cxform");
+  form.innerHTML=`<input id="cxtitle" placeholder="Title (e.g. Sales tracker)">
+    <input id="cxurl" placeholder="Link (Google Sheet, site, doc…) — optional">
+    <input id="cxnote" placeholder="A note — what this is, what it tells you">`;
+  const tsel=el("select","tsel"); tsel.innerHTML=`<option value="">— link to a task (optional) —</option>`
+    + DATA.roadmap.tasks.map(t=>`<option value="${t.id}">${esc(t.text)}</option>`).join("");
+  form.appendChild(tsel);
+  const add=el("button","btn","Add to codex");
+  add.onclick=async()=>{const title=$("#cxtitle").value.trim(), url=$("#cxurl").value.trim(), note=$("#cxnote").value.trim();
+    if(!title&&!note&&!url){toast("Give it a title, link, or note");return;}
+    const j=await api("/codex","POST",{title,url,note,task:tsel.value||undefined}); setData(j); toast("Added to codex");};
+  form.appendChild(add);
+  b.appendChild(form);
+  const codex=DATA.codex||[];
+  if(!codex.length){ b.appendChild(el("div","hint","Your codex is empty. Drop in the real things you make — the ad you ran, your site, a sales sheet — and reference them in chat.")); return; }
+  const grid=el("div","cxgrid");
+  const icons={sheet:"📊",doc:"📄",site:"🌐",pdf:"📕",image:"🖼️",ad:"📣",repo:"💻",other:"📎"};
+  codex.forEach(a=>{
+    const card=el("div","art");
+    card.appendChild(el("div","k",(icons[a.kind]||"📎")+" "+a.kind));
+    card.appendChild(el("div","at",a.title));
+    if(a.note) card.appendChild(el("div","an",a.note));
+    if(a.url){const l=el("a","al",a.url); l.href=a.url; l.target="_blank"; card.appendChild(l);}
+    const linked=(a.tasks||[]).length;
+    const foot=el("div","trow2");
+    if(linked) foot.appendChild(el("span","chip","📎 "+linked+" task"+(linked>1?"s":"")));
+    const del=el("button","iconbtn","✕ remove"); del.onclick=async()=>{const j=await api("/codex/"+a.id,"DELETE"); setData(j);};
+    foot.appendChild(del); card.appendChild(foot);
+    grid.appendChild(card);
+  });
+  b.appendChild(grid);
+}
+
+// ── TASK DRAWER (open + chat) ──
+function openTask(id){
+  OPEN=id; const t=DATA.roadmap.tasks.find(x=>x.id===id); if(!t)return;
+  const d=$("#drawer"); d.innerHTML="";
+  const head=el("div","dhead");
+  head.innerHTML=`<button class="x">×</button><div style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)">Task</div><div style="font-weight:700;font-size:16px;margin-top:3px">${esc(t.text)}</div>`;
+  head.querySelector(".x").onclick=closeDrawer; d.appendChild(head);
+  const sc=el("div","dscroll");
+  // status + schedule
+  const s1=el("div","dsec"); s1.innerHTML="<h4>Status</h4>";
+  ["todo","doing","done","dropped"].forEach(st=>{const p=el("button","pill",st); if(t.status===st)p.style.borderColor="var(--accent)";
+    p.onclick=async()=>{const j=await api("/tasks/"+id,"PATCH",{status:st}); DATA=j; openTask(id); renderHead(); if(VIEW!=="codex")render();};
+    s1.appendChild(p);}); sc.appendChild(s1);
+  if(t.due){const sd=el("div","dsec"); sd.innerHTML="<h4>Scheduled</h4><div>"+fmtDate(t.due)+"</div>"; sc.appendChild(sd);}
+  // provenance
+  const sp=el("div","dsec"); sp.innerHTML="<h4>Why this is on your list</h4>";
+  const src=DATA.roadmap; const bits=[];
+  if(t.section) bits.push("From the <b>"+esc(sectionName(t.section))+"</b> section of your plan.");
+  if((t.decisions||[]).length) bits.push("Built honoring "+t.decisions.length+" of your standing decisions.");
+  if(t.source==="generated") bits.push("Generated from your plan — not something you typed.");
+  sp.innerHTML+="<div class=hint>"+(bits.join(" ")||"You added this yourself.")+"</div>"; sc.appendChild(sp);
+  // blocker
+  const sb=el("div","dsec"); sb.innerHTML="<h4>Blocker</h4>";
+  if(t.blocker_note){ sb.innerHTML+=`<div class="chip blk">🚧 ${esc(t.blocker_note.what)}</div>`;
+    const clr=el("button","pill","clear blocker"); clr.onclick=async()=>{const j=await api("/tasks/"+id,"PATCH",{blocker_note:null}); DATA=j; openTask(id); render();}; sb.appendChild(clr);
+  } else { const bi=el("input"); bi.placeholder="what's blocking this?"; bi.className="tsel";
+    bi.addEventListener("keydown",async e=>{if(e.key==="Enter"&&bi.value.trim()){const j=await api("/tasks/"+id,"PATCH",{blocker_note:{what:bi.value.trim()}}); DATA=j; openTask(id); render();}});
+    sb.appendChild(bi); }
+  sc.appendChild(sb);
+  // artifacts
+  const sa=el("div","dsec"); sa.innerHTML="<h4>Artifacts</h4>";
+  (t.artifacts||[]).forEach(aid=>{const a=(DATA.codex||[]).find(x=>x.id===aid); if(a)sa.appendChild(el("span","pill","📎 "+a.title));});
+  if(!(t.artifacts||[]).length) sa.innerHTML+="<div class=hint>Attach real work from your Codex.</div>";
+  sc.appendChild(sa);
+  // chat
+  const scc=el("div","dsec"); scc.innerHTML="<h4>Ask about this step</h4>";
+  const chat=el("div","chat"); chat.id="tchat"; scc.appendChild(chat); sc.appendChild(scc);
+  d.appendChild(sc);
+  const foot=el("div","dfoot");
+  foot.innerHTML=`<input id="tmsg" placeholder="What does this mean? Where do I start?">`;
+  const send=el("button","btn","Ask"); foot.appendChild(send); d.appendChild(foot);
+  const doSend=async()=>{const inp=$("#tmsg"); const m=inp.value.trim(); if(!m)return; inp.value="";
+    chat.appendChild(msg("user",m)); const wait=msg("bot","…"); chat.appendChild(wait); wait.scrollIntoView();
+    try{const j=await api("/tasks/"+id+"/chat","POST",{message:m}); wait.textContent=j.reply;}
+    catch(e){wait.textContent="(couldn't answer — "+(e.error||"error")+")"; wait.classList.add("err");}
+  };
+  send.onclick=doSend; foot.querySelector("input").addEventListener("keydown",e=>{if(e.key==="Enter")doSend();});
+  $("#scrim").classList.add("open"); d.classList.add("open");
+}
+function msg(role,text){const m=el("div","msg "+role,text); return m;}
+function closeDrawer(){OPEN=null; $("#drawer").classList.remove("open"); $("#scrim").classList.remove("open");}
+
+// ── helpers ──
+const SECTIONS={brief:"The setup",offer:"What you sell",why:"Why you win",pricing:"What you charge",
+  gtm:"How you get customers",delivery:"How you deliver",roadmap:"Your first 30 days"};
+function sectionName(k){return SECTIONS[k]||k;}
+function fmtDate(iso){try{return new Date(iso+"T00:00:00").toLocaleDateString("en",{month:"short",day:"numeric"});}catch(e){return iso;}}
+
+function render(){
+  renderHead();
+  if(VIEW==="list") renderList();
+  else if(VIEW==="cal") renderCal();
+  else renderCodex();
+}
+
+document.querySelectorAll(".tab[data-view]").forEach(b=>b.onclick=()=>{
+  VIEW=b.dataset.view; document.querySelectorAll(".tab[data-view]").forEach(x=>x.classList.toggle("on",x===b));
+  if(DATA&&DATA.extracted) render();
+});
+$("#scrim").onclick=closeDrawer;
+document.addEventListener("keydown",e=>{if(e.key==="Escape")closeDrawer();});
+
+load();
+</script>
+</body>
+</html>

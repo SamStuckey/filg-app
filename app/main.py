@@ -51,6 +51,7 @@ from app import plan_pdf   # noqa: E402 — styled PDF generation (synthesis + f
 from app import advisor    # noqa: E402 — "chat with your plan" (grounded advisory layer)
 from app import context    # noqa: E402 — THE CONTEXT ENGINE: every model-facing view of session state
 from app import decisions as decisions_mod  # noqa: E402 — standing decisions: axioms/non-negotiables (Summary tab)
+from app.domain import tasks as tasks_mod  # noqa: E402 — execution layer: the Roadmap + Codex (tasks/milestones/goals/artifacts)
 from app import skeptic    # noqa: E402 — adversarial assumption-checking on the live research path
 from engine import provider   # noqa: E402 — BYOK: per-run LLM provider (FILG's key vs a user's OpenRouter key)
 from engine import pipeline   # noqa: E402 — engine: per-run cost ledger (run_ledger) for safe concurrency
@@ -1048,6 +1049,289 @@ async def api_decisions_remove(sid: str, did: str, request: Request):
     return {"decisions": have, "removed": cur, "impact": decisions_mod.impact(s, did)}
 
 
+# ── The Roadmap + the Codex (execution layer, app/domain/tasks.py) ────────────────────────────────
+# The roadmap (tasks/milestones/goals) and codex (artifact pointers) are plan-scoped state, modeled
+# on decisions: CRUD is pure state on the FREE side of the wall; the ONE AI seam is `extract` (plan →
+# starter roadmap). A task carries provenance (source node + decisions) — the moat, extended to work.
+def _roadmap_payload(s: dict) -> dict:
+    """The roadmap surface's read model: the stored roadmap + codex, plus everything the frontend
+    would otherwise recompute — the ONE next action, progress, per-task blocked flag, and the
+    node→tasks counts that back a graph node's '⚒ N tasks' chip."""
+    rm = s.get("roadmap") or tasks_mod.empty_roadmap()
+    codex = s.get("codex") or []
+    tasks = tasks_mod.ordered_tasks(rm)
+    blocked = {t["id"]: tasks_mod.is_blocked(t, rm) for t in tasks}
+    node_counts: dict[str, int] = {}
+    for t in tasks:
+        if t.get("node"):
+            node_counts[t["node"]] = node_counts.get(t["node"], 0) + 1
+    nxt = tasks_mod.next_action(rm)
+    return {"roadmap": {**rm, "tasks": tasks}, "codex": codex,
+            "idea": (s.get("idea") or ""),
+            "blocked": blocked, "next_action": nxt["id"] if nxt else None,
+            "progress": tasks_mod.progress(rm), "node_counts": node_counts,
+            "extracted": bool(rm.get("extracted_at"))}
+
+
+@app.get("/api/plan/{sid}/roadmap")
+async def api_roadmap_get(sid: str, request: Request):
+    s = store.plan_get(sid)
+    if not s or not _owns(request, s):
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    return _roadmap_payload(s)
+
+
+@app.post("/api/plan/{sid}/roadmap/extract")
+async def api_roadmap_extract(sid: str, request: Request):
+    """Turn the finished plan into a starter roadmap (the ONE AI seam). Idempotent-ish: re-running
+    replaces the generated roadmap, so a `force` is required once tasks exist to avoid clobbering
+    manual edits."""
+    s = store.plan_get(sid)
+    if not s or not _owns(request, s):
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    body = await (request.json() if request.headers.get("content-type", "").startswith("application/json")
+                  else _empty())
+    existing = (s.get("roadmap") or {}).get("tasks")
+    if existing and not body.get("force"):
+        return JSONResponse({"error": "This roadmap already has tasks. Pass force to regenerate.",
+                             "have": len(existing)}, status_code=409)
+    def _work():
+        with ops.run_slot(ops.slot_user(s), s.get("stack")):
+            return tasks_mod.extract(s, mock=ops.MOCK)
+    try:
+        roadmap, cost = await run_in_threadpool(_work)
+    except ops.BusyError as be:
+        return ops.busy_response(be)
+    except Exception as e:  # noqa: BLE001
+        return ops.engine_error(e)
+    store.plan_save(sid, roadmap=roadmap)
+    ops.fold_usage(sid, s, cost, pipeline.LEDGER.tokens())
+    s["roadmap"] = roadmap
+    return {**_roadmap_payload(s), "cost": cost}
+
+
+async def _empty():
+    return {}
+
+
+@app.post("/api/plan/{sid}/tasks")
+async def api_task_add(sid: str, request: Request):
+    s = store.plan_get(sid)
+    if not s or not _owns(request, s):
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    body = await request.json()
+    rm = s.get("roadmap") or tasks_mod.empty_roadmap()
+    if len(rm.get("tasks") or []) >= tasks_mod.MAX_TASKS:
+        return JSONResponse({"error": "That's a full roadmap — clear a task before adding another."},
+                            status_code=409)
+    order = max((t.get("order", 0) for t in rm.get("tasks") or []), default=-1) + 1
+    t = tasks_mod.new_task(body.get("text") or "", order=order,
+                           detail=body.get("detail") or "", due=body.get("due"),
+                           milestone=body.get("milestone"),
+                           source=body.get("source") or "manual",
+                           decisions=[d["id"] for d in (s.get("decisions") or []) if d.get("id")],
+                           node=(s.get("tree") or {}).get("active"))
+    if t is None:
+        return JSONResponse({"error": "Give the task a few real words."}, status_code=400)
+    rm.setdefault("tasks", []).append(t)
+    store.plan_save(sid, roadmap=rm)
+    s["roadmap"] = rm
+    return {**_roadmap_payload(s), "added": t}
+
+
+# The mutable fields a PATCH may set (pure state — validated by clean_task on save).
+_TASK_PATCH = ("text", "detail", "status", "due", "span_days", "milestone", "blocked_by",
+               "blocker_note", "artifacts", "order")
+
+
+@app.patch("/api/plan/{sid}/tasks/{tid}")
+async def api_task_edit(sid: str, tid: str, request: Request):
+    """Edit a task: status (check-off), schedule (due/span), order (drag), dependencies (blocked_by),
+    a blocker note, milestone, or an appended feedback note. Pure state, no model call. Returns the
+    impacted downstream tasks when a status change unblocks/blocks others."""
+    s = store.plan_get(sid)
+    if not s or not _owns(request, s):
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    body = await request.json()
+    rm = s.get("roadmap") or tasks_mod.empty_roadmap()
+    cur = next((t for t in rm.get("tasks") or [] if t.get("id") == tid), None)
+    if cur is None:
+        return JSONResponse({"error": "unknown task"}, status_code=404)
+    merged = {**cur, **{k: body[k] for k in _TASK_PATCH if k in body}}
+    upd = tasks_mod.clean_task(merged)
+    if upd is None:
+        return JSONResponse({"error": "Give the task a few real words."}, status_code=400)
+    cur.update(upd)
+    if body.get("feedback"):   # append an operator note (folds into the next replan / task chat)
+        cur.setdefault("feedback", []).append({"text": tasks_mod._oneline(body["feedback"], 240),
+                                               "at": tasks_mod._now()})
+        cur["feedback"] = cur["feedback"][-12:]
+    store.plan_save(sid, roadmap=rm)
+    s["roadmap"] = rm
+    return _roadmap_payload(s)
+
+
+@app.delete("/api/plan/{sid}/tasks/{tid}")
+async def api_task_remove(sid: str, tid: str, request: Request):
+    s = store.plan_get(sid)
+    if not s or not _owns(request, s):
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    rm = s.get("roadmap") or tasks_mod.empty_roadmap()
+    rm["tasks"] = [t for t in rm.get("tasks") or [] if t.get("id") != tid]
+    # drop dangling dependency edges so nothing is blocked by a deleted task
+    for t in rm["tasks"]:
+        if tid in (t.get("blocked_by") or []):
+            t["blocked_by"] = [b for b in t["blocked_by"] if b != tid]
+    store.plan_save(sid, roadmap=rm)
+    s["roadmap"] = rm
+    return _roadmap_payload(s)
+
+
+@app.post("/api/plan/{sid}/tasks/reorder")
+async def api_task_reorder(sid: str, request: Request):
+    """Persist a drag-reorder: an ordered list of task ids becomes their new `order`."""
+    s = store.plan_get(sid)
+    if not s or not _owns(request, s):
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    body = await request.json()
+    order = {tid: i for i, tid in enumerate(body.get("ids") or [])}
+    rm = s.get("roadmap") or tasks_mod.empty_roadmap()
+    for t in rm.get("tasks") or []:
+        if t["id"] in order:
+            t["order"] = order[t["id"]]
+    store.plan_save(sid, roadmap=rm)
+    s["roadmap"] = rm
+    return _roadmap_payload(s)
+
+
+@app.post("/api/plan/{sid}/milestones")
+async def api_milestone_add(sid: str, request: Request):
+    s = store.plan_get(sid)
+    if not s or not _owns(request, s):
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    body = await request.json()
+    rm = s.get("roadmap") or tasks_mod.empty_roadmap()
+    m = tasks_mod.new_milestone(body.get("title") or "", due=body.get("due"))
+    if m is None:
+        return JSONResponse({"error": "Give the milestone a title."}, status_code=400)
+    rm.setdefault("milestones", []).append(m)
+    store.plan_save(sid, roadmap=rm)
+    s["roadmap"] = rm
+    return {**_roadmap_payload(s), "added": m}
+
+
+# ── The Codex — artifact pointers (URL + note; no doc storage in MVP) ──────────
+@app.post("/api/plan/{sid}/codex")
+async def api_codex_add(sid: str, request: Request):
+    s = store.plan_get(sid)
+    if not s or not _owns(request, s):
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    body = await request.json()
+    codex = list(s.get("codex") or [])
+    if len(codex) >= tasks_mod.MAX_ARTIFACTS:
+        return JSONResponse({"error": "The codex is full — remove one before adding another."},
+                            status_code=409)
+    a = tasks_mod.new_artifact(title=body.get("title") or "", url=body.get("url") or "",
+                               note=body.get("note") or "", kind=body.get("kind"),
+                               node=(s.get("tree") or {}).get("active"))
+    if a is None:
+        return JSONResponse({"error": "An artifact needs at least a title or a note."}, status_code=400)
+    codex.append(a)
+    store.plan_save(sid, codex=codex)
+    # link to a task if asked
+    tid = body.get("task")
+    if tid:
+        rm = s.get("roadmap") or tasks_mod.empty_roadmap()
+        t = next((x for x in rm.get("tasks") or [] if x.get("id") == tid), None)
+        if t is not None:
+            t.setdefault("artifacts", []).append(a["id"])
+            a.setdefault("tasks", []).append(tid)
+            store.plan_save(sid, roadmap=rm, codex=codex)
+            s["roadmap"] = rm
+    s["codex"] = codex
+    return {**_roadmap_payload(s), "added": a}
+
+
+@app.patch("/api/plan/{sid}/codex/{aid}")
+async def api_codex_edit(sid: str, aid: str, request: Request):
+    s = store.plan_get(sid)
+    if not s or not _owns(request, s):
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    body = await request.json()
+    codex = list(s.get("codex") or [])
+    cur = next((a for a in codex if a.get("id") == aid), None)
+    if cur is None:
+        return JSONResponse({"error": "unknown artifact"}, status_code=404)
+    upd = tasks_mod.clean_artifact({**cur, **{k: body[k] for k in ("title", "url", "note", "kind",
+                                                                   "tasks") if k in body}})
+    if upd is None:
+        return JSONResponse({"error": "An artifact needs at least a title or a note."}, status_code=400)
+    cur.update(upd)
+    store.plan_save(sid, codex=codex)
+    s["codex"] = codex
+    return _roadmap_payload(s)
+
+
+@app.delete("/api/plan/{sid}/codex/{aid}")
+async def api_codex_remove(sid: str, aid: str, request: Request):
+    s = store.plan_get(sid)
+    if not s or not _owns(request, s):
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    codex = [a for a in (s.get("codex") or []) if a.get("id") != aid]
+    rm = s.get("roadmap") or tasks_mod.empty_roadmap()
+    for t in rm.get("tasks") or []:   # unlink from any task that referenced it
+        if aid in (t.get("artifacts") or []):
+            t["artifacts"] = [x for x in t["artifacts"] if x != aid]
+    store.plan_save(sid, codex=codex, roadmap=rm)
+    s["codex"] = codex
+    s["roadmap"] = rm
+    return _roadmap_payload(s)
+
+
+@app.post("/api/plan/{sid}/tasks/{tid}/chat")
+async def api_task_chat(sid: str, tid: str, request: Request):
+    """Task-grounded chat — the SAME advisor, focused on one task ('what does this mean?', 'how do I
+    do this?'). Grounded via context.task_view so the reply knows the task, its provenance, and its
+    linked artifacts. Account-walled like every engine verb; free-side CRUD is elsewhere."""
+    s = store.plan_get(sid)
+    if not s or not _owns(request, s):
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    wall = _account_wall(request, s)
+    if wall:
+        return wall
+    body = await request.json()
+    msg = (body.get("message") or "").strip()
+    if not msg:
+        return JSONResponse({"error": "Type something."}, status_code=400)
+    tv = context.task_view(s, tid)
+    if not tv:
+        return JSONResponse({"error": "unknown task"}, status_code=404)
+    def _work():
+        with ops.run_slot(ops.slot_user(s), s.get("stack")):
+            return advisor.chat_reply(s, msg, history=(s.get("chat") or [])[-8:],
+                                      mock=ops.MOCK, situation=tv)
+    try:
+        reply, cost = await run_in_threadpool(_work)
+    except ops.BusyError as be:
+        return ops.busy_response(be)
+    except Exception as e:  # noqa: BLE001
+        return ops.engine_error(e)
+    ops.fold_usage(sid, s, cost, pipeline.LEDGER.tokens())
+    return {"reply": reply, "cost": cost}
+
+
+@app.get("/api/plan/{sid}/roadmap.ics")
+async def api_roadmap_ics(sid: str, request: Request):
+    """A zero-OAuth calendar feed of scheduled tasks + dated milestones (integrations_research.md
+    §Google). Subscribe to it from Google/Apple/Outlook; refreshes on their cadence."""
+    s = store.plan_get(sid)
+    if not s or not _owns(request, s):
+        return JSONResponse({"error": "unknown session"}, status_code=404)
+    ics = tasks_mod.to_ics(s.get("roadmap"), plan_title=(s.get("idea") or "FILG roadmap")[:60])
+    return Response(ics, media_type="text/calendar",
+                    headers={"Content-Disposition": f'inline; filename="filg-{sid}.ics"'})
+
+
 @app.post("/api/plan/{sid}/chatlog")
 async def api_plan_chatlog(sid: str, request: Request):
     """Append one message to the session's conversation record (the v2 left-panel chat). Pure logging,
@@ -1842,6 +2126,39 @@ async def plan_page(sid: str):
     session — graph, documents, and the conversation log. (Distinct from `/p/{id}` — the public
     share — and `/r/{id}` teardowns.)"""
     return _shell()
+
+
+@app.get("/plan/{sid}/roadmap", response_class=HTMLResponse)
+async def roadmap_page(sid: str):
+    """The Roadmap + Codex surface — a first-class execution view (list + calendar + codex) that
+    stands beside the decision graph. A self-contained prototype page wired to the real /roadmap
+    API; it reads the sid from the path. (Slated to fold into the main shell as a right-panel
+    surface — execution_layer.md §5.)"""
+    return HTMLResponse(_page_text("roadmap.html").replace("__FILG_HEAD__", _page_head()))
+
+
+@app.get("/roadmap-demo")
+async def roadmap_demo():
+    """DEV/DEMO only (mock mode): seed a plan with a mock 7-section build, a standing decision, and a
+    tree, then jump to its Roadmap so the surface is clickable without running a full build. Never
+    exists in prod (real runs cost money and start from a real idea)."""
+    if not ops.MOCK:
+        return RedirectResponse("/", status_code=302)
+    from app.domain import copy as _copy  # noqa: PLC0415
+    from app.domain import sections as _sec  # noqa: PLC0415
+    sid = uuid.uuid4().hex[:12]
+    idea = "a done-for-you AI automation service for local HVAC companies"
+    store.plan_create(sid, "", idea)
+    files = {s["file"]: _copy.MOCK_DRAFT.get(s["key"], "") for s in _sec.SECTIONS}
+    root = dtree.new_node({"kind": "refined", "thesis": idea,
+                           "title": "Refined idea"}, None)
+    tree = dtree.seed(root)
+    decisions = [decisions_mod.new("No cold-call marketing", why="I hate phones",
+                                   weight="non_negotiable"),
+                 decisions_mod.new("Stay solo — no employees in year one", weight="firm")]
+    store.plan_save(sid, files=files, tree=tree, status="done", stage="done",
+                    decisions=decisions)
+    return RedirectResponse(f"/plan/{sid}/roadmap", status_code=302)
 
 
 @app.get("/account", response_class=HTMLResponse)
