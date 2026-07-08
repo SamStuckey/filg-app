@@ -469,8 +469,8 @@ function _disarmTraps(){
 // silent display drops for mode switches — no 'Back to build' status, no MODE stomp
 function _rDrop(){ if(RMODE){ RMODE=null; RQUERY=''; applyRmode(); } }
 function _bDrop(){ if(BMODE){ BMODE=null; BQUERY=''; applyBmode(); } }
-function _hDrop(){ if(HMODE){ HMODE=false; applyHmode(); } }
-function _sDrop(){ if(SMODE){ SMODE=false; applySmode(); } }
+function _hDrop(){ if(HMODE){ HMODE=null; applyHmode(); } }
+function _sDrop(){ if(SMODE){ SMODE=null; applySmode(); } }
 // While a chat send is in flight, the focused-node CTAs are DEBOUNCED (dimmed + a spinner) so a user
 // can't send feedback then race-click "next step" before the reply lands — the click would fire on
 // stale state (a steer that's about to pivot/re-merge). Cleared when the send resolves. (Sam, 2026-07-07)
@@ -2116,16 +2116,16 @@ function initGrips(){
 // research/board drawer drags the column wider/narrower. The width rides a CSS var (--left-w / --rd-w)
 // so a CLOSED drawer still collapses to 0 (an inline width would fight it). research + board share one
 // remembered width (they're the same expanded column). Desktop only; remembered across reloads. ──
-const DW_KEY={left:'filg_left_w',rdrawer:'filg_rd_w',bdrawer:'filg_rd_w'};
-const DW_VAR={left:'--left-w',rdrawer:'--rd-w',bdrawer:'--rd-w'};
-function _dwTargets(which){   // the var must land on BOTH expanded drawers so they stay the same width
-  if(which==='rdrawer'||which==='bdrawer')return [$('rdrawer'),$('bdrawer')].filter(Boolean);
+const DW_KEY={left:'filg_left_w',rdrawer:'filg_rd_w',bdrawer:'filg_rd_w',sdrawer:'filg_rd_w',hdrawer:'filg_rd_w'};
+const DW_VAR={left:'--left-w',rdrawer:'--rd-w',bdrawer:'--rd-w',sdrawer:'--rd-w',hdrawer:'--rd-w'};
+function _dwTargets(which){   // the var must land on EVERY expanded drawer so they stay the same width
+  if(which!=='left')return ['rdrawer','bdrawer','sdrawer','hdrawer'].map(id=>$(id)).filter(Boolean);
   return [$('left')].filter(Boolean);
 }
 function setDrawerWidth(which,px){ const v=DW_VAR[which];
   _dwTargets(which).forEach(el=>el.style.setProperty(v,px+'px')); }
 function initDrawerResize(){
-  ['left','rdrawer','bdrawer'].forEach(which=>{   // restore the remembered widths on boot
+  ['left','rdrawer','bdrawer','sdrawer','hdrawer'].forEach(which=>{   // restore the remembered widths on boot
     try{ const px=parseInt(localStorage.getItem(DW_KEY[which]),10);
       if(px>=300&&px<=3000)setDrawerWidth(which,px); }catch(e){}
   });
@@ -2155,7 +2155,8 @@ function mCollapse(){ // any submission that DRAWS THE GRAPH collapses the drawe
   if(window.matchMedia&&window.matchMedia('(max-width:820px)').matches){
     const w=$('workspace'); if(w)w.classList.add('mclosed'); } }
 function syncRx(){ const w=$('workspace'); if(!w)return;
-  const rx=(typeof RMODE!=='undefined'&&RMODE==='expanded')||(typeof BMODE!=='undefined'&&BMODE==='expanded');
+  const rx=(typeof RMODE!=='undefined'&&RMODE==='expanded')||(typeof BMODE!=='undefined'&&BMODE==='expanded')||
+    (typeof SMODE!=='undefined'&&SMODE==='expanded')||(typeof HMODE!=='undefined'&&HMODE==='expanded');
   w.classList.toggle('rx',rx); }
 function mOpen(){ const w=$('workspace'); if(w)w.classList.remove('mclosed'); }
 function applyRmode(){
@@ -2438,30 +2439,36 @@ async function stressPoll(){
   }
 }
 
-// ── HELP — a banner above the chat (the split mechanism), not a drawer. The static how-to plus
-// the user's OWN past help Q&As as a personal FAQ: the question is the row, expand for the answer
-// (just that Q+A, never the full chat history). FAQ lives in localStorage — help is product-level,
-// not plan-level, so it follows the browser across plans. ──
+// ── HELP — a banner above the chat (the split mechanism). The static how-to plus the user's OWN
+// past help Q&As as a personal FAQ: the question is the row, expand for the answer (just that Q+A,
+// never the full chat history). FAQ lives in localStorage — help is product-level, not plan-level,
+// so it follows the browser across plans. ⇥ Expand slides it out into its own drawer, same as
+// research/board (HMODE: null/'split'/'expanded'). ──
 const HELP_BLURB='Type your idea on the landing page, then watch it spread into a few directions, '+
   'merge the ones you like, and research + build the plan. The prompt box always wins: steer, jump '+
   'ahead, or start over from it anytime. It runs on us to start.';
-let HMODE=false;
-function enterHelp(){ HMODE=true; applyHmode(); renderHelp(); }
+let HMODE=null;
+function enterHelp(){ if(!HMODE)HMODE='split'; applyHmode(); renderHelp(); }
 function exitHelp(quiet){
   if(!HMODE)return;
-  HMODE=false; applyHmode();
+  HMODE=null; applyHmode();
   MODE='build';
   document.querySelectorAll('#modechips .mchip').forEach(b=>b.classList.toggle('on',b.dataset.mode==='build'));
   $('ws-wrap').className='promptwrap';
   if(!quiet)chatStatus('Back to build mode.');
 }
+function expandHelp(){ HMODE='expanded'; mOpen(); applyHmode(); renderHelp(); }
+function collapseHelp(){ HMODE='split'; mOpen(); applyHmode(); renderHelp(); }
 function applyHmode(){
-  const L=$('left'), pane=$('hpane');
-  if(!L||!pane){ if(HMODE){ HMODE=false; toast('This page is stale — hard-refresh (⌘⇧R) to load the help surface.','err'); }
+  const L=$('left'), pane=$('hpane'), dr=$('hdrawer');
+  if(!L||!pane||!dr){ if(HMODE){ HMODE=null; toast('This page is stale — hard-refresh (⌘⇧R) to load the help surface.','err'); }
     if(L)L.classList.remove('hsplit'); return; }
-  L.classList.toggle('hsplit',HMODE);
-  pane.setAttribute('aria-hidden',String(!HMODE));
-  applySplitSize(pane,HMODE);
+  L.classList.toggle('hsplit',HMODE==='split');
+  pane.setAttribute('aria-hidden',String(HMODE!=='split'));
+  dr.classList.toggle('open',HMODE==='expanded');
+  dr.setAttribute('aria-hidden',String(HMODE!=='expanded'));
+  syncRx();
+  applySplitSize(pane,HMODE==='split');
   if(!HMODE){ const log=$('chatlog'); if(log)log.scrollTop=log.scrollHeight; }
 }
 function helpFaq(){ try{return JSON.parse(localStorage.getItem('filg_help_faq')||'[]');}catch(e){return [];} }
@@ -2490,38 +2497,44 @@ function disclaimerModal(){
   openModal("Just so we're clear");
 }
 function renderHelp(){
-  const el=$('hlist'); if(!el)return;
   const faq=helpFaq().slice().reverse();   // newest question first
-  el.innerHTML=`<div class=hblurb>${esc(HELP_BLURB)} `+
+  const html=`<div class=hblurb>${esc(HELP_BLURB)} `+
     `<button type=button class=fineprint style="display:inline;padding:0" onclick="disclaimerModal()">Just so we're clear ›</button></div>`+
     (faq.length?`<div class=hfaqhead><span class=eyebrow>Your questions</span>`+
       `<button type=button class="ghost small" onclick="faqClear()">Clear</button></div>`+
       faq.map(x=>`<details class=hfaq><summary>${esc(x.q)}</summary>`+
         `<div class=hfaqa>${mdToHtml(x.a)}</div></details>`).join('')
       :`<p class=thinking>Ask anything about using FILG — your questions collect here as a personal FAQ.</p>`);
+  ['hlist','hlist2'].forEach(id=>{ const el=$(id); if(el)el.innerHTML=html; });
 }
 
 // ── SUMMARY — the in-voice idea summary (v1's top-of-page block), as a display state. The pane
 // leads with the FILG-voice read (the vet's spoken reaction + verdict), then the offer prose. The
 // chat underneath is the same one chat — ask anything; build intents exit the display like the
-// other modes. ──
-let SMODE=false;
-function enterSummary(){ SMODE=true; applySmode(); renderSummary(); }
+// other modes. ⇥ Expand slides it out into its own drawer, same as research/board
+// (SMODE: null/'split'/'expanded'). ──
+let SMODE=null;
+function enterSummary(){ if(!SMODE)SMODE='split'; applySmode(); renderSummary(); }
 function exitSummary(quiet){
   if(!SMODE)return;
-  SMODE=false; applySmode();
+  SMODE=null; applySmode();
   MODE='build';
   document.querySelectorAll('#modechips .mchip').forEach(b=>b.classList.toggle('on',b.dataset.mode==='build'));
   $('ws-wrap').className='promptwrap';
   if(!quiet)chatStatus('Back to build mode.');
 }
+function expandSummary(){ SMODE='expanded'; mOpen(); applySmode(); renderSummary(); }
+function collapseSummary(){ SMODE='split'; mOpen(); applySmode(); renderSummary(); }
 function applySmode(){
-  const L=$('left'), pane=$('spane');
-  if(!L||!pane){ if(SMODE){ SMODE=false; toast('This page is stale — hard-refresh (⌘⇧R) to load the summary surface.','err'); }
+  const L=$('left'), pane=$('spane'), dr=$('sdrawer');
+  if(!L||!pane||!dr){ if(SMODE){ SMODE=null; toast('This page is stale — hard-refresh (⌘⇧R) to load the summary surface.','err'); }
     if(L)L.classList.remove('ssplit'); return; }
-  L.classList.toggle('ssplit',SMODE);
-  pane.setAttribute('aria-hidden',String(!SMODE));
-  applySplitSize(pane,SMODE);
+  L.classList.toggle('ssplit',SMODE==='split');
+  pane.setAttribute('aria-hidden',String(SMODE!=='split'));
+  dr.classList.toggle('open',SMODE==='expanded');
+  dr.setAttribute('aria-hidden',String(SMODE!=='expanded'));
+  syncRx();
+  applySplitSize(pane,SMODE==='split');
   if(!SMODE){ const log=$('chatlog'); if(log)log.scrollTop=log.scrollHeight; }
 }
 function summaryHtml(){
@@ -2548,7 +2561,8 @@ function sumCardHtml(){
     `<p class=thinking style="margin:2px 0 8px">Your offer with the research graded — vendor spin labeled, not laundered.</p>`+
     `${rows}</div>`;
 }
-function renderSummary(){ const el=$('slist'); if(el)el.innerHTML=summaryHtml(); }
+function renderSummary(){ const html=summaryHtml();
+  ['slist','slist2'].forEach(id=>{ const el=$(id); if(el)el.innerHTML=html; }); }
 
 // ── STANDING DECISIONS — the operator's axioms, pinned in the Summary tab ──
 // Non-negotiable / firm / nice-to-have (color-coded). Once pinned, the server injects them into
