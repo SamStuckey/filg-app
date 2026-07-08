@@ -554,6 +554,11 @@ def test_root_shell_and_assets_serve(client):
     page = client.get("/")
     assert page.status_code == 200 and "window.FILG=" in page.text   # the config head
     assert '/static/app.js' in page.text and '/static/styles.css' in page.text
+    # the asset URLs carry a cache-busting ?v=… token so a deploy that changes app.js/styles.css
+    # forces a re-fetch (else fresh HTML wires to a stale cached JS → a new button no-ops)
+    import re as _re
+    assert _re.search(r'/static/app\.js\?v=\d+', page.text), "app.js is missing its cache-bust token"
+    assert _re.search(r'/static/styles\.css\?v=\d+', page.text), "styles.css is missing its cache-bust token"
     assert client.get("/static/app.js").status_code == 200
     assert client.get("/static/styles.css").status_code == 200
     # deep-link paths serve the same shell (History-API routing survives refresh)
