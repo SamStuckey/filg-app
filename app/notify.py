@@ -20,7 +20,9 @@ import urllib.error
 import urllib.request
 
 API_KEY = os.environ.get("RESEND_API_KEY", "")
-FROM = os.environ.get("FILG_MAIL_FROM", "FILG <hello@fuckitletsgo.ai>")
+# From address — must live on a domain verified in Resend. Default is hello@filg.ai; override with
+# FILG_MAIL_FROM (e.g. a fuckitletsgo.ai sender) once that domain is verified too.
+FROM = os.environ.get("FILG_MAIL_FROM", "FILG <hello@filg.ai>")
 _ENDPOINT = "https://api.resend.com/emails"
 
 
