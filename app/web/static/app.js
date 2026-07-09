@@ -2772,7 +2772,7 @@ function acctTab(t){ ACCT_TAB=t;
 function _planCard(p,total){
   const meta=p.done?`Finished · ${total} parts`:(p.status==='researching'?'Researching…':`In progress · part ${(p.step||0)+1} of ${total}`);
   const pill=p.done?'done':(p.status==='researching'?'WIP':((p.step||0)+1)+'/'+total);
-  return `<div class=pcard><div><div class=idea>${esc((p.idea||'Untitled').slice(0,90))}</div>`+
+  return `<div class=pcard><div class=pinfo><div class=idea>${esc((p.idea||'Untitled').slice(0,60))}</div>`+
     `<div class=meta>${meta} · ${esc(new Date(p.created_at).toLocaleDateString())}</div></div>`+
     `<div class=act><span class="pill${p.done?' done':''}">${pill}</span>`+
     `<button class=primary onclick="acctOpen('${p.id}')">${p.done?'Open / iterate':'Resume'}</button>`+
@@ -2786,7 +2786,7 @@ function _fileCard(p){
   // get-your-data-out, at ANY stage: the plain-text dump + the paste-into-any-LLM handoff prompt
   acts.push(`<button onclick="acctExport('${p.id}')">⬇ Export (.txt)</button>`);
   acts.push(`<button onclick="acctPrompt('${p.id}')">📋 LLM prompt</button>`);
-  return `<div class=pcard><div><div class=idea>${esc((p.idea||'Untitled').slice(0,90))}</div>`+
+  return `<div class=pcard><div class=pinfo><div class=idea>${esc((p.idea||'Untitled').slice(0,60))}</div>`+
     `<div class=meta>${p.done?'Finished':'In progress'} · ${esc(new Date(p.created_at).toLocaleDateString())}</div></div>`+
     `<div class=act>${acts.join('')}</div></div>`;
 }

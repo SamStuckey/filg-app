@@ -603,7 +603,8 @@ ul.concernlist .concern .cdetail{color:var(--muted);font-size:13px;line-height:1
 .accttabs button.on{color:var(--fg);border-bottom-color:var(--accent)}
 .pcard{display:flex;justify-content:space-between;align-items:center;gap:12px;border:1px solid var(--line);
   border-radius:10px;background:var(--card);padding:12px 14px;margin-bottom:8px;flex-wrap:wrap}
-.pcard .idea{font-weight:600}
+.pcard .pinfo{min-width:0;flex:1}
+.pcard .idea{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .pcard .meta{font-size:12.5px;color:var(--muted)}
 .pcard .act{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
 .pcard .act button{border:1px solid var(--line);background:var(--card);color:var(--fg);border-radius:8px;padding:6px 10px;font-size:13px}
