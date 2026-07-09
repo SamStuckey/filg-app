@@ -164,8 +164,23 @@ const el = (t,c,txt)=>{const e=document.createElement(t); if(c)e.className=c; if
 const esc = s => (s||"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 function toast(m){const t=$("#toast"); t.textContent=m; t.classList.add("on"); setTimeout(()=>t.classList.remove("on"),1600);}
 
+// Auth: this page runs standalone AND inside the shell's Roadmap iframe. Either way, on the live
+// (auth-on) site the API needs the operator's Supabase bearer token. Same origin as the shell, so a
+// fresh Supabase client reads the SAME persisted session from localStorage — no token passed in.
+let AUTH = {};
+async function initAuth(){
+  const CFG = window.FILG || {};
+  if(CFG.authEnabled && window.supabase && CFG.supabaseUrl){
+    try{
+      const sb = window.supabase.createClient(CFG.supabaseUrl, CFG.supabaseAnon);
+      const {data} = await sb.auth.getSession();
+      if(data && data.session) AUTH = {"Authorization":"Bearer "+data.session.access_token};
+    }catch(e){ /* no session → calls 401/404, handled below */ }
+  }
+}
+
 async function api(path, method="GET", body){
-  const o={method,headers:{}};
+  const o={method,headers:{...AUTH}};
   if(body){o.headers["Content-Type"]="application/json"; o.body=JSON.stringify(body);}
   const r = await fetch(API+path, o);
   const j = await r.json().catch(()=>({}));
@@ -175,9 +190,15 @@ async function api(path, method="GET", body){
 function setData(j){ DATA = j; render(); }
 
 async function load(){
-  const j = await api("/roadmap");
-  if(!j.extracted){ renderEmpty(); DATA=j; return; }
-  setData(j);
+  try{
+    const j = await api("/roadmap");
+    if(!j.extracted){ renderEmpty(); DATA=j; return; }
+    setData(j);
+  }catch(e){
+    // don't leave a blank panel — say what happened (usually: signed-out / not your plan)
+    $("#board").innerHTML = `<div class="empty-cta"><div style="font-size:16px;color:var(--fg)">Couldn't load this roadmap</div>
+      <p>${esc((e&&e.error)||"You may need to sign in, or this plan isn't yours.")}</p></div>`;
+  }
 }
 
 function renderEmpty(){
@@ -515,7 +536,7 @@ document.querySelectorAll(".tab[data-view]").forEach(b=>b.onclick=()=>{
 $("#scrim").onclick=closeDrawer;
 document.addEventListener("keydown",e=>{if(e.key==="Escape")closeDrawer();});
 
-load();
+initAuth().then(load);
 </script>
 </body>
 </html>
