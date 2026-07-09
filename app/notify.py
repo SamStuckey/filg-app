@@ -39,16 +39,38 @@ def send(to: str, subject: str, html: str, text: str = "") -> dict:
         return {"sent": False, "reason": "no recipient"}
     body = json.dumps({"from": FROM, "to": [to], "subject": subject, "html": html,
                        **({"text": text} if text else {})}).encode()
+    # A real User-Agent + Accept are required: Resend's API is Cloudflare-fronted and blocks the
+    # default `Python-urllib/x.y` signature with a 1010 "browser signature" challenge (an HTML block
+    # page, not JSON). A named client UA passes it. (The Resend SDK sends `python-requests`, which is
+    # why the SDK works and a raw urllib call didn't.)
     req = urllib.request.Request(_ENDPOINT, data=body, method="POST", headers={
-        "Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"})
+        "Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json",
+        "Accept": "application/json", "User-Agent": "FILG-mailer/1.0 (+https://filg.ai)"})
     try:
         with urllib.request.urlopen(req, timeout=15) as r:
             out = json.loads(r.read().decode() or "{}")
         return {"sent": True, "id": out.get("id")}
     except urllib.error.HTTPError as e:
-        return {"sent": False, "reason": f"http {e.code}: {e.read().decode()[:200]}"}
+        raw = e.read().decode(errors="replace")
+        # Cloudflare/WAF blocks return HTML, not JSON — surface a clean hint instead of a page dump.
+        reason = _err_reason(raw)
+        return {"sent": False, "reason": f"http {e.code}: {reason}"}
     except Exception as e:  # noqa: BLE001
         return {"sent": False, "reason": str(e)[:200]}
+
+
+def _err_reason(raw: str) -> str:
+    """Pull a readable reason out of an error body: Resend's JSON `message`, or a WAF hint."""
+    try:
+        j = json.loads(raw)
+        if isinstance(j, dict) and (j.get("message") or j.get("error")):
+            return str(j.get("message") or j.get("error"))[:200]
+    except Exception:  # noqa: BLE001
+        pass
+    low = raw.lower()
+    if "error code: 1010" in low or "cloudflare" in low:
+        return "blocked by Resend's WAF (Cloudflare 1010) — client signature rejected"
+    return " ".join(raw.split())[:200]
 
 
 # ── compose (pure — always available, no key needed) ─────────────────────────
