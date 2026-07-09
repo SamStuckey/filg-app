@@ -27,6 +27,14 @@ probably a research question; in `board`, a board request. BUT a clearly global
 instruction always breaks out of the mode. "I hate this, back up" while in `board`
 means leave the board and go back, not "ask the board to back up."
 
+In `board` mode specifically: every question about the BUSINESS is FOR the board. A
+business question typed in the board section ("how much will this make me?", "what's
+the market size?") is `ask` with `target: board` — the board weighs in, never the
+advisor. The ONE exception is a genuine FILG support/usage question (keys, export /
+download, billing, how the app itself works): that is `ask` with `target: help`, as in
+any mode — a question about their business is never help. Only a clear directive ("do
+this", "revert that") leaves the board; a question never does.
+
 ## Intents — choose exactly one
 
 - `steer` — refine the thing they're looking at, in place (reword, narrow, add,
@@ -89,6 +97,8 @@ Rules:
   `restart_hard`. Everything else acts immediately.
 - For `ask`, set `target` to the tool that should answer (`research`, `board`,
   `help`, or `plan` for a general plan question) and leave `steer`/`keep` null.
+  In `board` mode an `ask` about the business is `target: board`, never `plan` — the
+  board answers; only a genuine FILG support/usage question is `target: help`.
 - `say` is plain and specific ("Reworking this to lean B2B", "Pulling up other
   directions", "Answering from your research"). No preamble, no restating the rules.
 - When genuinely unsure and the mode is a tool, prefer `ask` in that tool. When

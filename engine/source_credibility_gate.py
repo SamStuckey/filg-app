@@ -37,6 +37,19 @@ TIER_VENDOR = "VENDOR"          # a company that sells a product/service
 TIER_FORUM = "FORUM"            # reddit / quora / medium / forum
 TIER_UNKNOWN = "UNKNOWN"
 
+# --- Hard sources ------------------------------------------------------------
+# A "hard" source gives a real, independent number with no commercial interest in it — the kind you
+# can lean on (government stats, official/standards bodies, Google Trends). Everything else (vendor
+# blogs that sell the category, third-party research firms, forums, unknown commercial domains) is
+# NOT hard. The product surfaces this as a blue-vs-green outline + a "how many hard sources" gate.
+# One-line lever: fold TIER_RESEARCH in here to count independent research firms as hard too.
+HARD_TIERS = frozenset({TIER_PRIMARY})
+
+
+def is_hard(tier: str) -> bool:
+    """True when a source tier counts as a hard/primary source (gov, official stats, Google Trends)."""
+    return tier in HARD_TIERS
+
 # --- Domain registry ---------------------------------------------------------
 # (tier, sells_category)  — sells_category is what the domain has a commercial
 # interest in promoting; None for neutral sources.
@@ -46,6 +59,7 @@ DOMAIN_REGISTRY = {
     "census.gov":              (TIER_PRIMARY, None),
     "mgma.com":                (TIER_PRIMARY, None),   # industry benchmark body
     "hfma.org":                (TIER_PRIMARY, None),
+    "trends.google.com":       (TIER_PRIMARY, None),   # Google Trends — real, independent demand signal
     # third-party research firms
     "grandviewresearch.com":   (TIER_RESEARCH, None),
     "mordorintelligence.com":  (TIER_RESEARCH, None),
@@ -64,9 +78,13 @@ DOMAIN_REGISTRY = {
 
 
 def classify_domain(url: str) -> tuple[str, str | None]:
-    host = urlparse(url).netloc.lower().removeprefix("www.")
+    parsed = urlparse(url)
+    host = parsed.netloc.lower().removeprefix("www.")
     if host in DOMAIN_REGISTRY:
         return DOMAIN_REGISTRY[host]
+    # Google Trends lives under google.com/trends — a real, independent demand signal, treat as primary.
+    if host.endswith("google.com") and parsed.path.lstrip("/").startswith("trends"):
+        return (TIER_PRIMARY, None)
     # pattern fallbacks
     if host.endswith((".gov", ".edu")) or host.endswith(".gov.uk"):
         return (TIER_PRIMARY, None)
