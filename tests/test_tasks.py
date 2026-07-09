@@ -162,5 +162,30 @@ def test_digest_preview_and_optin(client):
     assert client.get(f"/api/plan/{sid}/digest/preview").json()["cadence"] is True
 
 
+def test_digest_due_logic():
+    from app.main import _digest_due
+    from datetime import datetime, timedelta, timezone
+    sun = datetime(2026, 7, 12, 18, 0, tzinfo=timezone.utc)   # a Sunday, 18:00 UTC
+    mon = datetime(2026, 7, 13, 18, 0, tzinfo=timezone.utc)   # a Monday
+    assert _digest_due(sun, None) is True                     # first-time, in the Sunday window
+    assert _digest_due(mon, None) is False                    # not the window, no catch-up yet
+    recent = (sun - timedelta(days=2)).isoformat()
+    assert _digest_due(sun, recent) is False                  # <6 days since last → never
+    stale = (mon - timedelta(days=9)).isoformat()
+    assert _digest_due(mon, stale) is True                    # >8 days → catch-up even off-window
+
+
+def test_plans_with_cadence_query(client):
+    from app import store
+    sid = _demo(client)
+    _extract(client, sid)
+    assert sid not in store.plans_with_cadence()              # not opted in yet
+    client.post(f"/api/plan/{sid}/digest", json={"cadence": True})
+    # the demo session is ownerless (anon) → still excluded (no one to mail)
+    assert sid not in store.plans_with_cadence()
+    store.plan_claim(sid, "founder@example.com")              # give it an owner
+    assert sid in store.plans_with_cadence()
+
+
 def test_roadmap_404_on_unknown_session(client):
     assert client.get("/api/plan/nope/roadmap").status_code == 404

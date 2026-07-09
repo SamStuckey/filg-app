@@ -543,6 +543,21 @@ def purge_orphan_plans(hours: int = 48) -> int:
         con.close()
 
 
+def plans_with_cadence() -> list[str]:
+    """Ids of plans that opted into the weekly digest (roadmap.cadence == true) AND have an owner to
+    mail. The weekly send loop scans these; cadence-on is rare, so a LIKE over the roadmap JSON blob
+    is cheap enough (no separate column)."""
+    init()
+    con = _connect()
+    try:
+        rows = con.execute(
+            "SELECT id FROM plan_sessions WHERE user IS NOT NULL AND trim(user)<>'' "
+            "AND roadmap LIKE '%\"cadence\": true%'").fetchall()
+    finally:
+        con.close()
+    return [r["id"] for r in rows]
+
+
 def plan_claim(session_id: str, email: str) -> bool:
     """Attach an OWNERLESS (anonymous free-taste) plan to a signed-in account. Refuses to reassign a
     plan someone already owns. Returns True if the plan is now owned by `email` (idempotent)."""

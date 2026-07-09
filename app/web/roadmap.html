@@ -264,10 +264,15 @@ async function showDigest(){
   const m=modal(`<h3>Weekly digest</h3><p class="sub">A Sunday-evening nudge: what got done, your one next move, what slipped. ${j.mail_enabled?"":"(sending is off in this environment — preview only)"}</p>
     <div class="dpreview">${j.html}</div>
     <div class="mrow">
-      <button class="btn ghost" id="dtoggle">${on?"Turn off":"Turn on"}</button>
+      ${j.mail_enabled?'<button class="btn ghost" id="dtest">Send me a test</button>':''}
+      <button class="btn ghost" id="dtoggle">${on?"Turn off weekly":"Turn on weekly"}</button>
       <button class="btn" id="dclose">Done</button>
     </div>`);
-  m.querySelector("#dtoggle").onclick=async()=>{const r=await api("/digest","POST",{cadence:!on}); toast(r.cadence?"Digest on":"Digest off"); closeModal();};
+  m.querySelector("#dtoggle").onclick=async()=>{const r=await api("/digest","POST",{cadence:!on}); toast(r.cadence?"Weekly digest on":"Weekly digest off"); closeModal();};
+  const dt=m.querySelector("#dtest");
+  if(dt)dt.onclick=async()=>{dt.disabled=true; dt.textContent="Sending…";
+    const r=await api("/digest","POST",{send_now:true});
+    const ok=r.send&&r.send.sent; toast(ok?"Sent — check your inbox":("Couldn't send: "+((r.send&&r.send.reason)||"no recipient"))); closeModal();};
   m.querySelector("#dclose").onclick=closeModal;
 }
 

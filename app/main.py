@@ -29,6 +29,7 @@ import time
 import traceback
 import uuid
 import zipfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import markdown
@@ -150,6 +151,68 @@ def _orphan_sweep_loop() -> None:
 
 
 threading.Thread(target=_orphan_sweep_loop, daemon=True).start()
+
+
+# ── weekly digest send loop (E1 cadence) ──────────────────────────────────────
+# Sunday-evening re-engagement nudge (Friday is where streaks die). Inert unless RESEND_API_KEY is
+# set — the loop simply finds nothing to do. Per-plan weekly gate via roadmap.digest_sent_at.
+_DIGEST_TICK_SECS = 3600            # hourly tick so the Sunday-evening window is caught
+_DIGEST_MIN_GAP = timedelta(days=6)   # never two digests inside ~a week
+_DIGEST_CATCHUP = timedelta(days=8)   # a plan that missed its Sunday still gets one
+
+
+def _digest_due(now, last_iso: str | None) -> bool:
+    """Weekly cadence with a Sunday-evening (17:00–23:00 UTC ≈ US evening) preference and an
+    8-day catch-up so a missed window still fires. First-time (no last) waits for the window."""
+    last = None
+    if last_iso:
+        try:
+            last = datetime.fromisoformat(last_iso)
+        except ValueError:
+            last = None
+    if last and (now - last) < _DIGEST_MIN_GAP:
+        return False
+    if last and (now - last) >= _DIGEST_CATCHUP:
+        return True                                  # missed the window — send anyway
+    return now.weekday() == 6 and 17 <= now.hour < 23   # Sunday evening (UTC)
+
+
+def _send_due_digests() -> int:
+    now = datetime.now(timezone.utc)
+    base = (os.environ.get("FILG_PUBLIC_URL", "").rstrip("/") or "https://fuckitletsgo.ai")
+    sent = 0
+    for sid in store.plans_with_cadence():
+        s = store.plan_get(sid)
+        if not s:
+            continue
+        rm = s.get("roadmap") or {}
+        to = (s.get("user") or "").strip()
+        if not (rm.get("cadence") and to and (rm.get("tasks"))):
+            continue
+        if not _digest_due(now, rm.get("digest_sent_at")):
+            continue
+        d = notify.digest(s, base_url=base)
+        res = notify.send(to, d["subject"], d["html"], d.get("text", ""))
+        if res.get("sent"):
+            rm["digest_sent_at"] = now.isoformat()
+            store.plan_save(sid, roadmap=rm)
+            sent += 1
+    return sent
+
+
+def _digest_loop() -> None:
+    while True:
+        try:
+            if notify.enabled():
+                n = _send_due_digests()
+                if n:
+                    print(f"[filg] sent {n} weekly digest(s)")
+        except Exception:  # noqa: BLE001 — a failed send must never take the app down
+            traceback.print_exc()
+        time.sleep(_DIGEST_TICK_SECS)
+
+
+threading.Thread(target=_digest_loop, daemon=True).start()
 
 @app.get("/api/me")
 async def api_me(request: Request):
