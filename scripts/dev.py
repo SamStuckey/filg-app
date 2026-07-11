@@ -156,6 +156,26 @@ def cmd_usage(args):
     print(json.dumps(_usage().snapshot(), indent=2))
 
 
+def cmd_funnel(args):
+    """The behavior readout (front_door_strategy.md T9): per-day counts per funnel rung —
+    browse_trending / roll / taste_start / merge / deep_build / claim / purchase_* — so the
+    hook is iterated on measured drop-off, not vibes."""
+    from app import store
+    rows = store.funnel_counts(days=args.days)
+    if not rows:
+        print("no funnel events recorded yet")
+        return
+    days = {}
+    for r in rows:
+        days.setdefault(r["day"], {})[r["event"]] = r["n"]
+    order = ["browse_trending", "roll", "taste_start", "merge", "deep_build",
+             "claim", "purchase_pdf", "purchase_subscription"]
+    for day, evs in days.items():
+        keys = order + sorted(set(evs) - set(order))
+        line = "  ".join(f"{k}={evs[k]}" for k in keys if k in evs)
+        print(f"{day}  {line}")
+
+
 def cmd_plan(args):
     """Set (or clear) an account's subscription tier locally — test the tier gating / fair-use meter /
     PDF-free-for-subscribers without Stripe. `plan` = pro|ultimate (legacy starter/studio fold in), or free|none to cancel."""
@@ -231,6 +251,9 @@ def main():
     sp.set_defaults(fn=cmd_serve)
     sub.add_parser("reset").set_defaults(fn=cmd_reset)
     sub.add_parser("usage").set_defaults(fn=cmd_usage)
+    a = sub.add_parser("funnel", help="per-day funnel-rung counts (browse/roll/taste/build/claim/buy)")
+    a.add_argument("--days", type=int, default=14)
+    a.set_defaults(fn=cmd_funnel)
     a = sub.add_parser("engine", help="run the REAL engine on an idea against your own env key")
     a.add_argument("idea")
     a.add_argument("--full", action="store_true", help="run the full artifact synth (generate_full)")

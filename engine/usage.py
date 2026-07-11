@@ -16,6 +16,9 @@ Env overrides:
   FILG_FREE_RUNS     free plans (runs) per user    (default 3; set 0 to DISABLE the per-user cap —
                      dev only; the daily kill switch still applies)
   FILG_DAILY_BUDGET  global $/day kill switch       (default 20)
+  FILG_TASTE_BUDGET  $/day slice for the anonymous/free taste (default 10). The taste gates on ITS
+                     OWN bucket so subscriber runs and dev QA can't wall landers for the day; the
+                     global budget stays the hard backstop over everything on FILG's key.
   FILG_DB            path to the shared sqlite db   (FILG_USAGE_DB still honored as a fallback)
 """
 
@@ -31,6 +34,7 @@ DB = (os.environ.get("FILG_DB") or os.environ.get("FILG_USAGE_DB")
       or os.path.join(_HERE, "..", "app", "filg.db"))
 FREE_RUNS = int(os.environ.get("FILG_FREE_RUNS", "3"))
 DAILY_BUDGET = float(os.environ.get("FILG_DAILY_BUDGET", "20"))
+TASTE_BUDGET = float(os.environ.get("FILG_TASTE_BUDGET", "10"))
 
 _lock = threading.Lock()        # serialize the read-modify-write so the cap stays exact under load
 _initialized = False
@@ -58,7 +62,12 @@ def _init() -> None:
                         "  spend REAL NOT NULL DEFAULT 0)")
             con.execute("CREATE TABLE IF NOT EXISTS usage_daily ("
                         "  day TEXT PRIMARY KEY,"
-                        "  spend REAL NOT NULL DEFAULT 0)")
+                        "  spend REAL NOT NULL DEFAULT 0,"
+                        "  taste REAL NOT NULL DEFAULT 0)")
+            # migration: pre-2026-07 DBs lack the taste column
+            cols = {r["name"] for r in con.execute("PRAGMA table_info(usage_daily)")}
+            if "taste" not in cols:
+                con.execute("ALTER TABLE usage_daily ADD COLUMN taste REAL NOT NULL DEFAULT 0")
             # Per-subscriber monthly usage: the fair-use meter for paid tiers that run on FILG's key.
             # `period` is the billing-window key (the subscription's current_period_end, or a calendar
             # month as a fallback). A renewal advances the period → a fresh row → the cap resets.
@@ -96,6 +105,8 @@ def can_run(user_id: str, is_paid: bool = False) -> tuple[bool, str]:
 
 
 def record_run(user_id: str, cost: float) -> None:
+    """Record a free-taste run. Taste spend feeds BOTH buckets: its own (the taste gate)
+    and the global daily total (the hard backstop)."""
     _init()
     cost = round(cost, 4)
     with _lock:
@@ -104,9 +115,10 @@ def record_run(user_id: str, cost: float) -> None:
             with con:
                 today = date.today().isoformat()
                 con.execute(
-                    "INSERT INTO usage_daily (day, spend) VALUES (?, ?) "
-                    "ON CONFLICT(day) DO UPDATE SET spend = round(spend + ?, 4)",
-                    (today, cost, cost))
+                    "INSERT INTO usage_daily (day, spend, taste) VALUES (?, ?, ?) "
+                    "ON CONFLICT(day) DO UPDATE SET spend = round(spend + ?, 4),"
+                    "  taste = round(taste + ?, 4)",
+                    (today, cost, cost, cost, cost))
                 con.execute(
                     "INSERT INTO usage_users (user_id, runs, spend) VALUES (?, 1, ?) "
                     "ON CONFLICT(user_id) DO UPDATE SET runs = runs + 1, spend = round(spend + ?, 4)",
@@ -142,9 +154,11 @@ def kill_switch_tripped() -> bool:
     return (row["spend"] if row else 0.0) >= DAILY_BUDGET
 
 
-def record_spend(cost: float) -> None:
-    """Bump only the global daily total (the kill switch) — for spend that isn't a new user run,
-    e.g. per-section drafts and add-on calls. Does NOT touch the per-user free-run counter."""
+def record_spend(cost: float, taste: bool = False) -> None:
+    """Bump the global daily total (the kill switch) — for spend that isn't a new user run,
+    e.g. per-section drafts and add-on calls. Does NOT touch the per-user free-run counter.
+    `taste=True` marks free-taste spend (a non-subscriber op on FILG's key) so it also feeds
+    the taste bucket that gates anonymous landers."""
     if not cost:
         return
     _init()
@@ -154,12 +168,31 @@ def record_spend(cost: float) -> None:
         try:
             with con:
                 today = date.today().isoformat()
+                t = cost if taste else 0.0
                 con.execute(
-                    "INSERT INTO usage_daily (day, spend) VALUES (?, ?) "
-                    "ON CONFLICT(day) DO UPDATE SET spend = round(spend + ?, 4)",
-                    (today, cost, cost))
+                    "INSERT INTO usage_daily (day, spend, taste) VALUES (?, ?, ?) "
+                    "ON CONFLICT(day) DO UPDATE SET spend = round(spend + ?, 4),"
+                    "  taste = round(taste + ?, 4)",
+                    (today, cost, t, cost, t))
         finally:
             con.close()
+
+
+def taste_pool_tapped() -> bool:
+    """The gate for the anonymous/free taste: True when TODAY's taste-bucket spend has hit
+    FILG_TASTE_BUDGET, or the global kill switch is tripped (the hard backstop). Subscriber
+    runs and dev QA feed only the global bucket, so a heavy internal day no longer walls
+    every lander (the 2026-07-11 front-door diagnosis)."""
+    if kill_switch_tripped():
+        return True
+    _init()
+    con = _connect()
+    try:
+        today = date.today().isoformat()
+        row = con.execute("SELECT taste FROM usage_daily WHERE day=?", (today,)).fetchone()
+    finally:
+        con.close()
+    return bool(row) and row["taste"] >= TASTE_BUDGET
 
 
 # ── Per-subscriber monthly fair-use meter (paid tiers on FILG's key) ──────────
@@ -209,12 +242,14 @@ def snapshot() -> dict:
     con = _connect()
     try:
         today = date.today().isoformat()
-        drow = con.execute("SELECT spend FROM usage_daily WHERE day=?", (today,)).fetchone()
+        drow = con.execute("SELECT spend, taste FROM usage_daily WHERE day=?", (today,)).fetchone()
         users = con.execute("SELECT COUNT(*) AS c FROM usage_users").fetchone()["c"]
     finally:
         con.close()
     return {"today_spend": drow["spend"] if drow else 0.0,
-            "daily_budget": DAILY_BUDGET, "free_runs": FREE_RUNS, "users": users}
+            "taste_spend": drow["taste"] if drow else 0.0,
+            "daily_budget": DAILY_BUDGET, "taste_budget": TASTE_BUDGET,
+            "free_runs": FREE_RUNS, "users": users}
 
 
 if __name__ == "__main__":  # quick self-test (no API)

@@ -62,7 +62,7 @@ class DailyCapError(Exception):
     FILG's hosted key. Invariant #3: the funnel FEEDS the meter so it must also READ it — degrade to
     the key prompt, never spend past the pool. Caught centrally in `engine_error` (402 + needKey)."""
     def __init__(self):
-        super().__init__("Today's free pool is tapped. Add your own API key to keep going.")
+        super().__init__("Today's free pool is spent. It refills daily.")
 
 
 def concurrency_cap(user: str) -> int:
@@ -84,7 +84,7 @@ def free_pool_tapped(user: str, prov=None) -> bool:
     if prov is None:
         prov = access._provider_for(user)
     return bool(prov is not None and getattr(prov, "bills_filg", False) and not MOCK
-                and not access._is_subscriber(user) and usage.kill_switch_tripped())
+                and not access._is_subscriber(user) and usage.taste_pool_tapped())
 
 
 @contextlib.contextmanager
@@ -204,7 +204,9 @@ def engine_error(e: Exception, status_code: int = 500):
     if isinstance(e, BudgetError):
         return budget_response(e)
     if isinstance(e, DailyCapError):
-        return JSONResponse({"error": str(e), "needKey": True}, status_code=402)
+        # `pool` lets the frontend give an anonymous lander honest tapped-pool copy instead
+        # of demanding an account on a first submit that can't run anyway.
+        return JSONResponse({"error": str(e), "needKey": True, "pool": True}, status_code=402)
     msg, need_key = humanize_error(e)
     body = {"error": msg}
     if need_key:
@@ -249,9 +251,9 @@ def meter_bg(user: str, prov, cost: float, toks: int, *, is_run: bool = False,
         return
     if is_run:
         usage.record_run(auth.normalize_email(user), research_cost)
-        usage.record_spend(round(cost - research_cost, 4))
+        usage.record_spend(round(cost - research_cost, 4), taste=True)
     else:
-        usage.record_spend(cost)
+        usage.record_spend(cost, taste=True)
 
 
 def bg_progress(sid: str, base_cost: float, base_tokens: int, progress: list):
