@@ -2940,9 +2940,8 @@ async function loadIdeas(){
     $('idealist').innerHTML=d.ideas.map((i,ix)=>
       `<button type=button class=idearow onclick="showIdea(${ix})">`+
       `<span class=irt>${esc(i.title)}</span>`+
-      `<span class=epi>${i.episodes} episode${i.episodes===1?'':'s'}</span></button>`).join('');
-    $('ideasrc').textContent='Trending = coverage volume in '+((d.meta&&d.meta.source)||'the source catalog')+
-      '. Every number on a card says who claims it.';
+      `<span class=epi>${esc(i.cost||'')}</span></button>`).join('');
+    $('ideasrc').textContent='Ranked by coverage in popular business media. Every number on a card says who claims it.';
     $('ideastrip').hidden=false;
   }catch(e){}
 }

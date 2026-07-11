@@ -28,7 +28,7 @@ textarea:focus{border-color:var(--accent)}
    Drop it from the flow entirely off the landing so the header sits tight under the FILG bar. */
 .workspace:not(.full) .hero{display:none}
 .workspace.full .left{width:100%;min-width:100%;border-right:none}
-.workspace.full .hero{max-height:52vh;opacity:1;padding:9vh 20px 8px}
+.workspace.full .hero{max-height:60vh;opacity:1;padding:6vh 20px 8px;overflow-y:auto}   /* scrolls at zoom / with the idea card open — never clips */
 .workspace.full .chatlog,.workspace.full .modechips{display:none}
 .workspace.full #ws-wrap{max-width:640px;margin:0 auto;width:100%}
 .workspace.full #ws-box{min-height:92px;font-size:16px}
@@ -630,8 +630,10 @@ ul.concernlist .concern .cdetail{color:var(--muted);font-size:13px;line-height:1
 
 /* the front-door idea hook: trending rows + roll + the labeled idea card (landing only) */
 .workspace:not(.full) #hero #ideastrip{display:none}
-#ideastrip{margin:18px 0 6px;border-top:1px solid var(--line);padding-top:14px}
-.ideahead{font-weight:700;font-size:14px;margin-bottom:8px}
+#ideastrip{margin:14px 0 6px;border-top:1px solid var(--line);padding-top:14px}
+.zonehead{font-weight:700;font-size:14px;margin:0 0 8px}
+#ownzone{border-top:1px solid var(--line);padding-top:14px;margin-top:16px}
+.workspace:not(.full) #hero #ownzone,.workspace:not(.full) #hero #landing-sub{display:none}
 .idearow{display:flex;justify-content:space-between;gap:10px;width:100%;text-align:left;
   background:none;border:none;border-bottom:1px dotted var(--line);padding:7px 2px;
   color:var(--fg);font-size:13.5px;cursor:pointer}
