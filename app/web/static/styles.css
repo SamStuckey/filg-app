@@ -28,7 +28,7 @@ textarea:focus{border-color:var(--accent)}
    Drop it from the flow entirely off the landing so the header sits tight under the FILG bar. */
 .workspace:not(.full) .hero{display:none}
 .workspace.full .left{width:100%;min-width:100%;border-right:none}
-.workspace.full .hero{max-height:52vh;opacity:1;padding:9vh 20px 8px}
+.workspace.full .hero{max-height:60vh;opacity:1;padding:6vh 20px 8px;overflow-y:auto}   /* scrolls at zoom / with the idea card open — never clips */
 .workspace.full .chatlog,.workspace.full .modechips{display:none}
 .workspace.full #ws-wrap{max-width:640px;margin:0 auto;width:100%}
 .workspace.full #ws-box{min-height:92px;font-size:16px}
@@ -623,6 +623,35 @@ ul.concernlist .concern .cdetail{color:var(--muted);font-size:13px;line-height:1
 .fineprint{background:none;border:none;color:var(--muted);font-size:12.5px;padding:6px 0;text-align:left}
 .fineprint:hover{color:var(--fg);text-decoration:underline}
 .workspace:not(.full) #hero .fineprint{display:none}   /* landing-only there; help carries it after */
+
+/* the landing free-taste note: the no-pay hook's one-line promise */
+.freenote{color:var(--muted);font-size:13px;margin:-14px 0 18px}
+.workspace:not(.full) #hero .freenote{display:none}
+
+/* the front-door idea hook: trending rows + roll + the labeled idea card (landing only) */
+.workspace:not(.full) #hero #ideastrip{display:none}
+#ideastrip{margin:14px 0 6px;border-top:1px solid var(--line);padding-top:14px}
+.zonehead{font-weight:700;font-size:14px;margin:0 0 8px}
+#ownzone{border-top:1px solid var(--line);padding-top:14px;margin-top:16px}
+.workspace:not(.full) #hero #ownzone,.workspace:not(.full) #hero #landing-sub{display:none}
+.idearow{display:flex;justify-content:space-between;gap:10px;width:100%;text-align:left;
+  background:none;border:none;border-bottom:1px dotted var(--line);padding:7px 2px;
+  color:var(--fg);font-size:13.5px;cursor:pointer}
+.idearow:hover .irt{text-decoration:underline}
+.idearow .epi{color:var(--muted);font-size:12px;white-space:nowrap}
+.rollbtn{margin:10px 0 0;font-size:13.5px}
+.icard{border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin-top:12px}
+.icard h3{margin:0 0 6px;font-size:15px}
+.icard p{margin:0 0 8px;font-size:13.5px}
+.imeta{color:var(--muted);font-size:12px;margin-bottom:8px}
+.ieco{font-size:13px;margin:6px 0}
+.ilabel{display:inline-block;border:1px solid var(--line);border-radius:4px;padding:0 5px;
+  font-size:11px;color:var(--muted);margin-right:6px;vertical-align:1px}
+.ilabel[data-l="flagged not credible"]{color:var(--red,#c0392b);border-color:var(--red,#c0392b)}
+.ilabel[data-l="named operator, verified on screen"]{color:var(--green,#1e7e34);border-color:var(--green,#1e7e34)}
+.inote{color:var(--muted);font-size:12px;margin:2px 0 0 2px}
+.iacts{display:flex;gap:8px;margin-top:10px}
+.ideasrc{color:var(--muted);font-size:12px;margin:10px 0 0}
 
 /* a11y baseline (kept from the v1 contract): visible keyboard focus + reduced-motion honor */
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px}

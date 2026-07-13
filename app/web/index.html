@@ -23,10 +23,22 @@ __FILG_HEAD__
     </div>
     <div class=hero id=hero>
       <h1 id=landing-head>Let's build your business.</h1>
-      <p id=landing-sub>Drop in an idea, even if it's vague, about what you're good at, what you want to
-        sell, or what you enjoy doing. Don't overthink it, we'll smooth it out as we go.</p>
+      <p class=freenote id=landing-free>The first taste is on the house. No account, no key, no card.</p>
       <div class=err id=landing-err></div>
       <div id=landing-joke></div>
+      <!-- The no-pay hook (front_door_strategy.md T4/T5): two clearly labeled ways in. Zone one
+           browses popular ideas with labeled numbers, zero AI cost, zero gate; a card's Build
+           button seeds the prompt box. Zone two is the classic bring-your-own prompt. -->
+      <div id=ideastrip hidden>
+        <div class=zonehead>🔥 Popular ideas · pick one to start from</div>
+        <div id=idealist></div>
+        <button type=button class=rollbtn id=rollbtn onclick="rollIdea()">🎲 Surprise me</button>
+        <div id=ideacard></div>
+        <p class=ideasrc id=ideasrc></p>
+      </div>
+      <div class=zonehead id=ownzone>✍️ Or bring your own</div>
+      <p id=landing-sub>Drop in an idea, even if it's vague, about what you're good at, what you want to
+        sell, or what you enjoy doing. Don't overthink it, we'll smooth it out as we go.</p>
       <button type=button class=fineprint onclick="disclaimerModal()">Just so we're clear: this is for fun, not advice ›</button>
     </div>
     <!-- Research mode (in-drawer display): the SAME chat, different UX — the list replaces or

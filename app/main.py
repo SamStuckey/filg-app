@@ -52,6 +52,7 @@ from app import plan_pdf   # noqa: E402 — styled PDF generation (synthesis + f
 from app import advisor    # noqa: E402 — "chat with your plan" (grounded advisory layer)
 from app import context    # noqa: E402 — THE CONTEXT ENGINE: every model-facing view of session state
 from app import decisions as decisions_mod  # noqa: E402 — standing decisions: axioms/non-negotiables (Summary tab)
+from app.domain import ideas as ideas_mod  # noqa: E402 — the browsable idea catalog: the front door's zero-AI-cost hook
 from app.domain import tasks as tasks_mod  # noqa: E402 — execution layer: the Roadmap + Codex (tasks/milestones/goals/artifacts)
 from app import notify      # noqa: E402 — transactional email: the cadence digest (Resend, inert without a key)
 from app import skeptic    # noqa: E402 — adversarial assumption-checking on the live research path
@@ -441,6 +442,25 @@ async def api_models(request: Request):
     return model_catalog.snapshot(check_availability=check)
 
 
+@app.get("/api/ideas/trending")
+async def api_ideas_trending():
+    """The honest trending list (front_door_strategy.md T5): ranked by the labeled programmatic
+    signal in the source catalog (episode counts), never an invented algorithm. Free side of the
+    wall: static data, no AI, no key, no account."""
+    store.funnel_track("browse_trending")
+    return {"meta": ideas_mod.catalog_meta(),
+            "ideas": [{**i, "seed": ideas_mod.seed_prompt(i)} for i in ideas_mod.trending(5)]}
+
+
+@app.get("/api/ideas/roll")
+async def api_ideas_roll(request: Request):
+    """Roll the dice (front_door_strategy.md T4): one random catalog idea with its labeled
+    economics plus a seed prompt for the Build-this handoff into the funnel. Free side, no AI."""
+    store.funnel_track("roll")
+    idea = ideas_mod.random_idea(request.query_params.get("exclude") or None)
+    return {"meta": ideas_mod.catalog_meta(), "idea": idea, "seed": ideas_mod.seed_prompt(idea)}
+
+
 @app.get("/p/{sid}", response_class=HTMLResponse)
 async def share_plan(sid: str):
     """Public, read-only view of a plan the owner explicitly shared (private by default). Carries the
@@ -690,6 +710,7 @@ async def api_brainstorm(request: Request):
         return JSONResponse({"error": "Tell me a bit more about the idea."}, status_code=400)
     if gibberish.looks_like_gibberish(idea):   # total nonsense → free roast, no run
         return JSONResponse({"gibberish": True, **gibberish.roast(idea)})
+    store.funnel_track("taste_start")
     user, _verified = _identity(request, body.get("email"))   # may be "" (anonymous) — that's allowed here
     directors = [k for k in (body.get("directors") or []) if k in personas.KEYS]
     sid = uuid.uuid4().hex[:12]
@@ -790,6 +811,7 @@ async def api_plan_merge(sid: str, request: Request):
              if isinstance(i, str) and _kind(nodes.get(i) or {}) == "option"]
     if not valid:
         return JSONResponse({"error": "Pick at least one direction to try."}, status_code=400)
+    store.funnel_track("merge")
     # The merge is the free taste's one web-touching step and runs in a background thread WITHOUT
     # _run_slot — so the daily kill switch must be read here, before the spawn (invariant #3: the
     # funnel feeds the meter, it must also read it). Subscribers are bounded by their monthly cap.
@@ -849,6 +871,7 @@ async def api_plan_commit(sid: str, request: Request):
     # The deep build requires an account, then a key or a subscription (see _account_wall).
     if (wall := _account_wall(request, s) or _key_wall(s)):
         return wall
+    store.funnel_track("deep_build")
     body = await request.json()
     thesis = (body.get("thesis") or "").strip()
     tree = s.get("tree") or {}
@@ -1613,6 +1636,7 @@ async def api_plan_claim(sid: str, request: Request):
     authed = auth.user_from_request(request)
     if not authed or not authed["email"]:
         return JSONResponse({"error": "Sign in first.", "needAccount": True}, status_code=401)
+    store.funnel_track("claim")
     s = store.plan_get(sid)
     if not s:
         return JSONResponse({"error": "unknown session"}, status_code=404)

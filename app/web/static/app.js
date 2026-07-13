@@ -157,11 +157,29 @@ function gateV2(d){
   if(d.fairUse){ fairUseModal(d); return true; }
   if(d.upgrade){ pricingModal(d.error||'That one needs a plan, or your own key.'); return true; }
   if(d.needKey){
+    // A tapped free pool on an anonymous first touch gets honest copy, not an account demand
+    // (the account-before-first-prompt anti-pattern; front_door_strategy.md T2).
+    if(d.pool&&!signedIn()){ poolModal(d.error); return true; }
     if(CFG.authEnabled&&!signedIn()){ authModal(); return true; }
     if((tiersCat().length)&&!HAS_KEY){ pricingModal(d.error||null); return true; }   // the fork: plans + BYOK box
     keyModal(); return true;
   }
   return false;
+}
+
+// The anonymous tapped-pool notice: the taste is on FILG's dime with a daily ceiling, so when
+// the pool is out the lander hears that plainly, with optional skip-the-line paths. No sign-in
+// demand on a first submit that can't run anyway.
+function poolModal(msg){
+  $('modal-body').innerHTML=
+    `<p class=muted>${esc(msg||"Today's free pool is spent. It refills daily.")} `+
+    `The free taste runs on our dime, so it has a daily ceiling. Come back tomorrow and it opens again.</p>`+
+    `<div class=authgate>`+
+    (CFG.byokEnabled?`<button type=button class=gbtn onclick="closeModal();keyModal()">I have my own API key (free, skips the line)</button>`:'')+
+    (tiersCat().length?`<button type=button class=gbtn onclick="closeModal();pricingModal()">See the plans</button>`:'')+
+    `</div>`;
+  $('modal-acts').innerHTML=`<button onclick="closeModal()">I'll come back</button>`;
+  openModal("The free pool is out for today");
 }
 
 // ── Pricing: the fork (free BYOK vs the monthly plans), the tier cards, and the allowance modal ──
@@ -2911,6 +2929,50 @@ function _afterBootQuery(){   // back from Stripe: ?pdf=1 (clean PDF unlocked) /
 }
 window.addEventListener('popstate',routeV2);
 
+// ── the front-door idea hook (front_door_strategy.md T4/T5): browse + roll, zero AI cost ──
+let IDEAS=[], LAST_ROLL=null;
+async function loadIdeas(){
+  if(!$('ideastrip'))return;
+  try{
+    const {ok,d}=await api('GET','/api/ideas/trending');
+    if(!ok||!d.ideas||!d.ideas.length)return;
+    IDEAS=d.ideas;
+    $('idealist').innerHTML=d.ideas.map((i,ix)=>
+      `<button type=button class=idearow onclick="showIdea(${ix})">`+
+      `<span class=irt>${esc(i.title)}</span>`+
+      `<span class=epi>${esc(i.cost||'')}</span></button>`).join('');
+    $('ideasrc').textContent='Ranked by coverage in popular business media. Every number on a card says who claims it.';
+    $('ideastrip').hidden=false;
+  }catch(e){}
+}
+function showIdea(ix){ const i=IDEAS[ix]; if(i)ideaCard(i,i.seed); }
+async function rollIdea(){
+  try{
+    const {ok,d}=await api('GET','/api/ideas/roll'+(LAST_ROLL?`?exclude=${encodeURIComponent(LAST_ROLL)}`:''));
+    if(!ok||!d.idea)return;
+    LAST_ROLL=d.idea.id;
+    ideaCard(d.idea,d.seed);
+  }catch(e){}
+}
+function ideaCard(i,seed){
+  const econ=(i.economics||[]).map(e=>
+    `<div class=ieco><span class=ilabel data-l="${esc(e.label)}">${esc(e.label)}</span> ${esc(e.claim)}`+
+    (e.note?`<div class=inote>${esc(e.note)}</div>`:'')+`</div>`).join('');
+  $('ideacard').innerHTML=
+    `<div class=icard><h3>${esc(i.title)}</h3><p>${esc(i.one_liner)}</p>`+
+    `<div class=imeta>startup cost: ${esc(i.startup_cost)} · source confidence: ${esc(i.confidence)}</div>`+
+    econ+
+    `<div class=iacts><button type=button class=primary onclick="buildFromIdea(this)" data-seed="${esc(seed||'')}">⚒ Build this plan</button>`+
+    `<button type=button onclick="rollIdea()">🎲 Another</button></div></div>`;
+  setTimeout(()=>{const c=$('ideacard');if(c)c.scrollIntoView({block:'nearest',behavior:'smooth'});},60);
+}
+function buildFromIdea(btn){
+  const box=$('ws-box'); if(!box)return;
+  box.value=btn.getAttribute('data-seed')||'';
+  box.focus();
+  chatStatus('Idea loaded. Make it yours, then hit Start.');
+}
+
 // ── boot ─────────────────────────────────────────────────────────────────────
 document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeModal();unfocus();if(PIVOT_FROM)clearGhost();
   if(NAVCUR){NAVCUR=null;if(VIEWMODE==='graph')renderGraph();}}});
@@ -2927,5 +2989,6 @@ initDrawerResize();   // the drawer WIDTH drags (chat + expanded panes), remembe
 renderStackChips();   // the model-crew chip
 sendLabel();   // 'Start →' in full mode, 'Send →' once a plan exists
 initAuth();   // session + /api/me + key state, then routeV2 (deep links + /v2/account tabs)
+loadIdeas();   // the landing's zero-cost browse hook (hidden whenever the workspace isn't full)
 // the working node's elapsed clock — keeps the build feeling alive even between progress lines
 setInterval(()=>{const el=$('wiptime');if(el&&WIP_T0)el.textContent=Math.round((Date.now()-WIP_T0)/1000)+'s';},1000);

@@ -150,7 +150,7 @@ def _meter(user: str, cost: float) -> None:
     if _is_subscriber(user):
         usage.record_monthly(_acct(user), _period(user), cost, 0)
     else:
-        usage.record_spend(cost)
+        usage.record_spend(cost, taste=True)
 
 
 def _meter_tokens(user: str, toks: int) -> None:

@@ -146,6 +146,15 @@ def init() -> None:
                     "  stripe_subscription_id TEXT,"
                     "  current_period_end TEXT,"         # ISO ts — fair-use window boundary / reset date
                     "  updated_at TEXT NOT NULL)")
+                con.execute(
+                    # Funnel instrumentation (front_door_strategy.md T9): per-day counters per
+                    # funnel rung — browse/roll/taste/refine/deep_build/claim/purchase — so the
+                    # hook iterates on measured drop-off. Aggregates only; no PII, no client trackers.
+                    "CREATE TABLE IF NOT EXISTS funnel_events ("
+                    "  day TEXT NOT NULL,"
+                    "  event TEXT NOT NULL,"
+                    "  n INTEGER NOT NULL DEFAULT 0,"
+                    "  PRIMARY KEY (day, event))")
         finally:
             con.close()
         _initialized = True
@@ -604,6 +613,43 @@ def delete_account(email: str, normalized: str | None = None) -> None:
                 con.execute("DELETE FROM accounts WHERE email=?", (e,))
     finally:
         con.close()
+
+
+# ── Funnel instrumentation (front_door_strategy.md T9) ───────────────────────
+def funnel_track(event: str) -> None:
+    """Bump today's counter for one funnel rung. Fire-and-forget: instrumentation must never
+    take a route down, so failures are swallowed."""
+    if not event:
+        return
+    try:
+        init()
+        con = _connect()
+        try:
+            with con:
+                day = datetime.now(timezone.utc).date().isoformat()
+                con.execute(
+                    "INSERT INTO funnel_events (day, event, n) VALUES (?, ?, 1) "
+                    "ON CONFLICT(day, event) DO UPDATE SET n = n + 1",
+                    (day, event))
+        finally:
+            con.close()
+    except Exception:
+        pass
+
+
+def funnel_counts(days: int = 14) -> list[dict]:
+    """Per-day, per-rung counts for the last `days` days, newest first — the `dev.py funnel`
+    readout that turns 'behavior-driven' into actual numbers."""
+    init()
+    con = _connect()
+    try:
+        rows = con.execute(
+            "SELECT day, event, n FROM funnel_events "
+            "WHERE day >= date('now', ?) ORDER BY day DESC, event",
+            (f"-{int(days)} days",)).fetchall()
+    finally:
+        con.close()
+    return [dict(r) for r in rows]
 
 
 if __name__ == "__main__":  # quick self-test (no API)

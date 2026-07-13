@@ -90,7 +90,7 @@ def test_next_is_walled_without_key(client, monkeypatch):
 
 def test_meter_skips_byok_runs(monkeypatch):
     calls = []
-    monkeypatch.setattr(main.usage, "record_spend", lambda c: calls.append(c))
+    monkeypatch.setattr(main.usage, "record_spend", lambda c, **kw: calls.append(c))
     monkeypatch.setattr(access, "_is_byok", lambda u: True)
     main._meter("x@y.com", 0.5)
     assert calls == []                                              # BYOK = user's spend, not metered

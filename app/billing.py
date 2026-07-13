@@ -220,6 +220,7 @@ def handle_event(event: dict) -> None:
     if etype == "checkout.session.completed":
         mode = obj.get("mode")
         if mode == "payment":                                   # one-time $13 → unlock THAT plan
+            store.funnel_track("purchase_pdf")
             email = _event_email(obj)
             plan_key = (obj.get("metadata") or {}).get("plan_key")
             if email and plan_key:
@@ -227,6 +228,7 @@ def handle_event(event: dict) -> None:
             elif email:                                         # no plan_key (legacy event) → 1 credit
                 store.credit_for_session(auth.normalize_email(email), obj.get("id"), n=1)
         elif mode == "subscription":                            # a tier went live
+            store.funnel_track("purchase_subscription")
             email = _event_email(obj)
             tier = (obj.get("metadata") or {}).get("tier")
             if email:

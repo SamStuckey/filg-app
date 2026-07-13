@@ -1,0 +1,454 @@
+{
+  "meta": {
+    "source": "popular business media ingestions, indexed 2026-07 (v0: a 384-episode operator-interview catalog)",
+    "note": "Idea summaries in FILG's own words. Economics carry a label: what the number is and who claims it. The popularity rank is coverage volume in the source media, shown as-is.",
+    "labels": [
+      "named operator, verified on screen",
+      "named operator, self-reported",
+      "estimate or hypothetical",
+      "vendor or marketing claim",
+      "flagged not credible"
+    ]
+  },
+  "ideas": [
+    {
+      "id": "ai-assessment-agency",
+      "title": "AI Assessment Agency",
+      "one_liner": "Run structured AI-readiness interviews with small business owners, deliver a formatted tool-recommendation report in 48 hours, upsell the implementation work.",
+      "startup_cost": "near zero (Retell.ai, Claude, Gamma free tiers)",
+      "tier": 1,
+      "confidence": "high",
+      "episodes": 1,
+      "economics": [
+        {
+          "claim": "$1,000 per assessment, grown from free to $200 to $500",
+          "label": "named operator, verified on screen",
+          "note": "Corey shows the actual report on camera; $1,000 price point is current but recent"
+        }
+      ],
+      "method": "20-45 minute discovery interview (Zoom or an AI voice agent), feed the transcript to Claude to map pain points to off-the-shelf tools, deliver an effort-vs-impact report within 48 hours.",
+      "cost": "$0 to start"
+    },
+    {
+      "id": "no-code-micro-saas",
+      "title": "No-Code Micro SaaS",
+      "one_liner": "Find a niche problem people complain about, validate demand with keyword research, build the MVP with vibe-coding tools, sell monthly subscriptions.",
+      "startup_cost": "$0-200/mo (Claude Code or Bolt, Supabase and Vercel free tiers)",
+      "tier": 1,
+      "confidence": "high",
+      "episodes": 28,
+      "economics": [
+        {
+          "claim": "$5K MRR in first full month, 267 paying users, three tiers, 80-85% margins",
+          "label": "named operator, self-reported",
+          "note": "Vadim's numbers are internally consistent and corroborated in the interview"
+        },
+        {
+          "claim": "$3M/year ARR across 24 micro-SaaS tools",
+          "label": "named operator, self-reported",
+          "note": "John Rush; portfolio-level, not one product"
+        }
+      ],
+      "method": "Validate the complaint before building: Reddit and X complaints plus Google autocomplete and keyword volume. Then Bolt or Lovable for UI, Supabase for data, Claude Code for iteration.",
+      "cost": "$0-200/mo"
+    },
+    {
+      "id": "cold-email-agency",
+      "title": "Cold Email Agency",
+      "one_liner": "Done-for-you B2B outreach: build the prospect list, manage deliverability infrastructure, write 3-line sequences, book meetings on a monthly retainer.",
+      "startup_cost": "$200-2,000 (domains, warmup, sending and data tools)",
+      "tier": 1,
+      "confidence": "high",
+      "episodes": 4,
+      "economics": [
+        {
+          "claim": "60 clients at $1,500/mo, described as almost all profit",
+          "label": "named operator, self-reported",
+          "note": "podcast-booking niche agency; margins not audited, fulfillment cost undisclosed"
+        }
+      ],
+      "method": "Pick a hyper-specific ICP, build a verified list, warm 10-50 domains for 21 days, send short plain-text sequences, charge a retainer for booked meetings.",
+      "cost": "$200-2K"
+    },
+    {
+      "id": "facebook-ads-agency",
+      "title": "Facebook Ads Agency for Local Services",
+      "one_liner": "Run Meta ad campaigns for high-LTV local service businesses (tree trimming, HVAC, cleaning) on a flat monthly retainer.",
+      "startup_cost": "$0-500 (free case studies first, GoHighLevel optional)",
+      "tier": 1,
+      "confidence": "high",
+      "episodes": 2,
+      "economics": [
+        {
+          "claim": "tree trimming: $5 leads at $15/day budget, 4 jobs in week one",
+          "label": "named operator, verified on screen",
+          "note": "a real tested campaign; small sample"
+        },
+        {
+          "claim": "roofing leads at $20 each in Louisiana",
+          "label": "named operator, self-reported",
+          "note": "instructor's client, corroborates the range"
+        }
+      ],
+      "method": "Learn Meta Ads Manager, build 3-5 free case studies with real iPhone photos, then charge retainers. Message objective plus before/after photos for home services.",
+      "cost": "$0-500"
+    },
+    {
+      "id": "claude-skill-selling",
+      "title": "Claude Skill / Prompt Selling",
+      "one_liner": "Package real domain expertise into Claude skill files, bundle 20-25 of them at $99, sell via a landing page with Stripe and content marketing.",
+      "startup_cost": "under $100 (domain, Stripe, hosting); time-heavy to build the stack",
+      "tier": 1,
+      "confidence": "high",
+      "episodes": 2,
+      "economics": [
+        {
+          "claim": "$3,000+ in about 40 days from a 25-skill bundle plus one $1,000 consulting upsell",
+          "label": "named operator, verified on screen",
+          "note": "Ryan Dozer showed the Stripe dashboard live; one data point from someone with existing SEO clients"
+        }
+      ],
+      "method": "Pick a domain you actually know, structure the knowledge into skill markdown with Claude's skill creator, build a simple landing page, price the bundle at $99.",
+      "cost": "under $100"
+    },
+    {
+      "id": "ai-automation-agency",
+      "title": "AI Automation Agency",
+      "one_liner": "Audit small companies for AI use cases, then build or install the automations: from ChatGPT workflow coaching to custom agentic apps on a fractional basis.",
+      "startup_cost": "near zero (tools you already use: Claude, Zapier, n8n, Make)",
+      "tier": 1,
+      "confidence": "medium",
+      "episodes": 28,
+      "economics": [
+        {
+          "claim": "roughly $800K annual run rate at month 5, from $4-5K one-time projects",
+          "label": "named operator, self-reported",
+          "note": "Brandon's own figures; the discovery methodology and pricing ladder ($10-15K audit, $20-35K/mo fractional) are the useful part"
+        }
+      ],
+      "method": "Discovery call to map workflows, classify fixes into education / off-the-shelf integrations / custom builds, ship 3-5 working prototypes in the first 30 days, report time and cost saved.",
+      "cost": "$0 to start"
+    },
+    {
+      "id": "ai-ugc-ad-agency",
+      "title": "AI UGC Ad Agency",
+      "one_liner": "Create AI-generated UGC-style video ads and sell them to companies already spending heavily on Meta ads, found via the public Ads Library.",
+      "startup_cost": "$100-250/mo (Arcads or Higgsfield subscription, LinkedIn Premium)",
+      "tier": 1,
+      "confidence": "medium",
+      "episodes": 4,
+      "economics": [
+        {
+          "claim": "$0 to $10-20M ARR app cited as a client result",
+          "label": "flagged not credible",
+          "note": "the claim comes from the Arcads founder promoting his own tool; no third-party verification"
+        },
+        {
+          "claim": "$2K/month per client; 10 clients = $20K/mo",
+          "label": "estimate or hypothetical",
+          "note": "the mechanic (find 50+ active ads, offer a free sample, land a retainer) is concrete; the revenue math is illustrative"
+        }
+      ],
+      "method": "Find brands with 50+ active ads in the Facebook Ads Library, make a free AI sample ad, cold-outreach the CEO on LinkedIn, convert to a monthly retainer.",
+      "cost": "~$150/mo"
+    },
+    {
+      "id": "kdp-low-content-books",
+      "title": "Amazon KDP Low-Content Books",
+      "one_liner": "Publish AI-assisted journals, planners and puzzle books on Amazon KDP with zero inventory, picking niches via BookBolt keyword gaps.",
+      "startup_cost": "about $40/mo (BookBolt plus an AI tool)",
+      "tier": 1,
+      "confidence": "medium",
+      "episodes": 4,
+      "economics": [
+        {
+          "claim": "$500K/mo from two books",
+          "label": "flagged not credible",
+          "note": "no verifiable operator; the number came from a ChatGPT research output"
+        },
+        {
+          "claim": "$1K/month per winning book",
+          "label": "estimate or hypothetical",
+          "note": "clean hypothetical math, not an observed case"
+        }
+      ],
+      "method": "BookBolt for search-volume-vs-competition gaps, templates plus AI for interiors and covers, optimize the title structure, publish free on KDP. Thin moat; volume game.",
+      "cost": "~$40/mo"
+    },
+    {
+      "id": "etsy-pod-automation",
+      "title": "Etsy Print-on-Demand at Scale",
+      "one_liner": "Reverse-engineer Etsy bestsellers, generate derivative graphics with the ChatGPT image API, list through Printify via n8n automation, target 10,000+ listings.",
+      "startup_cost": "$40-60/mo (Everbe, ChatGPT, n8n; Printify pays per order)",
+      "tier": 1,
+      "confidence": "medium",
+      "episodes": 4,
+      "economics": [
+        {
+          "claim": "another $100K/year is not unreasonable with this strategy",
+          "label": "named operator, self-reported",
+          "note": "Cody has run POD for 10+ years; stated belief, not a current P&L"
+        }
+      ],
+      "method": "Everbe to find winners, image API for derivative designs, background removal, Printify sync via n8n, iterate toward the listings that stick.",
+      "cost": "~$50/mo"
+    },
+    {
+      "id": "etsy-digital-printables",
+      "title": "Etsy Digital Printables",
+      "one_liner": "Find Etsy's hidden bestseller list with the star-to-best URL hack, regenerate improved versions of proven printables, sell as instant downloads.",
+      "startup_cost": "near zero (Picsart free tier, $0.20 per listing)",
+      "tier": 1,
+      "confidence": "medium",
+      "episodes": 5,
+      "economics": [
+        {
+          "claim": "one store: 87,000 reviews, extrapolated to millions in lifetime sales",
+          "label": "estimate or hypothetical",
+          "note": "review counts are real on-screen data; the revenue extrapolation is a back-of-envelope estimate, not reported revenue"
+        }
+      ],
+      "method": "Search printables, filter Star Sellers, swap star for best in the URL, find high sales-per-SKU sellers, make a better derivative, match their keywords. IP and ToS exposure is the risk.",
+      "cost": "$0 to start"
+    },
+    {
+      "id": "productized-design-agency",
+      "title": "Productized Design Subscription",
+      "one_liner": "Productize one digital skill (design, copy, video editing) as a flat monthly subscription: a site, a price, a subscribe button, no calls, no proposals.",
+      "startup_cost": "$0-500 (site plus a Product Hunt launch)",
+      "tier": 1,
+      "confidence": "high",
+      "episodes": 2,
+      "economics": [
+        {
+          "claim": "DesignJoy: $1M/year revenue, $70-80K/mo net solo, started at $449/mo",
+          "label": "named operator, verified on screen",
+          "note": "Brett Williams; DesignJoy is a verifiable public company and the model's canonical case"
+        }
+      ],
+      "method": "Pick the skill, build a one-page site with the price and a subscribe button, launch on Product Hunt, start cheap and raise until churn says stop.",
+      "cost": "$0-500"
+    },
+    {
+      "id": "gov-contract-brokering",
+      "title": "Government Contract Brokering",
+      "one_liner": "Register an LLC on sam.gov, bid on sub-$350K service contracts with subcontractor quotes plus a markup, manage the sub while collecting the spread.",
+      "startup_cost": "$100-300 (LLC filing); government pays after delivery",
+      "tier": 1,
+      "confidence": "high",
+      "episodes": 1,
+      "economics": [
+        {
+          "claim": "$10-12K/month steady-state; one $962K 5-year contract netted $262K",
+          "label": "named operator, self-reported",
+          "note": "Natalie, on camera with granular unit economics; internally consistent"
+        }
+      ],
+      "method": "Browse sam.gov for under-$350K contracts (no past-performance requirement), parse solicitations with AI, quote 2-3 subs, bid with a markup. Legal caveat: stay under the 50% self-performance rule; a PTAC consult is the cheap gate.",
+      "cost": "$100-300"
+    },
+    {
+      "id": "rank-and-rent",
+      "title": "Rank-and-Rent Local Lead Gen",
+      "one_liner": "Build local service websites that rank in Google organic and Maps, then rent the leads to one local business per site for a flat monthly fee.",
+      "startup_cost": "under $500 for the first 3 sites (hosting, tracking numbers, keyword tools)",
+      "tier": 2,
+      "confidence": "high",
+      "episodes": 12,
+      "economics": [
+        {
+          "claim": "one carpet-cleaning site: #1 for years, $500/mo flat, roughly $50K lifetime on $10/mo hosting",
+          "label": "named operator, verified on screen",
+          "note": "Luke; the site and ranking were shown live"
+        },
+        {
+          "claim": "$100K/month company-level, $35K/month personal",
+          "label": "named operator, self-reported",
+          "note": "Kyle; dashboard shown, company figure is partnership-level"
+        }
+      ],
+      "method": "Exact-match domain, thin but real local site, Google Business Profile on a tracking number, target 60-300K population cities, sell the leads to businesses already buying Google Ads.",
+      "cost": "under $500"
+    },
+    {
+      "id": "directory-websites",
+      "title": "Niche Directory Websites",
+      "one_liner": "Build consumer directory sites for underserved local searches (thrift stores, Medicaid-accepting therapists), monetize with display ads and featured listings.",
+      "startup_cost": "$100-300 (domain, hosting, a directory plugin, keyword tool trial)",
+      "tier": 2,
+      "confidence": "high",
+      "episodes": 4,
+      "economics": [
+        {
+          "claim": "3 directory sites, $2,300-3,000/month combined, untouched for 6 months",
+          "label": "named operator, verified on screen",
+          "note": "traffic graph visible on screen; revenue stated verbatim"
+        }
+      ],
+      "method": "Find demand with the near-me keyword method past page 5, the inurl:directory hack, and Reddit 'looking for' mining; build around an underserved filter; rank and collect.",
+      "cost": "$100-300"
+    },
+    {
+      "id": "credit-card-consulting",
+      "title": "Credit Card Points Consulting",
+      "one_liner": "Charge business owners a flat fee to optimize their card strategy and points, plus a separate fee to book award travel with what they earn.",
+      "startup_cost": "about $100/mo in software",
+      "tier": 2,
+      "confidence": "high",
+      "episodes": 2,
+      "economics": [
+        {
+          "claim": "$231K gross in the first full year, about $40K expenses",
+          "label": "named operator, self-reported",
+          "note": "Colin Stroud, on camera with expense breakdown; a personal-brand business that took 15+ months of daily LinkedIn posting to ramp"
+        }
+      ],
+      "method": "Learn the rewards landscape from free sources, post deal finds on LinkedIn 1-2x daily, sell an $875 audit package plus a trip-booking service.",
+      "cost": "~$100/mo"
+    },
+    {
+      "id": "ai-receptionist-service",
+      "title": "Missed-Call AI Receptionist Service",
+      "one_liner": "Install an AI text-back agent on a local business's phone line so missed calls become qualified, booked appointments; charge a monthly retainer.",
+      "startup_cost": "$100-300/mo (GoHighLevel; scraping and voicemail-drop tools per use)",
+      "tier": 2,
+      "confidence": "medium",
+      "episodes": 2,
+      "economics": [
+        {
+          "claim": "$500-2,000/month per client",
+          "label": "estimate or hypothetical",
+          "note": "the live demo works (real callback engaged the bot) but no paying client is shown; saturated GHL-reseller pitch, margins compress"
+        }
+      ],
+      "method": "GoHighLevel workflow: missed-call trigger, AI conversation prompt per business type, booked/emergency/unqualified branches. Duplicate per client.",
+      "cost": "$100-300/mo"
+    },
+    {
+      "id": "ai-pitch-deck-service",
+      "title": "AI Pitch Deck Service",
+      "one_liner": "Generate draft pitch decks from public SEC filings with AI, send the first 5 slides watermarked as outreach, charge $3,500 for the full deck.",
+      "startup_cost": "$20-70/mo (Manus via Perplexity Pro, Apollo for leads)",
+      "tier": 2,
+      "confidence": "medium",
+      "episodes": 1,
+      "economics": [
+        {
+          "claim": "$3,500 per deck",
+          "label": "named operator, self-reported",
+          "note": "the 'pitch deck guy on Twitter' is a real practitioner comp; the fully automated version is speculative"
+        }
+      ],
+      "method": "Scrape new fund filings, auto-generate a draft deck, cold-send the teaser, deliver the premium version manually.",
+      "cost": "$20-70/mo"
+    },
+    {
+      "id": "niche-job-board",
+      "title": "Niche Job Board",
+      "one_liner": "Run a narrowly targeted job board (by profession or identity) on off-the-shelf software, aggregate supply via APIs, charge employers for posts.",
+      "startup_cost": "$50-100/mo (Niceboard or JobBoard.io plus domain)",
+      "tier": 2,
+      "confidence": "medium",
+      "episodes": 1,
+      "economics": [
+        {
+          "claim": "a physician job board doing $80M/year",
+          "label": "flagged not credible",
+          "note": "asserted with no name or source; disregard the number, keep the structural model"
+        }
+      ],
+      "method": "Pick a defensible niche where the audience congregates, spin up the board no-code, seed supply by aggregating, monetize employer posts. The niche angle is unvalidated.",
+      "cost": "$50-100/mo"
+    },
+    {
+      "id": "faceless-ai-youtube",
+      "title": "Faceless AI YouTube Channel",
+      "one_liner": "High-CPM niche long-form videos produced end-to-end with AI (script, cinematic clips, thumbnails); monetize AdSense, affiliates, or the channel sale.",
+      "startup_cost": "$40-60/mo (Higgsfield credits, ElevenLabs, CapCut free)",
+      "tier": 2,
+      "confidence": "medium",
+      "episodes": 9,
+      "economics": [
+        {
+          "claim": "$5-30K/month from faceless channels; finance RPM $15-30 per 1K views",
+          "label": "estimate or hypothetical",
+          "note": "workflow demonstrated live, zero channel revenue shown; RPM ranges are industry-common figures"
+        }
+      ],
+      "method": "Pick dark-business-history or similar high-CPM niche, one prompt for titles and script, generate 12 cinematic shots, assemble, publish on a cadence. Months to payoff, algorithm risk.",
+      "cost": "$40-60/mo"
+    },
+    {
+      "id": "voice-cloning-realtors",
+      "title": "Multilingual Voicemail Service for Realtors",
+      "one_liner": "Clone a realtor's voice, generate their standard voicemails in 4+ languages, sell as a setup fee plus monthly retainer in multilingual markets.",
+      "startup_cost": "under $50 (Fish Audio credits)",
+      "tier": 2,
+      "confidence": "medium",
+      "episodes": 4,
+      "economics": [
+        {
+          "claim": "$300-500/month per realtor; 10 realtors = $3K/mo",
+          "label": "estimate or hypothetical",
+          "note": "live demo works (17-second clone); no paying clients shown; realtor churn is high"
+        }
+      ],
+      "method": "Clone from their public video, translate 10 standard scripts with an LLM, render in their voice, pitch by sending them their own cloned sample.",
+      "cost": "under $50"
+    },
+    {
+      "id": "google-ads-local",
+      "title": "Google Ads Agency for Local Services",
+      "one_liner": "Run Google Search and YouTube campaigns for local services, with landing-page conversion as the differentiator.",
+      "startup_cost": "$0-500 (learn free; test budgets small)",
+      "tier": 2,
+      "confidence": "medium",
+      "episodes": 1,
+      "economics": [
+        {
+          "claim": "cleaning businesses: $60 to close a $300-500/mo recurring customer",
+          "label": "named operator, self-reported",
+          "note": "an instructor's real students, specific but unnamed"
+        }
+      ],
+      "method": "Target high-LTV local services, do 2-3 free campaigns for testimonials, win on the landing page, then charge.",
+      "cost": "$0-500"
+    },
+    {
+      "id": "domain-investing",
+      "title": "Domain Name Investing",
+      "one_liner": "Buy expiring or undervalued .com domains at auction; flip them, or build a niche directory on an aged exact-match name.",
+      "startup_cost": "$5 per closeout domain to $17K+ for premium names",
+      "tier": 2,
+      "confidence": "medium",
+      "episodes": 2,
+      "economics": [
+        {
+          "claim": "DudeRanch.com: $50K/year from about an hour a month, after 14 years",
+          "label": "named operator, self-reported",
+          "note": "the owner's direct disclosure with advertiser count and flat fee; note the 14-year ramp"
+        }
+      ],
+      "method": "Monitor expiring auctions filtered by age, length and .com; value by exact-match search volume and backlinks; flip or build.",
+      "cost": "$5 and up"
+    },
+    {
+      "id": "skool-community",
+      "title": "Paid Niche Community",
+      "one_liner": "Build a paid community around a real expertise, using abandoned Meetup groups as a near-free member acquisition hack.",
+      "startup_cost": "$99/mo (Skool) plus $172/year (Meetup organizer takeover)",
+      "tier": 2,
+      "confidence": "medium",
+      "episodes": 2,
+      "economics": [
+        {
+          "claim": "top 50 Skool groups average $53K MRR; the biggest is $555K MRR",
+          "label": "estimate or hypothetical",
+          "note": "an independent scrape of public Skool data; member counts and prices are public, the average is his calculation"
+        }
+      ],
+      "method": "Join Meetups in your niche, take over groups when organizers step down, co-host events, funnel members into a paid community.",
+      "cost": "~$100/mo"
+    }
+  ]
+}
