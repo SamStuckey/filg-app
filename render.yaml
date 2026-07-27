@@ -20,11 +20,21 @@ services:
       mountPath: /var/data
       sizeGB: 1
     envVars:
-      # ── The hosted key (funds the anonymous free taste + subscriber runs) ──
-      # FILG_ANTHROPIC_API_KEY is preferred (doesn't collide with a dev's own ANTHROPIC_API_KEY);
-      # plain ANTHROPIC_API_KEY also works. No hosted key → fully BYOK from the first submit.
-      - key: FILG_ANTHROPIC_API_KEY    # secret — set in the dashboard
+      # ── The hosted keys (FILG's own Anthropic accounts) ──
+      # The free taste and paid subscriptions run on SEPARATE Anthropic accounts so neither can drain
+      # the other: a spent taste balance never stalls runs people paid for, and a runaway taste day
+      # never spends the subscription float. Check /healthz "hosted_keys" — split:false means both
+      # sides resolved to the same account and one drained balance takes down free AND paid.
+      - key: FREETASTE_ANTHROPIC_KEY   # secret — funds the anonymous free taste
         sync: false
+      - key: SUBSCRIBER_ANTHROPIC_KEY  # secret — funds subscriber runs
+        sync: false
+      # Legacy fallback, still honored: with FREETASTE_ANTHROPIC_KEY unset the taste falls back to
+      # FILG_ANTHROPIC_API_KEY, then plain ANTHROPIC_API_KEY (engine/provider.py hosted_key), and an
+      # unset SUBSCRIBER_ANTHROPIC_KEY falls back to whatever the taste resolved to. That's what keeps
+      # local dev and older envs working un-reconfigured — it is NOT the intended prod shape, since
+      # falling back collapses the two accounts back into one. No key on either path → fully BYOK
+      # from the first submit.
       - key: FILG_DB                   # SQLite path on the persistent disk
         value: /var/data/filg.db
       - key: FILG_DAILY_BUDGET         # global $/day kill switch on FILG-key spend (the taste's ceiling)

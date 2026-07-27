@@ -67,12 +67,16 @@ from .domain import help as domain_help  # noqa: E402 — generated help copy (p
 # so the route bodies call them as bare names and `main._budget` etc. stay importable by tests.
 from .access import (  # noqa: E402,F401 — entitlement/provider/metering (the pure service layer)
     _acct, _tier, _is_subscriber, _budget, _feature_ok, _has_pdf_access,
-    _key_provider_kind, _build_provider, _provider_for, _meter, _needs_key)
+    _key_provider_kind, _build_provider, _provider_for, _meter, _needs_key,
+    hosted_key_status)
 
 # One startup line so a local run never has to guess its wiring (the #1 source of confusing 500s is a
 # hosted key that didn't reach the process env).
+_HK = hosted_key_status()
 print(f"[filg] mock={'ON (canned, no spend)' if ops.MOCK else 'off (REAL runs)'}"
-      f" · hosted key={'wired' if ops.HOSTED_FREE else 'MISSING (free/anon runs will fail in real mode)'}"
+      f" · taste key={'wired' if _HK['taste_key'] else 'MISSING (free/anon runs will fail in real mode)'}"
+      f" · subscriber key={'wired' if _HK['subscriber_key'] else 'MISSING (paid runs will fail)'}"
+      f" · accounts={'split' if _HK['split'] else 'SHARED (one balance funds free AND paid)'}"
       f" · BYOK store={'on' if keys.enabled() else 'off (no FILG_KEY_SECRET)'}"
       f" · auth={'on' if auth.AUTH_ENABLED else ('dev as ' + os.environ.get('FILG_DEV_EMAIL', '(anonymous)'))}")
 
@@ -429,6 +433,7 @@ async def api_stripe_webhook(request: Request):
 async def healthz():
     return {"ok": True, "mock": ops.MOCK, "auth_enabled": auth.AUTH_ENABLED,
             "pdf_billing": billing.PDF_BILLING_ENABLED, "sub_enabled": billing.PDF_BILLING_ENABLED,
+            "hosted_keys": hosted_key_status(),   # which of our two accounts are wired (booleans only)
             "models": model_catalog.snapshot()["slots"], **usage.snapshot()}
 
 

@@ -11,6 +11,7 @@ is `_on_filg_key` (the single key-precedence decision) — `_provider_for` picks
 
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 
 from engine import usage     # free-taste + monthly fair-use metering
@@ -97,9 +98,39 @@ def _build_provider(kind: str, key: str):
     return provider.openrouter_provider(key)
 
 
-def _hosted():
-    """FILG's hosted provider (the 'account key'), or None if no hosted key is configured (BYOK-only)."""
-    return provider.anthropic_provider() if provider.hosted_key() else None
+def _taste_key() -> str | None:
+    """The Anthropic key the free/anonymous TASTE bills to (`FREETASTE_ANTHROPIC_KEY`). The engine's
+    generic hosted key (FILG_ANTHROPIC_API_KEY, else ANTHROPIC_API_KEY) stays a fallback so an older
+    env — and every local dev box — keeps working with no config change."""
+    return os.environ.get("FREETASTE_ANTHROPIC_KEY") or provider.hosted_key()
+
+
+def _subscriber_key() -> str | None:
+    """The Anthropic key a SUBSCRIBER's run bills to (`SUBSCRIBER_ANTHROPIC_KEY`). Paid runs are
+    funded separately from the free taste so the two can't take each other down: a drained taste
+    account can't stall the runs people paid for, and a runaway taste day can't spend the
+    subscription float. Falls back to the taste key when unset — an unconfigured split degrades to
+    the old single-account behavior rather than key-walling every subscriber."""
+    return os.environ.get("SUBSCRIBER_ANTHROPIC_KEY") or _taste_key()
+
+
+def _hosted(subscriber: bool = False):
+    """FILG's hosted provider for this run: the SUBSCRIPTION account for a paid run, the free-taste
+    account otherwise. `bills_filg` stays True either way — FILG pays for both, so metering (`_meter`,
+    the monthly cap, the daily kill switch) is unaffected by which of our accounts funds the call.
+    None when that side has no key configured (BYOK-only)."""
+    key = _subscriber_key() if subscriber else _taste_key()
+    return provider.anthropic_provider(key) if key else None
+
+
+def hosted_key_status() -> dict:
+    """Which of FILG's hosted accounts are wired — read by the startup banner and /healthz. Booleans
+    only, never key material. `split` is False when both sides resolve to the SAME account, the state
+    where one drained balance takes down free AND paid at once. A missing or shared key should be
+    visible HERE, not inferred from someone's 'out of credits' error."""
+    taste, sub = _taste_key(), _subscriber_key()
+    return {"taste_key": bool(taste), "subscriber_key": bool(sub),
+            "split": bool(taste and sub and taste != sub)}
 
 
 def _byok_provider(user: str):
@@ -133,12 +164,14 @@ def _on_filg_key(user: str) -> bool:
 
 
 def _provider_for(user: str):
-    """The provider a run uses, per `_on_filg_key`. Falls back across sides when one is unavailable (a
-    subscriber under allowance but no hosted key → their key; a free user with no key → the hosted
-    taste, or None → they get walled)."""
+    """The provider a run uses, per `_on_filg_key` — and, when the run is on ours, WHICH of our two
+    accounts: a subscriber bills the subscription key, everything else the free-taste key. Falls back
+    across sides when one is unavailable (a subscriber under allowance but no hosted key → their key;
+    a free user with no key → the hosted taste, or None → they get walled)."""
+    sub = _is_subscriber(user)
     if _on_filg_key(user):
-        return _hosted() or _byok_provider(user)
-    return _byok_provider(user) or _hosted()
+        return _hosted(sub) or _byok_provider(user)
+    return _byok_provider(user) or _hosted(sub)
 
 
 def _meter(user: str, cost: float) -> None:

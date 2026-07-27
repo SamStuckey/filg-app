@@ -144,3 +144,75 @@ def test_meter_follows_actual_key(monkeypatch):
     monkeypatch.setattr(usage, "record_monthly", lambda e, p, c, t: rec.append((c, t)))
     main._meter(email, 0.5)
     assert rec == [(0.5, 0)]                                 # metered against the monthly allowance
+
+
+def test_hosted_accounts_route_by_tier(monkeypatch):
+    """The free taste bills FREETASTE_ANTHROPIC_KEY, paid runs bill SUBSCRIBER_ANTHROPIC_KEY. Two
+    separate Anthropic accounts, so a drained taste balance can't stall runs people paid for (and a
+    runaway taste day can't spend the subscription float)."""
+    seen = {}
+
+    def _fake_provider(api_key=None, bills_filg=True):
+        seen["key"], seen["bills_filg"] = api_key, bills_filg
+        return type("P", (), {"bills_filg": bills_filg, "name": "anthropic"})()
+
+    monkeypatch.setattr(provider, "anthropic_provider", _fake_provider)
+    monkeypatch.setenv("FREETASTE_ANTHROPIC_KEY", "sk-ant-taste")
+    monkeypatch.setenv("SUBSCRIBER_ANTHROPIC_KEY", "sk-ant-subs")
+    monkeypatch.setattr(access, "_is_byok", lambda u: False)
+
+    # free / anonymous taste → the taste account
+    access._provider_for("freekey@x.com")
+    assert seen["key"] == "sk-ant-taste"
+
+    # a subscriber under allowance → the subscription account
+    email = "subskey@x.com"
+    _sub(email, "pro")
+    access._provider_for(email)
+    assert seen["key"] == "sk-ant-subs"
+    # ...and it is still FILG's spend, so metering is unchanged by WHICH of our accounts funded it
+    assert seen["bills_filg"] is True
+    assert access._on_filg_key(email) is True
+
+
+def test_hosted_key_precedence_and_legacy_fallback(monkeypatch):
+    """Dedicated names win; the legacy generic key still backstops both so an older env (or any local
+    dev box) keeps working un-reconfigured. An unset subscriber key collapses onto the taste account
+    rather than key-walling a paying subscriber."""
+    for var in ("FREETASTE_ANTHROPIC_KEY", "SUBSCRIBER_ANTHROPIC_KEY", "FILG_ANTHROPIC_API_KEY"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-legacy")
+
+    # nothing dedicated set → both sides fall back to the legacy generic key (the pre-split shape)
+    assert access._taste_key() == "sk-ant-legacy"
+    assert access._subscriber_key() == "sk-ant-legacy"
+    assert access.hosted_key_status() == {"taste_key": True, "subscriber_key": True, "split": False}
+
+    # the dedicated taste key wins over the legacy one; subscribers still ride the taste account
+    monkeypatch.setenv("FREETASTE_ANTHROPIC_KEY", "sk-ant-taste")
+    assert access._taste_key() == "sk-ant-taste"
+    assert access._subscriber_key() == "sk-ant-taste"
+    assert access.hosted_key_status()["split"] is False
+
+    # both dedicated → genuinely two accounts
+    monkeypatch.setenv("SUBSCRIBER_ANTHROPIC_KEY", "sk-ant-subs")
+    assert access.hosted_key_status() == {"taste_key": True, "subscriber_key": True, "split": True}
+
+    # same key pasted into both vars is NOT a split — one drained balance still takes down both
+    monkeypatch.setenv("SUBSCRIBER_ANTHROPIC_KEY", "sk-ant-taste")
+    assert access.hosted_key_status()["split"] is False
+
+
+def test_free_taste_flag_follows_the_taste_account(monkeypatch):
+    """HOSTED_FREE gates whether the free taste is offered at all (window.FILG.freeTaste). It must
+    read the TASTE key, so retiring the legacy ANTHROPIC_API_KEY can't silently switch the funnel's
+    front door off while a perfectly good FREETASTE_ANTHROPIC_KEY is configured."""
+    import importlib
+    for var in ("ANTHROPIC_API_KEY", "FILG_ANTHROPIC_API_KEY", "SUBSCRIBER_ANTHROPIC_KEY"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("FREETASTE_ANTHROPIC_KEY", "sk-ant-taste")
+    assert bool(access._taste_key()) is True
+    assert importlib.reload(ops).HOSTED_FREE is True
+    monkeypatch.delenv("FREETASTE_ANTHROPIC_KEY")
+    assert importlib.reload(ops).HOSTED_FREE is False
+    importlib.reload(ops)   # restore the module for the rest of the suite
