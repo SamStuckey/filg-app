@@ -23,9 +23,14 @@ services:
       # ── The hosted keys (FILG's own Anthropic accounts) ──
       # The free taste and paid subscriptions run on SEPARATE accounts so neither can drain the
       # other: a spent taste account never stalls runs people paid for, and vice versa.
-      # FILG_ANTHROPIC_API_KEY is preferred (doesn't collide with a dev's own ANTHROPIC_API_KEY);
-      # plain ANTHROPIC_API_KEY also works. No hosted key → fully BYOK from the first submit.
-      - key: FILG_ANTHROPIC_API_KEY    # secret — funds the anonymous free taste
+      #
+      # The TASTE key resolves FILG_ANTHROPIC_API_KEY first, then plain ANTHROPIC_API_KEY
+      # (engine/provider.py hosted_key). LIVE PROD SETS **ANTHROPIC_API_KEY** — the FILG_-prefixed
+      # name exists so a local dev's own ANTHROPIC_API_KEY (Claude Code etc.) can't get spent by a
+      # local server; in the container there's no such collision, so the plain name is fine. Setting
+      # BOTH in the dashboard silently makes FILG_ANTHROPIC_API_KEY win — set exactly one.
+      # No taste key at all → fully BYOK from the first submit.
+      - key: ANTHROPIC_API_KEY         # secret — funds the anonymous free taste (the live prod name)
         sync: false
       # Funds SUBSCRIBER runs. Unset → paid runs fall back to the taste account (pre-split behavior).
       - key: SUBSCRIBER_ANTHROPIC_KEY  # secret — set in the dashboard
