@@ -146,9 +146,9 @@ def test_meter_follows_actual_key(monkeypatch):
     assert rec == [(0.5, 0)]                                 # metered against the monthly allowance
 
 
-def test_subscriber_runs_bill_the_subscription_account(monkeypatch):
-    """Paid runs bill SUBSCRIBER_ANTHROPIC_KEY; the free taste bills the general hosted key. Two
-    separate Anthropic accounts, so a drained taste pool can't stall runs people paid for (and a
+def test_hosted_accounts_route_by_tier(monkeypatch):
+    """The free taste bills FREETASTE_ANTHROPIC_KEY, paid runs bill SUBSCRIBER_ANTHROPIC_KEY. Two
+    separate Anthropic accounts, so a drained taste balance can't stall runs people paid for (and a
     runaway taste day can't spend the subscription float)."""
     seen = {}
 
@@ -157,7 +157,7 @@ def test_subscriber_runs_bill_the_subscription_account(monkeypatch):
         return type("P", (), {"bills_filg": bills_filg, "name": "anthropic"})()
 
     monkeypatch.setattr(provider, "anthropic_provider", _fake_provider)
-    monkeypatch.setattr(provider, "hosted_key", lambda: "sk-ant-taste")
+    monkeypatch.setenv("FREETASTE_ANTHROPIC_KEY", "sk-ant-taste")
     monkeypatch.setenv("SUBSCRIBER_ANTHROPIC_KEY", "sk-ant-subs")
     monkeypatch.setattr(access, "_is_byok", lambda u: False)
 
@@ -175,13 +175,44 @@ def test_subscriber_runs_bill_the_subscription_account(monkeypatch):
     assert access._on_filg_key(email) is True
 
 
-def test_subscriber_key_falls_back_when_unset(monkeypatch):
-    """An unset SUBSCRIBER_ANTHROPIC_KEY degrades to the old single-account behavior — never key-wall
-    a paying subscriber just because the split isn't configured yet."""
-    monkeypatch.setattr(provider, "hosted_key", lambda: "sk-ant-taste")
-    monkeypatch.delenv("SUBSCRIBER_ANTHROPIC_KEY", raising=False)
+def test_hosted_key_precedence_and_legacy_fallback(monkeypatch):
+    """Dedicated names win; the legacy generic key still backstops both so an older env (or any local
+    dev box) keeps working un-reconfigured. An unset subscriber key collapses onto the taste account
+    rather than key-walling a paying subscriber."""
+    for var in ("FREETASTE_ANTHROPIC_KEY", "SUBSCRIBER_ANTHROPIC_KEY", "FILG_ANTHROPIC_API_KEY"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-legacy")
+
+    # nothing dedicated set → both sides fall back to the legacy generic key (the pre-split shape)
+    assert access._taste_key() == "sk-ant-legacy"
+    assert access._subscriber_key() == "sk-ant-legacy"
+    assert access.hosted_key_status() == {"taste_key": True, "subscriber_key": True, "split": False}
+
+    # the dedicated taste key wins over the legacy one; subscribers still ride the taste account
+    monkeypatch.setenv("FREETASTE_ANTHROPIC_KEY", "sk-ant-taste")
+    assert access._taste_key() == "sk-ant-taste"
     assert access._subscriber_key() == "sk-ant-taste"
-    assert access.hosted_key_status() == {"taste_key": True, "subscriber_key": False}
+    assert access.hosted_key_status()["split"] is False
+
+    # both dedicated → genuinely two accounts
     monkeypatch.setenv("SUBSCRIBER_ANTHROPIC_KEY", "sk-ant-subs")
-    assert access._subscriber_key() == "sk-ant-subs"
-    assert access.hosted_key_status() == {"taste_key": True, "subscriber_key": True}
+    assert access.hosted_key_status() == {"taste_key": True, "subscriber_key": True, "split": True}
+
+    # same key pasted into both vars is NOT a split — one drained balance still takes down both
+    monkeypatch.setenv("SUBSCRIBER_ANTHROPIC_KEY", "sk-ant-taste")
+    assert access.hosted_key_status()["split"] is False
+
+
+def test_free_taste_flag_follows_the_taste_account(monkeypatch):
+    """HOSTED_FREE gates whether the free taste is offered at all (window.FILG.freeTaste). It must
+    read the TASTE key, so retiring the legacy ANTHROPIC_API_KEY can't silently switch the funnel's
+    front door off while a perfectly good FREETASTE_ANTHROPIC_KEY is configured."""
+    import importlib
+    for var in ("ANTHROPIC_API_KEY", "FILG_ANTHROPIC_API_KEY", "SUBSCRIBER_ANTHROPIC_KEY"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("FREETASTE_ANTHROPIC_KEY", "sk-ant-taste")
+    assert bool(access._taste_key()) is True
+    assert importlib.reload(ops).HOSTED_FREE is True
+    monkeypatch.delenv("FREETASTE_ANTHROPIC_KEY")
+    assert importlib.reload(ops).HOSTED_FREE is False
+    importlib.reload(ops)   # restore the module for the rest of the suite

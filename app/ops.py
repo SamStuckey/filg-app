@@ -29,10 +29,12 @@ from engine import pipeline, provider, usage
 from app import access, auth, store, tiers
 
 MOCK = os.environ.get("FILG_MOCK") == "1"
-# "First query on us" + subscriptions: when FILG has its own hosted Anthropic key, a keyless user
-# gets a free welcome run (metered by usage.py) and subscribers run on it. No hosted key → fully
-# BYOK (the user must bring their own key from the first submit).
-HOSTED_FREE = bool(provider.hosted_key())
+# "First query on us": when FILG has a hosted key for the TASTE account, a keyless user gets a free
+# welcome run (metered by usage.py). No taste key → fully BYOK (the user must bring their own key
+# from the first submit). Follows access._taste_key, NOT the raw engine hosted key — the taste has
+# its own account now, so keying this off the generic key would switch the free taste off the moment
+# the legacy ANTHROPIC_API_KEY is retired from the env.
+HOSTED_FREE = bool(access._taste_key())
 
 # Per-user concurrency: a flat cap on simultaneous AI operations per user (cost is isolated per run
 # via pipeline.run_ledger, so concurrent runs don't mis-bill each other). Not a monetization tier —

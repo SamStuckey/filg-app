@@ -72,10 +72,11 @@ from .access import (  # noqa: E402,F401 — entitlement/provider/metering (the 
 
 # One startup line so a local run never has to guess its wiring (the #1 source of confusing 500s is a
 # hosted key that didn't reach the process env).
+_HK = hosted_key_status()
 print(f"[filg] mock={'ON (canned, no spend)' if ops.MOCK else 'off (REAL runs)'}"
-      f" · taste key={'wired' if ops.HOSTED_FREE else 'MISSING (free/anon runs will fail in real mode)'}"
-      f" · subscriber key="
-      f"{'wired' if hosted_key_status()['subscriber_key'] else 'unset (paid runs share the taste account)'}"
+      f" · taste key={'wired' if _HK['taste_key'] else 'MISSING (free/anon runs will fail in real mode)'}"
+      f" · subscriber key={'wired' if _HK['subscriber_key'] else 'MISSING (paid runs will fail)'}"
+      f" · accounts={'split' if _HK['split'] else 'SHARED (one balance funds free AND paid)'}"
       f" · BYOK store={'on' if keys.enabled() else 'off (no FILG_KEY_SECRET)'}"
       f" · auth={'on' if auth.AUTH_ENABLED else ('dev as ' + os.environ.get('FILG_DEV_EMAIL', '(anonymous)'))}")
 
