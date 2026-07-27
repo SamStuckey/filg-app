@@ -144,3 +144,44 @@ def test_meter_follows_actual_key(monkeypatch):
     monkeypatch.setattr(usage, "record_monthly", lambda e, p, c, t: rec.append((c, t)))
     main._meter(email, 0.5)
     assert rec == [(0.5, 0)]                                 # metered against the monthly allowance
+
+
+def test_subscriber_runs_bill_the_subscription_account(monkeypatch):
+    """Paid runs bill SUBSCRIBER_ANTHROPIC_KEY; the free taste bills the general hosted key. Two
+    separate Anthropic accounts, so a drained taste pool can't stall runs people paid for (and a
+    runaway taste day can't spend the subscription float)."""
+    seen = {}
+
+    def _fake_provider(api_key=None, bills_filg=True):
+        seen["key"], seen["bills_filg"] = api_key, bills_filg
+        return type("P", (), {"bills_filg": bills_filg, "name": "anthropic"})()
+
+    monkeypatch.setattr(provider, "anthropic_provider", _fake_provider)
+    monkeypatch.setattr(provider, "hosted_key", lambda: "sk-ant-taste")
+    monkeypatch.setenv("SUBSCRIBER_ANTHROPIC_KEY", "sk-ant-subs")
+    monkeypatch.setattr(access, "_is_byok", lambda u: False)
+
+    # free / anonymous taste → the taste account
+    access._provider_for("freekey@x.com")
+    assert seen["key"] == "sk-ant-taste"
+
+    # a subscriber under allowance → the subscription account
+    email = "subskey@x.com"
+    _sub(email, "pro")
+    access._provider_for(email)
+    assert seen["key"] == "sk-ant-subs"
+    # ...and it is still FILG's spend, so metering is unchanged by WHICH of our accounts funded it
+    assert seen["bills_filg"] is True
+    assert access._on_filg_key(email) is True
+
+
+def test_subscriber_key_falls_back_when_unset(monkeypatch):
+    """An unset SUBSCRIBER_ANTHROPIC_KEY degrades to the old single-account behavior — never key-wall
+    a paying subscriber just because the split isn't configured yet."""
+    monkeypatch.setattr(provider, "hosted_key", lambda: "sk-ant-taste")
+    monkeypatch.delenv("SUBSCRIBER_ANTHROPIC_KEY", raising=False)
+    assert access._subscriber_key() == "sk-ant-taste"
+    assert access.hosted_key_status() == {"taste_key": True, "subscriber_key": False}
+    monkeypatch.setenv("SUBSCRIBER_ANTHROPIC_KEY", "sk-ant-subs")
+    assert access._subscriber_key() == "sk-ant-subs"
+    assert access.hosted_key_status() == {"taste_key": True, "subscriber_key": True}

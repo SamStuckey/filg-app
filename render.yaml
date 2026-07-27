@@ -20,10 +20,15 @@ services:
       mountPath: /var/data
       sizeGB: 1
     envVars:
-      # ── The hosted key (funds the anonymous free taste + subscriber runs) ──
+      # ── The hosted keys (FILG's own Anthropic accounts) ──
+      # The free taste and paid subscriptions run on SEPARATE accounts so neither can drain the
+      # other: a spent taste account never stalls runs people paid for, and vice versa.
       # FILG_ANTHROPIC_API_KEY is preferred (doesn't collide with a dev's own ANTHROPIC_API_KEY);
       # plain ANTHROPIC_API_KEY also works. No hosted key → fully BYOK from the first submit.
-      - key: FILG_ANTHROPIC_API_KEY    # secret — set in the dashboard
+      - key: FILG_ANTHROPIC_API_KEY    # secret — funds the anonymous free taste
+        sync: false
+      # Funds SUBSCRIBER runs. Unset → paid runs fall back to the taste account (pre-split behavior).
+      - key: SUBSCRIBER_ANTHROPIC_KEY  # secret — set in the dashboard
         sync: false
       - key: FILG_DB                   # SQLite path on the persistent disk
         value: /var/data/filg.db
