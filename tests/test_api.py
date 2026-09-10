@@ -308,6 +308,19 @@ def test_shell_branding_and_favicon(client):
     assert "disclaimerModal" in html and "confidently wrong" in html   # the ported disclaimer
 
 
+def test_first_visit_onboarding_and_access_fork_present(client):
+    """The portfolio relaunch frames the work before the existing app and ends at the real
+    subscription/BYOK fork. It must not advertise a fake trial path."""
+    html = frontend(client)
+    assert "What brought you here?" in html
+    assert "What do you want to see first?" in html
+    assert "How deep do you want to go?" in html
+    assert "Continue with Google" in html and "Sign up with email" in html
+    assert "Bring your own key" in html and "View the portfolio project without an account" in html
+    assert "try it free" not in html.lower()
+    assert "prefers-reduced-motion" in html
+
+
 def test_healthz(client):
     d = client.get("/healthz").json()
     assert d["ok"] is True and d["mock"] is True

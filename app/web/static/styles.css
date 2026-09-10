@@ -17,6 +17,72 @@ textarea:focus{border-color:var(--accent)}
 .ghost.small{padding:3px 8px;font-size:13px}
 .err{color:var(--red);font-size:13px;margin-top:6px;min-height:1px}
 
+/* ── First-visit onboarding ────────────────────────────────────────────────
+   Buildpad's useful rhythm, translated rather than copied: 300ms forward fades, a soft .96 scale
+   on arrival, 200ms upward option reveals, and 150ms selection feedback. The app is already mounted
+   under this layer, so the final handoff stays instant. */
+body.onboarding-open{overflow:hidden}
+body.onboarding-open .modalback{z-index:70}
+body.onboarding-open .modal{z-index:71}
+.onboarding{position:fixed;inset:0;z-index:60;display:grid;grid-template-rows:auto 1fr auto;
+  background:var(--bg);color:var(--fg);overflow:auto}
+.onboard-top{display:grid;grid-template-columns:1fr minmax(120px,280px) 1fr;align-items:center;gap:18px;
+  padding:22px clamp(18px,4vw,52px)}
+.onboard-logo{justify-self:start;border:0;background:none;color:var(--accent);font-weight:850;font-size:20px;padding:4px 0}
+.onboard-progress{height:4px;background:var(--line);border-radius:99px;overflow:hidden}
+.onboard-progress i{display:block;width:25%;height:100%;background:var(--accent);border-radius:inherit;
+  transition:width .3s ease-out}
+.onboard-skip{justify-self:end;border:0;background:none;color:var(--muted);padding:6px 0;font-size:13px}
+.onboard-skip:hover,.portfolio-link:hover{color:var(--fg)}
+.onboard-viewport{display:grid;place-items:center;padding:24px 18px 42px;overflow-x:hidden;overflow-y:auto}
+.onboard-stage{width:min(650px,100%);transition:opacity .3s ease-out,transform .3s ease-out;will-change:transform,opacity}
+.onboard-stage.leaving{opacity:0;transform:translateX(20px)}
+.onboard-stage.arriving{opacity:.5;transform:translateX(20px) scale(.96)}
+.onboard-card,.onboard-final{text-align:center}
+.onboard-kicker{display:inline-flex;border:1px solid color-mix(in srgb,var(--accent) 38%,var(--line));
+  color:var(--accent);background:color-mix(in srgb,var(--accent) 7%,var(--card));border-radius:999px;
+  padding:4px 11px;font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase}
+.onboard-card h1,.onboard-final>h1{font-size:clamp(32px,5vw,48px);line-height:1.08;letter-spacing:-.035em;margin:16px 0 10px}
+.onboard-copy{color:var(--muted);font-size:16px;margin:0 auto 26px;max-width:540px}
+.onboard-choices{display:grid;gap:10px;text-align:left}
+.onboard-choice{display:grid;grid-template-columns:42px 1fr auto;align-items:center;gap:12px;width:100%;
+  border:1px solid var(--line);border-radius:14px;background:var(--card);color:var(--fg);padding:14px 16px;text-align:left;
+  box-shadow:0 1px 0 rgba(0,0,0,.03);transition:transform .15s ease, border-color .15s ease,background .15s ease,box-shadow .15s ease;
+  animation:onboard-slide-up .2s ease-out backwards}
+.onboard-choice:nth-child(2){animation-delay:.03s}.onboard-choice:nth-child(3){animation-delay:.06s}.onboard-choice:nth-child(4){animation-delay:.09s}
+.onboard-choice:hover{transform:translateY(-2px);border-color:color-mix(in srgb,var(--fg) 35%,var(--line));box-shadow:0 8px 24px rgba(0,0,0,.08)}
+.onboard-choice.picked{transform:scale(.985);border-color:var(--accent);background:color-mix(in srgb,var(--accent) 7%,var(--card))}
+.onboard-choice b,.onboard-choice small{display:block}.onboard-choice b{font-size:15px}.onboard-choice small{color:var(--muted);margin-top:1px}
+.onboard-icon{width:38px;height:38px;border-radius:10px;display:grid;place-items:center;background:color-mix(in srgb,var(--accent) 9%,var(--bg));
+  color:var(--accent);font-weight:800;font-size:14px}.onboard-arrow{color:var(--muted);font-size:18px;transition:transform .13s ease}
+.onboard-choice:hover .onboard-arrow{transform:translateX(3px);color:var(--accent)}
+.onboard-foot{display:flex;justify-content:space-between;padding:16px clamp(18px,4vw,52px);color:var(--muted);font-size:12px}
+.onboard-foot button{border:0;background:none;color:var(--muted);padding:3px 0}.onboard-foot button:hover{color:var(--fg)}
+.onboard-signup{border:1px solid var(--line);background:var(--card);border-radius:16px;padding:18px;margin:22px 0 12px;text-align:left}
+.onboard-signup h2{font-size:16px;margin:0}.onboard-signup>p{color:var(--muted);font-size:13px;margin:3px 0 12px}
+.onboard-auth{display:grid;grid-template-columns:1fr 1fr;gap:9px}.onboard-auth button,.access-card button{border:1px solid var(--line);border-radius:9px;
+  background:var(--card);color:var(--fg);padding:10px 12px;font-weight:750}.onboard-auth button:hover{border-color:var(--fg)}
+.onboard-signed{color:var(--green);font-weight:700;font-size:13px;padding:8px 0 2px}
+.access-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px;text-align:left}
+.access-card{position:relative;border:1px solid var(--line);background:var(--card);border-radius:16px;padding:18px;overflow:hidden;
+  animation:onboard-fade-soft .35s ease-out backwards}.access-card:nth-child(2){animation-delay:.06s}
+.access-hosted{border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}.access-card h3{font-size:18px;margin:8px 0 2px}
+.access-card p{color:var(--muted);font-size:13px;line-height:1.45;min-height:57px}.access-tag{font-size:10px;text-transform:uppercase;letter-spacing:.09em;font-weight:850;color:var(--muted)}
+.access-price{font-size:30px;font-weight:850;letter-spacing:-.04em}.access-price span{font-size:12px;font-weight:500;color:var(--muted);letter-spacing:0}
+.access-price.free{color:var(--green)}.access-hosted button{background:var(--accent);border-color:var(--accent);color:#fff;width:100%}
+.access-byok button{width:100%}.access-card button[disabled]{cursor:not-allowed;opacity:.5}
+.portfolio-link{border:0;background:none;color:var(--muted);font-weight:700;margin-top:18px;padding:5px}
+.portfolio-note{color:var(--muted);font-size:11px;margin:4px 0 0}
+@keyframes onboard-slide-up{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+@keyframes onboard-fade-soft{from{opacity:.5;transform:scale(.96)}to{opacity:1;transform:scale(1)}}
+
+@media(max-width:560px){
+  .onboard-top{grid-template-columns:auto 1fr auto;padding:14px 16px}.onboard-skip{font-size:0}.onboard-skip::after{content:'Skip';font-size:12px}
+  .onboard-viewport{place-items:start center;padding-top:28px}.onboard-card h1,.onboard-final>h1{font-size:32px}
+  .onboard-choice{padding:12px}.onboard-choice small{font-size:12px}.onboard-auth{grid-template-columns:1fr}
+  .onboard-final{padding-bottom:24px}.access-grid{grid-template-columns:1fr}
+}
+
 /* ── Full mode: the landing IS the workspace — left drawer expanded, box centered. The first
    prompt drops .full and the same surface collapses into the sidebar (width + hero transitions). ── */
 .hero{max-height:0;opacity:0;overflow:hidden;margin:0 auto;text-align:center;max-width:640px;width:100%;

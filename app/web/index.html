@@ -4,6 +4,23 @@
 __FILG_HEAD__
 <link rel="stylesheet" href="/static/styles.css">
 </head><body>
+<!-- First-visit framing. FILG is a live portfolio project, so the onboarding explains what the
+     visitor can inspect before it asks them to choose hosted access or BYOK. The app itself stays
+     mounted underneath; finishing the tour simply reveals the existing front door. -->
+<section id=onboarding class=onboarding role=dialog aria-modal=true hidden aria-label="Welcome to FILG">
+  <div class=onboard-top>
+    <button type=button class=onboard-logo onclick="onboardingGo(0)">FILG</button>
+    <div class=onboard-progress aria-label="Onboarding progress"><i id=onboard-progress></i></div>
+    <button type=button class=onboard-skip onclick="finishOnboarding('portfolio')">View the project</button>
+  </div>
+  <div class=onboard-viewport>
+    <div id=onboard-stage class=onboard-stage aria-live=polite></div>
+  </div>
+  <div class=onboard-foot>
+    <button id=onboard-back type=button onclick=onboardingBack()>← Back</button>
+    <span id=onboard-count></span>
+  </div>
+</section>
 <!-- ── ONE surface: the landing IS the workspace with the left drawer fully expanded and the box
      centered. The first prompt collapses it into the sidebar — no swap, no fly-away. ── -->
 <div id=workspace class="workspace full">

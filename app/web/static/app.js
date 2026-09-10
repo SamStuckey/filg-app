@@ -14,6 +14,150 @@ let SEL = new Set();            // selected brainstorm option ids
 let PENDING_FORK = null;        // a pivot fork awaiting discard/pivot
 let SB = null, SESSION = null, ME = null;   // Supabase client · live session · /api/me snapshot
 
+// ── First-visit onboarding ───────────────────────────────────────────────────
+// A short, local-only framing pass for a project that may be opened by a recruiter or by someone
+// who actually wants to run it. Answers tailor the handoff copy; none are sent to the server.
+const ONBOARD_KEY='filg_onboarding_v1';
+const ONBOARD_DONE='filg_onboarding_done_v1';
+const ONBOARD_STEPS=[
+  {
+    eyebrow:'Welcome to FILG',
+    title:'What brought you here?',
+    copy:'Pick the angle you care about. We’ll point the tour at it.',
+    key:'visitor',
+    options:[
+      ['review','↗','I’m reviewing the work','Recruiter, hiring manager, or curious builder'],
+      ['idea','◉','I have an idea to test','Put the research and decision engine to work'],
+      ['explore','✳','I’m just exploring','Show me what makes the project interesting']
+    ]
+  },
+  {
+    eyebrow:'Choose your lens',
+    title:'What do you want to see first?',
+    copy:'FILG keeps the reasoning visible instead of hiding it behind a chat box.',
+    key:'focus',
+    options:[
+      ['research','⌕','Graded research','Claims, citations, and the credibility gate'],
+      ['decisions','⑂','The decision graph','Trade-offs, forks, and why a path won'],
+      ['roadmap','✓','The execution roadmap','A plan that keeps its evidence attached'],
+      ['system','▦','The whole system','Product thinking, interface, and implementation']
+    ]
+  },
+  {
+    eyebrow:'Set the pace',
+    title:'How deep do you want to go?',
+    copy:'This only changes the route we recommend. You can still open everything.',
+    key:'pace',
+    options:[
+      ['quick','2m','Give me the two-minute look','Start with the public project and the graph'],
+      ['guided','10m','Walk me through the good parts','Research → decision → execution'],
+      ['hands-on','∞','Let me take it for a spin','Bring an idea and run the live workflow']
+    ]
+  }
+];
+let ONBOARD={step:0,answers:{},moving:false};
+
+function onboardingStored(){
+  try{const raw=localStorage.getItem(ONBOARD_KEY);if(raw){const x=JSON.parse(raw);if(x&&x.answers)ONBOARD=x;}}catch(e){}
+}
+function onboardingSave(){try{localStorage.setItem(ONBOARD_KEY,JSON.stringify({step:ONBOARD.step,answers:ONBOARD.answers}));}catch(e){}}
+function onboardingShouldOpen(){
+  if(!/^\/?$/.test(location.pathname||'/'))return false;
+  try{return localStorage.getItem(ONBOARD_DONE)!=='1';}catch(e){return true;}
+}
+function initOnboarding(){
+  const el=$('onboarding');if(!el)return;
+  onboardingStored();
+  if(!onboardingShouldOpen()){el.hidden=true;return;}
+  el.hidden=false;document.body.classList.add('onboarding-open');
+  const workspace=$('workspace');if(workspace){workspace.inert=true;workspace.setAttribute('aria-hidden','true');}
+  renderOnboarding();
+}
+function onboardingOption(value){
+  if(ONBOARD.moving)return;
+  const step=ONBOARD_STEPS[ONBOARD.step];if(!step)return;
+  ONBOARD.answers[step.key]=value;onboardingSave();
+  document.querySelectorAll('.onboard-choice').forEach(b=>b.classList.toggle('picked',b.dataset.value===value));
+  ONBOARD.moving=true;
+  setTimeout(()=>{ONBOARD.step=Math.min(ONBOARD_STEPS.length,ONBOARD.step+1);ONBOARD.moving=false;onboardingSave();onboardingSwap();},150);
+}
+function onboardingGo(step){ONBOARD.step=Math.max(0,Math.min(ONBOARD_STEPS.length,step));onboardingSave();onboardingSwap();}
+function onboardingBack(){if(ONBOARD.step>0)onboardingGo(ONBOARD.step-1);}
+function onboardingSwap(){
+  const stage=$('onboard-stage');if(!stage)return;
+  stage.classList.add('leaving');
+  setTimeout(()=>{renderOnboarding();stage.classList.remove('leaving');stage.classList.add('arriving');
+    requestAnimationFrame(()=>requestAnimationFrame(()=>stage.classList.remove('arriving')));},180);
+}
+function onboardingRoute(){
+  const a=ONBOARD.answers;
+  if(a.focus==='research')return ['Start with the receipts','Open a worked project and inspect which claims survived the source gate.'];
+  if(a.focus==='roadmap')return ['Start where strategy becomes work','Open the roadmap and trace each task back to the decision that created it.'];
+  if(a.focus==='decisions')return ['Start with the decision graph','Follow the forks, rejected paths, and evidence behind the active plan.'];
+  if(a.pace==='hands-on'||a.visitor==='idea')return ['Run the engine yourself','Bring an idea, then watch FILG research, challenge, and turn it into an execution path.'];
+  return ['See the whole build','Begin with the public project, then move from research to decisions to execution.'];
+}
+function onboardingChoiceHtml(o,selected){return `<button type=button class="onboard-choice${selected===o[0]?' picked':''}" data-value="${esc(o[0])}" onclick="onboardingOption('${esc(o[0])}')">`+
+  `<span class=onboard-icon>${esc(o[1])}</span><span><b>${esc(o[2])}</b><small>${esc(o[3])}</small></span><span class=onboard-arrow>→</span></button>`;}
+function onboardingTierHtml(t){return `<article class="access-card access-hosted"><div class=access-tag>Hosted</div>`+
+  `<h3>${esc(t.label)}</h3><div class=access-price>$${esc(t.price)}<span>/month</span></div>`+
+  `<p>No key setup. Every feature and model crew, with about $${Math.round(t.cap_cents/100)} of model usage included.</p>`+
+  `<button type=button onclick="onboardingChooseTier('${esc(t.id)}')">Choose ${esc(t.label)}</button></article>`;}
+function onboardingAccessHtml(){
+  const [title,copy]=onboardingRoute(), signed=signedIn();
+  const auth=signed
+    ? `<div class=onboard-signed>✓ Signed in as ${esc((ME&&ME.email)||(SESSION&&SESSION.user&&SESSION.user.email)||'your account')}</div>`
+    : `<div class=onboard-auth><button type=button onclick="onboardingAuth('google')">Continue with Google</button>`+
+      `<button type=button onclick="onboardingAuth('email')">Sign up with email</button></div>`;
+  const hosted=tiersCat().map(onboardingTierHtml).join('');
+  const byok=`<article class="access-card access-byok"><div class=access-tag>BYOK</div>`+
+    `<h3>Bring your own key</h3><div class="access-price free">$0<span>/month</span></div>`+
+    `<p>Use OpenRouter or Anthropic. You pay the provider directly and every FILG feature stays open.</p>`+
+    (CFG.byokEnabled?`<button type=button onclick="onboardingChooseByok()">Set up my key</button>`:
+      `<button type=button disabled title="BYOK is not configured in this deployment">BYOK unavailable here</button>`)+`</article>`;
+  return `<div class=onboard-final><div class=onboard-kicker>Your route is ready</div><h1>${esc(title)}</h1><p class=onboard-copy>${esc(copy)}</p>`+
+    `<div class=onboard-signup><h2>${signed?'Choose how FILG runs':'Create your account'}</h2>`+
+    `<p>${signed?'Pick hosted convenience or connect your own model key.':'Sign up with Google or email, then choose hosted access or BYOK.'}</p>${auth}</div>`+
+    `<div class=access-grid>${hosted}${byok}</div>`+
+    `<button type=button class=portfolio-link onclick="finishOnboarding('portfolio')">View the portfolio project without an account →</button>`+
+    `<p class=portfolio-note>FILG is a working portfolio build, not a promise of business advice.</p></div>`;
+}
+function renderOnboarding(){
+  const stage=$('onboard-stage'), step=ONBOARD_STEPS[ONBOARD.step];if(!stage)return;
+  if(step){stage.innerHTML=`<div class=onboard-card><div class=onboard-kicker>${esc(step.eyebrow)}</div><h1>${esc(step.title)}</h1>`+
+    `<p class=onboard-copy>${esc(step.copy)}</p><div class=onboard-choices>${step.options.map(o=>onboardingChoiceHtml(o,ONBOARD.answers[step.key])).join('')}</div></div>`;}
+  else stage.innerHTML=onboardingAccessHtml();
+  const pct=((ONBOARD.step+1)/(ONBOARD_STEPS.length+1))*100, bar=$('onboard-progress'),back=$('onboard-back'),count=$('onboard-count');
+  if(bar)bar.style.width=pct+'%';if(back)back.hidden=ONBOARD.step===0;if(count)count.textContent=(ONBOARD.step+1)+' / '+(ONBOARD_STEPS.length+1);
+}
+function onboardingAuth(kind){
+  const onboard=$('onboarding');if(onboard&&CFG.authEnabled)onboard.inert=true;
+  authModal('Create an account to save projects and choose hosted access or BYOK.');
+  if(kind==='google')authGo('google');else authGo('email');
+}
+function onboardingChooseTier(tier){
+  if(!signedIn()){const onboard=$('onboarding');if(onboard&&CFG.authEnabled)onboard.inert=true;
+    authModal('Create your account first. You’ll return here to confirm the hosted plan.');return;}
+  finishOnboarding();subscribe(tier);
+}
+function onboardingChooseByok(){
+  if(!signedIn()){const onboard=$('onboarding');if(onboard&&CFG.authEnabled)onboard.inert=true;
+    authModal('Create your account first. You’ll return here to connect your key.');return;}
+  finishOnboarding('byok');
+}
+function finishOnboarding(action){
+  try{localStorage.setItem(ONBOARD_DONE,'1');localStorage.removeItem(ONBOARD_KEY);}catch(e){}
+  const el=$('onboarding');if(el)el.hidden=true;document.body.classList.remove('onboarding-open');
+  const workspace=$('workspace');if(workspace){workspace.inert=false;workspace.removeAttribute('aria-hidden');}
+  if(action==='pricing')pricingModal();
+  else if(action==='byok')keyModal();
+  else {const focus=ONBOARD.answers.focus, box=$('ws-box');
+    if(box&&focus==='research')box.placeholder="Try: 'Which claims in this plan are actually credible?'";
+    else if(box&&focus==='roadmap')box.placeholder="Bring an idea and FILG will turn the decisions into a roadmap…";
+    else if(box&&focus==='decisions')box.placeholder="Bring an idea and watch the decision graph branch…";
+  }
+}
+
 // ── tiny helpers ─────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
@@ -57,6 +201,8 @@ function paintIdentity(){
     } else chip.hidden=true;
   }
   const pb=$('profilebtn'); if(pb)pb.title=signedIn()?('Account · '+((ME&&ME.email)||SESSION&&SESSION.user&&SESSION.user.email||'')):'Log in / Sign up';
+  const onboard=$('onboarding');
+  if(onboard&&!onboard.hidden&&ONBOARD.step>=ONBOARD_STEPS.length)renderOnboarding();
 }
 function profileClick(){ if(signedIn())openAccount(); else authModal(); }
 // after any sign-in: the plan they tasted anonymously joins the new account (the wall's happy path)
@@ -266,6 +412,7 @@ function openModal(title,wide){ $('modal-title').textContent=title;
 let MODAL_ONCLOSE=null;   // a promise-based modal (modalConfirm) resolves to CANCEL when dismissed
 function closeModal(){ $('v2modal').hidden=true; $('v2modal').classList.remove('wide');
   $('modalback').classList.remove('show');
+  const onboard=$('onboarding');if(onboard&&!onboard.hidden)onboard.inert=false;
   if(MODAL_ONCLOSE){ const f=MODAL_ONCLOSE; MODAL_ONCLOSE=null; f(); } }
 // A blocking confirm rendered as a REAL modal (heavier than the in-chat confirm) — for the moments
 // the user must deliberately choose, e.g. rolling past the gate questions. Dismissing (backdrop/✕)
@@ -2982,6 +3129,7 @@ document.addEventListener('keydown',e=>{
   if(e.key!=='Enter'||e.shiftKey)return;
   if(e.target&&e.target.id==='ws-box'){ e.preventDefault(); sendPrompt(); }
 });
+initOnboarding();
 initGraphInput();
 initMinimap(); initTrail();   // graph chrome: click-to-jump minimap + hover wayfinding trail
 initGrips();   // the split boundary drags; the height is remembered across modes + reloads
